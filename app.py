@@ -20,7 +20,7 @@ from googleapiclient.http import MediaIoBaseDownload
 # Import the Brain
 from knowledge_base import GLOBAL_RULES_TEXT, SUPPLIER_RULEBOOK
 
-# --- SUPPRESS WARNINGS ---
+# --- SUPPRESS GOOGLE WARNING ---
 warnings.filterwarnings("ignore", category=FutureWarning, module="google.generativeai")
 
 st.set_page_config(layout="wide", page_title="Brewery Invoice Parser")
@@ -168,8 +168,16 @@ def batch_untappd_lookup(matrix_df):
                 row['Label_Thumb'] = res['label_image_thumb']
                 row['Brewery_Loc'] = res['brewery_location']
             else:
-                row['Untappd_Status'] = "❌ Not Found"
                 logs.append(f"❌ No match: {row['Product_Name']}")
+                # FALLBACK LOGIC
+                row['Untappd_Status'] = "❌ Not Found"
+                row['Untappd_ID'] = "MANUAL"
+                row['Untappd_Brewery'] = row['Supplier_Name']
+                row['Untappd_Product'] = row['Product_Name']
+                row['Untappd_ABV'] = row['ABV']
+                row['Untappd_Desc'] = ""
+                row['Label_Thumb'] = ""
+                row['Brewery_Loc'] = ""
         
         updated_rows.append(row)
         
@@ -188,6 +196,37 @@ def get_cin7_headers():
 def get_cin7_base_url():
     if "cin7" not in st.secrets: return None
     return st.secrets["cin7"].get("base_url", "https://inventory.dearsystems.com/ExternalApi/v2")
+
+# --- NEW FUNCTION: FETCH CIN7 BRANDS ---
+@st.cache_data(ttl=3600)
+def fetch_cin7_brands():
+    """Fetches list of Brands from Cin7 to use as Master Supplier List."""
+    if "cin7" not in st.secrets: return []
+    creds = st.secrets["cin7"]
+    headers = {
+        'Content-Type': 'application/json',
+        'api-auth-accountid': creds.get("account_id"),
+        'api-auth-applicationkey': creds.get("api_key")
+    }
+    base_url = creds.get("base_url", "https://inventory.dearsystems.com/ExternalApi/v2")
+    all_brands = []
+    page = 1
+    try:
+        while True:
+            url = f"{base_url}/ref/brand?Page={page}&Limit=100"
+            resp = requests.get(url, headers=headers)
+            if resp.status_code == 200:
+                data = resp.json()
+                brand_list = data.get("BrandList", [])
+                if not brand_list: break
+                for b in brand_list:
+                    if b.get("Name"):
+                        all_brands.append(str(b["Name"]))
+                if len(brand_list) < 100: break
+                page += 1
+            else: break
+    except Exception: pass
+    return sorted(list(set(all_brands)), key=str.lower)
 
 @st.cache_data(ttl=3600) 
 def fetch_all_cin7_suppliers_cached():
@@ -268,7 +307,6 @@ def create_cin7_purchase_order(header_df, lines_df, location_choice):
     
     for _, row in lines_df.iterrows():
         prod_id = row.get(id_col)
-        # Check for "✅ Match"
         if row.get('Shopify_Status') == "✅ Match" and pd.notna(prod_id) and str(prod_id).strip():
             qty = float(row.get('Quantity', 0))
             price = float(row.get('Item_Price', 0))
@@ -823,11 +861,11 @@ if st.session_state.header_data is not None:
             "Matched_Variant": st.column_config.TextColumn("Variant Match", disabled=True),
         }
 
-        # UPDATED: width='stretch' replaces deprecated use_container_width=True
+        # USE CONTAINER WIDTH
         edited_lines = st.data_editor(
             display_df, 
             num_rows="dynamic", 
-            width='stretch', # <--- FIXED
+            width='stretch', # Fixed width param
             key=f"line_editor_{st.session_state.line_items_key}",
             column_config=column_config
         )
@@ -859,7 +897,7 @@ if st.session_state.header_data is not None:
             with st.expander("🕵️ Debug Logs", expanded=False):
                 st.markdown("\n".join(st.session_state.shopify_logs))
 
-    # --- TAB 2: MISSING PRODUCTS ---
+    # --- TAB 2: MISSING PRODUCTS (SPLIT VIEW) ---
     with current_tabs[1]:
         st.subheader("2. Products to Create in Shopify")
         
@@ -891,35 +929,63 @@ if st.session_state.header_data is not None:
                 
                 disp_matrix = st.session_state.matrix_data.copy()
                 
+                # Split logic based on Untappd Status
+                match_mask = disp_matrix['Untappd_Status'] == "✅ Found"
+                df_found = disp_matrix[match_mask]
+                df_missing = disp_matrix[~match_mask]
+
                 u_cols = ['Untappd_Status', 'Label_Thumb', 'Untappd_Brewery', 'Untappd_Product', 'Untappd_ABV', 'Untappd_Desc']
-                
                 base_cols = ['Supplier_Name', 'Product_Name', 'ABV']
                 rest = [c for c in disp_matrix.columns if c not in u_cols and c not in base_cols]
                 
                 final_order = u_cols + base_cols + rest
                 valid_cols = [c for c in final_order if c in disp_matrix.columns]
-                disp_matrix = disp_matrix[valid_cols]
-
-                column_config = {
-                    "Label_Thumb": st.column_config.ImageColumn("Label", width="small"),
-                    "Untappd_Status": st.column_config.TextColumn("Found?"),
-                }
-                for i in range(1, 4):
-                    column_config[f"Create{i}"] = st.column_config.CheckboxColumn(f"Create?", default=False)
-
-                # UPDATED: width='stretch'
-                edited_matrix = st.data_editor(
-                    disp_matrix, 
-                    num_rows="dynamic", 
-                    width='stretch', # <--- FIXED
-                    key=f"matrix_editor_{st.session_state.matrix_key}", 
-                    column_config=column_config
-                )
                 
-                if edited_matrix is not None:
-                     st.session_state.matrix_data = edited_matrix
+                df_found = df_found[valid_cols]
+                df_missing = df_missing[valid_cols]
 
-                st.download_button("📥 Download To-Do List", edited_matrix.to_csv(index=False), "missing_products.csv")
+                # --- TABLE 1: MATCHED ITEMS ---
+                if not df_found.empty:
+                    st.success("✅ Verified Untappd Matches")
+                    col_conf_found = {
+                        "Label_Thumb": st.column_config.ImageColumn("Label", width="small"),
+                        "Untappd_Status": st.column_config.TextColumn("Found?"),
+                    }
+                    edited_found = st.data_editor(
+                        df_found,
+                        num_rows="fixed",
+                        width='stretch', # Fixed width param
+                        key=f"editor_found_{st.session_state.matrix_key}",
+                        column_config=col_conf_found,
+                        disabled=["Untappd_Status", "Label_Thumb"] 
+                    )
+                else:
+                    edited_found = pd.DataFrame(columns=valid_cols)
+
+                # --- TABLE 2: UNMATCHED ITEMS (MANUAL ENTRY) ---
+                if not df_missing.empty:
+                    st.warning("📝 Manual Entry (Pre-filled from Invoice)")
+                    col_conf_missing = {
+                        "Label_Thumb": st.column_config.ImageColumn("Label", width="small"), 
+                        "Untappd_Status": st.column_config.TextColumn("Status", disabled=True),
+                        "Untappd_Desc": st.column_config.TextColumn("Description", width="large"),
+                    }
+                    edited_missing = st.data_editor(
+                        df_missing,
+                        num_rows="fixed",
+                        width='stretch', # Fixed width param
+                        key=f"editor_missing_{st.session_state.matrix_key}",
+                        column_config=col_conf_missing
+                    )
+                else:
+                    edited_missing = pd.DataFrame(columns=valid_cols)
+
+                # --- MERGE & SAVE BACK ---
+                if not edited_found.empty or not edited_missing.empty:
+                    combined = pd.concat([edited_found, edited_missing], ignore_index=True)
+                    st.session_state.matrix_data = combined
+
+                st.download_button("📥 Download To-Do List", st.session_state.matrix_data.to_csv(index=False), "missing_products.csv")
 
     # --- TAB 3: HEADER / EXPORT ---
     with current_tabs[2]:
@@ -958,11 +1024,11 @@ if st.session_state.header_data is not None:
             if not st.session_state.header_data.empty:
                 st.caption(f"ID: {st.session_state.header_data.iloc[0].get('Cin7_Supplier_ID', 'N/A')}")
 
-        # UPDATED: width='stretch'
+        # USE CONTAINER WIDTH
         edited_header = st.data_editor(
             st.session_state.header_data, 
             num_rows="fixed", 
-            width='stretch' # <--- FIXED
+            width='stretch' # Fixed width param
         )
         st.download_button("📥 Download Header CSV", edited_header.to_csv(index=False), "header.csv")
         
