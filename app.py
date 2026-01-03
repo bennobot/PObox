@@ -26,7 +26,7 @@ warnings.filterwarnings("ignore", category=FutureWarning, module="google.generat
 st.set_page_config(layout="wide", page_title="Brewery Invoice Parser")
 
 # ==========================================
-# CUSTOM STYLING (Wider & Smaller Text)
+# CUSTOM STYLING
 # ==========================================
 st.markdown("""
     <style>
@@ -141,6 +141,7 @@ def search_untappd_item(supplier, product):
 def batch_untappd_lookup(matrix_df):
     if matrix_df.empty: return matrix_df, ["Matrix Empty"]
     
+    # Columns are initialized in create_product_matrix, but we ensure they exist here too
     cols = ['Untappd_Status', 'Untappd_ID', 'Untappd_Brewery', 'Untappd_Product', 
             'Untappd_ABV', 'Untappd_Desc', 'Label_Thumb', 'Brewery_Loc']
     
@@ -155,7 +156,9 @@ def batch_untappd_lookup(matrix_df):
         prog_bar.progress((idx + 1) / len(matrix_df))
         
         current_id = str(row.get('Untappd_ID', '')).strip()
-        if not current_id or current_id == 'nan':
+        
+        # Search if ID is missing or manually set pending
+        if not current_id or current_id in ['nan', 'MANUAL', '']:
             res = search_untappd_item(row['Supplier_Name'], row['Product_Name'])
             if res:
                 logs.append(f"✅ Found: {res['name']}")
@@ -197,7 +200,6 @@ def get_cin7_base_url():
     if "cin7" not in st.secrets: return None
     return st.secrets["cin7"].get("base_url", "https://inventory.dearsystems.com/ExternalApi/v2")
 
-# --- NEW FUNCTION: FETCH CIN7 BRANDS ---
 @st.cache_data(ttl=3600)
 def fetch_cin7_brands():
     """Fetches list of Brands from Cin7 to use as Master Supplier List."""
@@ -567,8 +569,8 @@ def clean_product_names(df):
 def create_product_matrix(df):
     if df is None or df.empty: return pd.DataFrame()
     df = df.fillna("")
+    # Filter anything not matched
     if 'Shopify_Status' in df.columns:
-        # Filter anything not matched
         df = df[df['Shopify_Status'] != "✅ Match"]
     if df.empty: return pd.DataFrame()
 
@@ -589,11 +591,26 @@ def create_product_matrix(df):
         matrix_rows.append(row)
         
     matrix_df = pd.DataFrame(matrix_rows)
+    
+    # --- FIX: INITIALIZE UNTAPPD COLUMNS HERE ---
+    # This prevents the KeyError when Tab 2 renders before searching
+    u_cols = ['Untappd_Status', 'Untappd_ID', 'Untappd_Brewery', 'Untappd_Product', 
+              'Untappd_ABV', 'Untappd_Desc', 'Label_Thumb', 'Brewery_Loc']
+    for c in u_cols:
+        matrix_df[c] = "" 
+
     base_cols = ['Supplier_Name', 'Collaborator', 'Product_Name', 'ABV']
     format_cols = []
     for i in range(1, 4):
         format_cols.extend([f'Format{i}', f'Pack_Size{i}', f'Volume{i}', f'Item_Price{i}', f'Create{i}'])
-    final_cols = base_cols + [c for c in format_cols if c in matrix_df.columns]
+    
+    final_cols = u_cols + base_cols + [c for c in format_cols if c in matrix_df.columns]
+    
+    # Ensure all final columns exist in dataframe before returning
+    for col in final_cols:
+        if col not in matrix_df.columns:
+            matrix_df[col] = ""
+            
     return matrix_df[final_cols]
 
 
