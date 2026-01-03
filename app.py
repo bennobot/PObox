@@ -26,6 +26,26 @@ warnings.filterwarnings("ignore", category=FutureWarning, module="google.generat
 st.set_page_config(layout="wide", page_title="Brewery Invoice Parser")
 
 # ==========================================
+# CUSTOM STYLING (Wider & Smaller Text)
+# ==========================================
+st.markdown("""
+    <style>
+        /* Reduce padding around the main block to use more screen real estate */
+        .block-container {
+            padding-top: 1rem;
+            padding-bottom: 1rem;
+            padding-left: 1rem;
+            padding-right: 1rem;
+            max_width: 98%;
+        }
+        /* Attempt to reduce general font size for denser data display */
+        html, body, [class*="css"]  {
+            font-size: 14px;
+        }
+    </style>
+""", unsafe_allow_html=True)
+
+# ==========================================
 # 0. AUTHENTICATION
 # ==========================================
 def check_password():
@@ -250,7 +270,7 @@ def create_cin7_purchase_order(header_df, lines_df, location_choice):
     
     for _, row in lines_df.iterrows():
         prod_id = row.get(id_col)
-        # --- UPDATE: Check for "✅ Match" ---
+        # Check for "✅ Match"
         if row.get('Shopify_Status') == "✅ Match" and pd.notna(prod_id) and str(prod_id).strip():
             qty = float(row.get('Quantity', 0))
             price = float(row.get('Item_Price', 0))
@@ -448,7 +468,6 @@ def run_reconciliation_check(lines_df):
                     
                     if pack_ok and vol_ok:
                         logs.append(f"   ✅ MATCH: `{variant['title']}` | SKU: `{v_sku}`")
-                        # --- UPDATE: GREEN STATUS ---
                         status = "✅ Match"
                         match_found = True
                         full_title = prod['title']
@@ -462,7 +481,6 @@ def run_reconciliation_check(lines_df):
                         break
                 if match_found: break
             
-            # --- UPDATE: RED STATUS ---
             if not match_found: 
                 status = "🟥 Check and Upload"
         
@@ -513,8 +531,8 @@ def clean_product_names(df):
 def create_product_matrix(df):
     if df is None or df.empty: return pd.DataFrame()
     df = df.fillna("")
-    # --- UPDATE: Check for "✅ Match" ---
     if 'Shopify_Status' in df.columns:
+        # Filter anything not matched
         df = df[df['Shopify_Status'] != "✅ Match"]
     if df.empty: return pd.DataFrame()
 
@@ -707,7 +725,7 @@ if st.button("🚀 Process Invoice", type="primary"):
                 {full_text}
                 """
 
-                # --- GENERATION CALL (USING 2.5-flash as verified) ---
+                # --- GENERATION CALL (USING 2.5-flash) ---
                 response = client.models.generate_content(
                     model='gemini-2.5-flash', 
                     contents=prompt
@@ -769,7 +787,6 @@ if st.session_state.header_data is not None:
     # 1. CALCULATE STATUS
     df = st.session_state.line_items
     if 'Shopify_Status' in df.columns:
-        # --- UPDATE: Check for "✅ Match" ---
         unmatched_count = len(df[df['Shopify_Status'] != "✅ Match"])
     else:
         unmatched_count = len(df) 
@@ -807,10 +824,11 @@ if st.session_state.header_data is not None:
             "Matched_Variant": st.column_config.TextColumn("Variant Match", disabled=True),
         }
 
+        # USE CONTAINER WIDTH
         edited_lines = st.data_editor(
             display_df, 
             num_rows="dynamic", 
-            width=1000,
+            use_container_width=True, # FULL WIDTH
             key=f"line_editor_{st.session_state.line_items_key}",
             column_config=column_config
         )
@@ -890,10 +908,11 @@ if st.session_state.header_data is not None:
                 for i in range(1, 4):
                     column_config[f"Create{i}"] = st.column_config.CheckboxColumn(f"Create?", default=False)
 
+                # USE CONTAINER WIDTH
                 edited_matrix = st.data_editor(
                     disp_matrix, 
                     num_rows="dynamic", 
-                    width=1500,
+                    use_container_width=True, # FULL WIDTH
                     key=f"matrix_editor_{st.session_state.matrix_key}", 
                     column_config=column_config
                 )
@@ -940,7 +959,12 @@ if st.session_state.header_data is not None:
             if not st.session_state.header_data.empty:
                 st.caption(f"ID: {st.session_state.header_data.iloc[0].get('Cin7_Supplier_ID', 'N/A')}")
 
-        edited_header = st.data_editor(st.session_state.header_data, num_rows="fixed", width=1000)
+        # USE CONTAINER WIDTH
+        edited_header = st.data_editor(
+            st.session_state.header_data, 
+            num_rows="fixed", 
+            use_container_width=True
+        )
         st.download_button("📥 Download Header CSV", edited_header.to_csv(index=False), "header.csv")
         
         st.divider()
