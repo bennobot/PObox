@@ -1,7 +1,0 @@
-streamlit
-pandas
-pdf2image
-pytesseract
-google-generativeai>=0.7.0
-st-gsheets-connection
-thefuzz
