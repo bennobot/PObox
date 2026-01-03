@@ -20,13 +20,13 @@ from googleapiclient.http import MediaIoBaseDownload
 # Import the Brain
 from knowledge_base import GLOBAL_RULES_TEXT, SUPPLIER_RULEBOOK
 
-# --- SUPPRESS GOOGLE WARNING ---
+# --- SUPPRESS WARNINGS ---
 warnings.filterwarnings("ignore", category=FutureWarning, module="google.generativeai")
 
 st.set_page_config(layout="wide", page_title="Brewery Invoice Parser")
 
 # ==========================================
-# CUSTOM STYLING
+# CUSTOM STYLING (Wider & Smaller Text)
 # ==========================================
 st.markdown("""
     <style>
@@ -155,8 +155,6 @@ def batch_untappd_lookup(matrix_df):
         prog_bar.progress((idx + 1) / len(matrix_df))
         
         current_id = str(row.get('Untappd_ID', '')).strip()
-        
-        # Search if ID is missing
         if not current_id or current_id == 'nan':
             res = search_untappd_item(row['Supplier_Name'], row['Product_Name'])
             if res:
@@ -170,18 +168,8 @@ def batch_untappd_lookup(matrix_df):
                 row['Label_Thumb'] = res['label_image_thumb']
                 row['Brewery_Loc'] = res['brewery_location']
             else:
-                logs.append(f"❌ No match: {row['Product_Name']}")
-                
-                # --- FALLBACK LOGIC ---
-                # Pre-fill columns with Invoice Data so user doesn't have to re-type
                 row['Untappd_Status'] = "❌ Not Found"
-                row['Untappd_ID'] = "MANUAL"
-                row['Untappd_Brewery'] = row['Supplier_Name'] # Fallback to Supplier
-                row['Untappd_Product'] = row['Product_Name']  # Fallback to Invoice Product Name
-                row['Untappd_ABV'] = row['ABV']               # Fallback to Invoice ABV
-                row['Untappd_Desc'] = ""                      # Blank for user to paste
-                row['Label_Thumb'] = ""
-                row['Brewery_Loc'] = ""
+                logs.append(f"❌ No match: {row['Product_Name']}")
         
         updated_rows.append(row)
         
@@ -835,11 +823,11 @@ if st.session_state.header_data is not None:
             "Matched_Variant": st.column_config.TextColumn("Variant Match", disabled=True),
         }
 
-        # USE CONTAINER WIDTH
+        # UPDATED: width='stretch' replaces deprecated use_container_width=True
         edited_lines = st.data_editor(
             display_df, 
             num_rows="dynamic", 
-            use_container_width=True, # FULL WIDTH
+            width='stretch', # <--- FIXED
             key=f"line_editor_{st.session_state.line_items_key}",
             column_config=column_config
         )
@@ -871,7 +859,7 @@ if st.session_state.header_data is not None:
             with st.expander("🕵️ Debug Logs", expanded=False):
                 st.markdown("\n".join(st.session_state.shopify_logs))
 
-    # --- TAB 2: MISSING PRODUCTS (SPLIT VIEW) ---
+    # --- TAB 2: MISSING PRODUCTS ---
     with current_tabs[1]:
         st.subheader("2. Products to Create in Shopify")
         
@@ -903,64 +891,35 @@ if st.session_state.header_data is not None:
                 
                 disp_matrix = st.session_state.matrix_data.copy()
                 
-                # Split logic based on Untappd Status
-                match_mask = disp_matrix['Untappd_Status'] == "✅ Found"
-                df_found = disp_matrix[match_mask]
-                df_missing = disp_matrix[~match_mask]
-
                 u_cols = ['Untappd_Status', 'Label_Thumb', 'Untappd_Brewery', 'Untappd_Product', 'Untappd_ABV', 'Untappd_Desc']
+                
                 base_cols = ['Supplier_Name', 'Product_Name', 'ABV']
                 rest = [c for c in disp_matrix.columns if c not in u_cols and c not in base_cols]
                 
                 final_order = u_cols + base_cols + rest
                 valid_cols = [c for c in final_order if c in disp_matrix.columns]
+                disp_matrix = disp_matrix[valid_cols]
+
+                column_config = {
+                    "Label_Thumb": st.column_config.ImageColumn("Label", width="small"),
+                    "Untappd_Status": st.column_config.TextColumn("Found?"),
+                }
+                for i in range(1, 4):
+                    column_config[f"Create{i}"] = st.column_config.CheckboxColumn(f"Create?", default=False)
+
+                # UPDATED: width='stretch'
+                edited_matrix = st.data_editor(
+                    disp_matrix, 
+                    num_rows="dynamic", 
+                    width='stretch', # <--- FIXED
+                    key=f"matrix_editor_{st.session_state.matrix_key}", 
+                    column_config=column_config
+                )
                 
-                df_found = df_found[valid_cols]
-                df_missing = df_missing[valid_cols]
+                if edited_matrix is not None:
+                     st.session_state.matrix_data = edited_matrix
 
-                # --- TABLE 1: MATCHED ITEMS ---
-                if not df_found.empty:
-                    st.success("✅ Verified Untappd Matches")
-                    col_conf_found = {
-                        "Label_Thumb": st.column_config.ImageColumn("Label", width="small"),
-                        "Untappd_Status": st.column_config.TextColumn("Found?"),
-                    }
-                    edited_found = st.data_editor(
-                        df_found,
-                        num_rows="fixed",
-                        use_container_width=True,
-                        key=f"editor_found_{st.session_state.matrix_key}",
-                        column_config=col_conf_found,
-                        disabled=["Untappd_Status", "Label_Thumb"] # Prevent editing metadata
-                    )
-                else:
-                    edited_found = pd.DataFrame(columns=valid_cols)
-
-                # --- TABLE 2: UNMATCHED ITEMS (MANUAL ENTRY) ---
-                if not df_missing.empty:
-                    st.warning("📝 Manual Entry (Pre-filled from Invoice)")
-                    col_conf_missing = {
-                        "Label_Thumb": st.column_config.ImageColumn("Label", width="small"), # Likely empty
-                        "Untappd_Status": st.column_config.TextColumn("Status", disabled=True),
-                        "Untappd_Desc": st.column_config.TextColumn("Description", width="large"),
-                    }
-                    edited_missing = st.data_editor(
-                        df_missing,
-                        num_rows="fixed",
-                        use_container_width=True,
-                        key=f"editor_missing_{st.session_state.matrix_key}",
-                        column_config=col_conf_missing
-                    )
-                else:
-                    edited_missing = pd.DataFrame(columns=valid_cols)
-
-                # --- MERGE & SAVE BACK ---
-                # We do this automatically to ensure the 'download' button gets the latest state
-                if not edited_found.empty or not edited_missing.empty:
-                    combined = pd.concat([edited_found, edited_missing], ignore_index=True)
-                    st.session_state.matrix_data = combined
-
-                st.download_button("📥 Download To-Do List", st.session_state.matrix_data.to_csv(index=False), "missing_products.csv")
+                st.download_button("📥 Download To-Do List", edited_matrix.to_csv(index=False), "missing_products.csv")
 
     # --- TAB 3: HEADER / EXPORT ---
     with current_tabs[2]:
@@ -999,11 +958,11 @@ if st.session_state.header_data is not None:
             if not st.session_state.header_data.empty:
                 st.caption(f"ID: {st.session_state.header_data.iloc[0].get('Cin7_Supplier_ID', 'N/A')}")
 
-        # USE CONTAINER WIDTH
+        # UPDATED: width='stretch'
         edited_header = st.data_editor(
             st.session_state.header_data, 
             num_rows="fixed", 
-            use_container_width=True
+            width='stretch' # <--- FIXED
         )
         st.download_button("📥 Download Header CSV", edited_header.to_csv(index=False), "header.csv")
         
