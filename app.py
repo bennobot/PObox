@@ -30,7 +30,6 @@ st.set_page_config(layout="wide", page_title="Brewery Invoice Parser")
 # ==========================================
 st.markdown("""
     <style>
-        /* Reduce padding around the main block to use more screen real estate */
         .block-container {
             padding-top: 1rem;
             padding-bottom: 1rem;
@@ -38,7 +37,6 @@ st.markdown("""
             padding-right: 1rem;
             max_width: 98%;
         }
-        /* Attempt to reduce general font size for denser data display */
         html, body, [class*="css"]  {
             font-size: 14px;
         }
@@ -190,6 +188,51 @@ def get_cin7_headers():
 def get_cin7_base_url():
     if "cin7" not in st.secrets: return None
     return st.secrets["cin7"].get("base_url", "https://inventory.dearsystems.com/ExternalApi/v2")
+
+# --- UPDATED: FETCH BRANDS FROM CIN7 (Replaces GSheets) ---
+@st.cache_data(ttl=3600)
+def fetch_cin7_brands():
+    """Fetches list of Brands from Cin7 to use as Master Supplier List."""
+    if "cin7" not in st.secrets: return []
+    
+    creds = st.secrets["cin7"]
+    headers = {
+        'Content-Type': 'application/json',
+        'api-auth-accountid': creds.get("account_id"),
+        'api-auth-applicationkey': creds.get("api_key")
+    }
+    base_url = creds.get("base_url", "https://inventory.dearsystems.com/ExternalApi/v2")
+    
+    all_brands = []
+    page = 1
+    
+    try:
+        while True:
+            # Pagination loop
+            url = f"{base_url}/ref/brand?Page={page}&Limit=100"
+            resp = requests.get(url, headers=headers)
+            
+            if resp.status_code == 200:
+                data = resp.json()
+                brand_list = data.get("BrandList", [])
+                
+                if not brand_list:
+                    break # No more data
+                
+                for b in brand_list:
+                    if b.get("Name"):
+                        all_brands.append(str(b["Name"]))
+                
+                if len(brand_list) < 100:
+                    break # Last page
+                
+                page += 1
+            else:
+                break # Error or auth fail
+    except Exception:
+        pass # Fail silently, return what we have
+        
+    return sorted(list(set(all_brands)), key=str.lower)
 
 @st.cache_data(ttl=3600) 
 def fetch_all_cin7_suppliers_cached():
@@ -499,13 +542,6 @@ def run_reconciliation_check(lines_df):
     
     return pd.DataFrame(results), logs
 
-def get_master_supplier_list():
-    try:
-        conn = st.connection("gsheets", type=GSheetsConnection)
-        df = conn.read(worksheet="MasterData", ttl=600)
-        return df['Supplier_Master'].dropna().astype(str).tolist()
-    except: return []
-
 def normalize_supplier_names(df, master_list):
     if df is None or df.empty or not master_list: return df
     def match_name(name):
@@ -532,7 +568,6 @@ def create_product_matrix(df):
     if df is None or df.empty: return pd.DataFrame()
     df = df.fillna("")
     if 'Shopify_Status' in df.columns:
-        # Filter anything not matched
         df = df[df['Shopify_Status'] != "✅ Match"]
     if df.empty: return pd.DataFrame()
 
@@ -570,7 +605,8 @@ if 'header_data' not in st.session_state: st.session_state.header_data = None
 if 'line_items' not in st.session_state: st.session_state.line_items = None
 if 'matrix_data' not in st.session_state: st.session_state.matrix_data = None
 if 'checker_data' not in st.session_state: st.session_state.checker_data = None
-if 'master_suppliers' not in st.session_state: st.session_state.master_suppliers = get_master_supplier_list()
+# Replaced master_suppliers initialization with empty list (loaded via cache)
+if 'master_suppliers' not in st.session_state: st.session_state.master_suppliers = fetch_cin7_brands()
 if 'drive_files' not in st.session_state: st.session_state.drive_files = []
 if 'selected_drive_id' not in st.session_state: st.session_state.selected_drive_id = None
 if 'selected_drive_name' not in st.session_state: st.session_state.selected_drive_name = None
@@ -725,7 +761,7 @@ if st.button("🚀 Process Invoice", type="primary"):
                 {full_text}
                 """
 
-                # --- GENERATION CALL (USING 2.5-flash) ---
+                # --- GENERATION CALL ---
                 response = client.models.generate_content(
                     model='gemini-2.5-flash', 
                     contents=prompt
