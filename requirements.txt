@@ -1,0 +1,13 @@
+streamlit
+pandas
+pdf2image
+pytesseract
+google-genai
+google-api-python-client
+google-auth
+google-auth-oauthlib
+google-auth-httplib2
+st-gsheets-connection
+thefuzz
+python-Levenshtein
+requests
