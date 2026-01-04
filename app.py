@@ -26,7 +26,7 @@ warnings.filterwarnings("ignore", category=FutureWarning, module="google.generat
 st.set_page_config(layout="wide", page_title="Brewery Invoice Parser")
 
 # ==========================================
-# CUSTOM STYLING (Wider & Smaller Text)
+# CUSTOM STYLING
 # ==========================================
 st.markdown("""
     <style>
@@ -131,6 +131,7 @@ def search_untappd_item(supplier, product):
                     "name": best.get("name"),
                     "brewery": best.get("brewery"),
                     "abv": best.get("abv"),
+                    "style": best.get("beer_style"), # Added Style
                     "description": best.get("description"),
                     "label_image_thumb": best.get("label_image_thumb"),
                     "brewery_location": best.get("brewery_location")
@@ -141,8 +142,9 @@ def search_untappd_item(supplier, product):
 def batch_untappd_lookup(matrix_df):
     if matrix_df.empty: return matrix_df, ["Matrix Empty"]
     
+    # Added Untappd_Style to cols
     cols = ['Untappd_Status', 'Untappd_ID', 'Untappd_Brewery', 'Untappd_Product', 
-            'Untappd_ABV', 'Untappd_Desc', 'Label_Thumb', 'Brewery_Loc']
+            'Untappd_ABV', 'Untappd_Style', 'Untappd_Desc', 'Label_Thumb', 'Brewery_Loc']
     
     for c in cols:
         if c not in matrix_df.columns: matrix_df[c] = ""
@@ -155,7 +157,8 @@ def batch_untappd_lookup(matrix_df):
         prog_bar.progress((idx + 1) / len(matrix_df))
         
         current_id = str(row.get('Untappd_ID', '')).strip()
-        if not current_id or current_id == 'nan':
+        
+        if not current_id or current_id in ['nan', 'MANUAL', '']:
             res = search_untappd_item(row['Supplier_Name'], row['Product_Name'])
             if res:
                 logs.append(f"✅ Found: {res['name']}")
@@ -164,6 +167,7 @@ def batch_untappd_lookup(matrix_df):
                 row['Untappd_Brewery'] = res['brewery']
                 row['Untappd_Product'] = res['name']
                 row['Untappd_ABV'] = res['abv']
+                row['Untappd_Style'] = res['style'] # Map Style
                 row['Untappd_Desc'] = res['description']
                 row['Label_Thumb'] = res['label_image_thumb']
                 row['Brewery_Loc'] = res['brewery_location']
@@ -175,6 +179,7 @@ def batch_untappd_lookup(matrix_df):
                 row['Untappd_Brewery'] = row['Supplier_Name']
                 row['Untappd_Product'] = row['Product_Name']
                 row['Untappd_ABV'] = row['ABV']
+                row['Untappd_Style'] = "" # Blank for manual
                 row['Untappd_Desc'] = ""
                 row['Label_Thumb'] = ""
                 row['Brewery_Loc'] = ""
@@ -199,7 +204,6 @@ def get_cin7_base_url():
 
 @st.cache_data(ttl=3600)
 def fetch_cin7_brands():
-    """Fetches list of Brands from Cin7 to use as Master Supplier List."""
     if "cin7" not in st.secrets: return []
     creds = st.secrets["cin7"]
     headers = {
@@ -591,7 +595,7 @@ def create_product_matrix(df):
     
     # --- FIX: INITIALIZE UNTAPPD COLUMNS HERE ---
     u_cols = ['Untappd_Status', 'Untappd_ID', 'Untappd_Brewery', 'Untappd_Product', 
-              'Untappd_ABV', 'Untappd_Desc', 'Label_Thumb', 'Brewery_Loc']
+              'Untappd_ABV', 'Untappd_Style', 'Untappd_Desc', 'Label_Thumb', 'Brewery_Loc']
     for c in u_cols:
         matrix_df[c] = "" 
 
@@ -946,7 +950,7 @@ if st.session_state.header_data is not None:
                 df_found = disp_matrix[match_mask]
                 df_missing = disp_matrix[~match_mask]
 
-                u_cols = ['Untappd_Status', 'Label_Thumb', 'Untappd_Brewery', 'Untappd_Product', 'Untappd_ABV', 'Untappd_Desc']
+                u_cols = ['Untappd_Status', 'Label_Thumb', 'Untappd_Brewery', 'Untappd_Product', 'Untappd_ABV', 'Untappd_Style', 'Untappd_Desc']
                 base_cols = ['Supplier_Name', 'Product_Name', 'ABV']
                 rest = [c for c in disp_matrix.columns if c not in u_cols and c not in base_cols]
                 
@@ -962,14 +966,12 @@ if st.session_state.header_data is not None:
                     col_conf_found = {
                         "Label_Thumb": st.column_config.ImageColumn("Label", width="small"),
                         "Untappd_Status": st.column_config.TextColumn("Found?"),
-                        "Untappd_Desc": st.column_config.TextColumn("Description", width="medium"), # Restrain Width
+                        "Untappd_Desc": st.column_config.TextColumn("Description", width="medium"),
                     }
                     edited_found = st.data_editor(
                         df_found,
                         num_rows="fixed",
-                        use_container_width=True, # Deprecated warning fixed below? No, use_container_width is deprecated
-                        # Replaced below
-                        width='stretch',
+                        width='stretch', 
                         key=f"editor_found_{st.session_state.matrix_key}",
                         column_config=col_conf_found,
                         disabled=["Untappd_Status", "Label_Thumb"] 
@@ -983,12 +985,12 @@ if st.session_state.header_data is not None:
                     col_conf_missing = {
                         "Label_Thumb": st.column_config.ImageColumn("Label", width="small"), 
                         "Untappd_Status": st.column_config.TextColumn("Status", disabled=True),
-                        "Untappd_Desc": st.column_config.TextColumn("Description", width="medium"), # Restrain Width
+                        "Untappd_Desc": st.column_config.TextColumn("Description", width="medium"),
                     }
                     edited_missing = st.data_editor(
                         df_missing,
                         num_rows="fixed",
-                        width='stretch', # Fixed width param
+                        width='stretch', 
                         key=f"editor_missing_{st.session_state.matrix_key}",
                         column_config=col_conf_missing
                     )
