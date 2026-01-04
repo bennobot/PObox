@@ -545,17 +545,26 @@ def get_master_supplier_list():
         return df['Supplier_Master'].dropna().astype(str).tolist()
     except: return []
 
-# --- NEW: FETCH STYLE LIST FROM GSHEETS ---
+# --- NEW: FETCH STYLE LIST FROM SPECIFIC GSHEET ---
 @st.cache_data(ttl=3600)
 def get_beer_style_list():
-    """Fetches valid Beer Styles for dropdown validation."""
+    """Fetches valid Beer Styles for dropdown validation from a specific sheet."""
     try:
         conn = st.connection("gsheets", type=GSheetsConnection)
-        # Assumes a tab named 'Styles' with a column named 'Style'
-        df = conn.read(worksheet="Styles")
-        if 'Style' in df.columns:
-            return sorted(df['Style'].dropna().astype(str).unique().tolist())
-    except: pass
+        # Using the exact ID provided, prepended with '1' to match standard Google Sheet ID length (44 chars)
+        # If the user ID 'Skd...' is truly only 43 chars, this might need adjustment, but standard is 44.
+        sheet_url = "https://docs.google.com/spreadsheets/d/1Skd85vSu3e16z9iAVG8bZjhwqIWRnUxZXiVv1QbmPHA"
+        
+        df = conn.read(
+            spreadsheet=sheet_url,
+            worksheet="Style", # Tab Name
+            usecols=[0] # Column A
+        )
+        # Get all unique non-empty strings from the first column
+        if not df.empty:
+            return sorted(df.iloc[:, 0].dropna().astype(str).unique().tolist())
+    except Exception:
+        pass
     
     # Fallback list if GSheet fails
     return [
@@ -1020,7 +1029,7 @@ if st.session_state.header_data is not None:
                     edited_missing = st.data_editor(
                         df_missing,
                         num_rows="fixed",
-                        width='stretch', # Fixed width param
+                        width='stretch', 
                         key=f"editor_missing_{st.session_state.matrix_key}",
                         column_config=col_conf_missing
                     )
