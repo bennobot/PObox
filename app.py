@@ -131,7 +131,7 @@ def search_untappd_item(supplier, product):
                     "name": best.get("name"),
                     "brewery": best.get("brewery"),
                     "abv": best.get("abv"),
-                    "style": best.get("beer_style"), # Added Style
+                    "style": best.get("style"), # Added Style
                     "description": best.get("description"),
                     "label_image_thumb": best.get("label_image_thumb"),
                     "brewery_location": best.get("brewery_location")
@@ -1080,3 +1080,4 @@ if st.session_state.header_data is not None:
                             for log in logs: st.write(log)
             else:
                 st.error("Cin7 Secrets missing.")
+
