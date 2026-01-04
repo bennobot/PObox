@@ -178,7 +178,7 @@ def batch_untappd_lookup(matrix_df):
                 row['Untappd_Brewery'] = row['Supplier_Name']
                 row['Untappd_Product'] = row['Product_Name']
                 
-                # --- CHANGE: Clean ABV string ---
+                # Strip % if present
                 raw_abv = str(row.get('ABV', '')).replace('%', '').strip()
                 row['Untappd_ABV'] = raw_abv
                 
@@ -555,8 +555,6 @@ def get_beer_style_list():
     """Fetches valid Beer Styles for dropdown validation from a specific sheet."""
     try:
         conn = st.connection("gsheets", type=GSheetsConnection)
-        # Using the exact ID provided, prepended with '1' to match standard Google Sheet ID length (44 chars)
-        # If the user ID 'Skd...' is truly only 43 chars, this might need adjustment, but standard is 44.
         sheet_url = "https://docs.google.com/spreadsheets/d/1Skd85vSu3e16z9iAVG8bZjhwqIWRnUxZXiVv1QbmPHA"
         
         df = conn.read(
@@ -564,13 +562,11 @@ def get_beer_style_list():
             worksheet="Style", # Tab Name
             usecols=[0] # Column A
         )
-        # Get all unique non-empty strings from the first column
         if not df.empty:
             return sorted(df.iloc[:, 0].dropna().astype(str).unique().tolist())
     except Exception:
         pass
     
-    # Fallback list if GSheet fails
     return [
         "IPA - American", "IPA - New England / Hazy", "Pale Ale - American", 
         "Stout - Imperial / Double", "Sour - Fruited", "Lager - Helles", 
@@ -603,7 +599,6 @@ def create_product_matrix(df):
     if df is None or df.empty: return pd.DataFrame()
     df = df.fillna("")
     if 'Shopify_Status' in df.columns:
-        # Filter anything not matched
         df = df[df['Shopify_Status'] != "✅ Match"]
     if df.empty: return pd.DataFrame()
 
@@ -625,7 +620,6 @@ def create_product_matrix(df):
         
     matrix_df = pd.DataFrame(matrix_rows)
     
-    # --- FIX: INITIALIZE UNTAPPD COLUMNS HERE ---
     u_cols = ['Untappd_Status', 'Untappd_ID', 'Untappd_Brewery', 'Untappd_Product', 
               'Untappd_ABV', 'Untappd_Style', 'Untappd_Desc', 'Label_Thumb', 'Brewery_Loc']
     for c in u_cols:
@@ -694,6 +688,39 @@ with st.sidebar:
                 st.error(f"Error listing models: {e}")
         else:
             st.warning("Enter API Key first.")
+
+    st.divider()
+    # --- CONNECTION STATUS DISPLAY ---
+    with st.expander("🔌 Connection Status", expanded=False):
+        # Gemini
+        st.write(f"**Gemini AI:** {'✅ Ready' if api_key else '❌ Missing'}")
+
+        # Shopify
+        if "shopify" in st.secrets:
+            st.write(f"**Shopify:** ✅ `{st.secrets['shopify'].get('shop_url', 'Unknown')}`")
+        else:
+            st.write("**Shopify:** ❌ Missing")
+
+        # Cin7
+        if "cin7" in st.secrets:
+            aid = st.secrets["cin7"].get("account_id", "")
+            masked = f"{aid[:4]}..." if len(aid) > 4 else "Loaded"
+            st.write(f"**Cin7:** ✅ ID: `{masked}`")
+        else:
+            st.write("**Cin7:** ❌ Missing")
+
+        # Untappd
+        if "untappd" in st.secrets:
+            st.write("**Untappd:** ✅ Ready")
+        else:
+            st.write("**Untappd:** ❌ Missing")
+
+        # Google Sheets
+        if "connections" in st.secrets and "gsheets" in st.secrets["connections"]:
+            st.write("**GSheets Auth:** ✅ Connected")
+            st.markdown("[🔗 Style Sheet](https://docs.google.com/spreadsheets/d/1Skd85vSu3e16z9iAVG8bZjhwqIWRnUxZXiVv1QbmPHA)")
+        else:
+            st.write("**GSheets Auth:** ❌ Missing")
 
     st.divider()
     
@@ -1123,4 +1150,3 @@ if st.session_state.header_data is not None:
                             for log in logs: st.write(log)
             else:
                 st.error("Cin7 Secrets missing.")
-
