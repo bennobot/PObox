@@ -599,6 +599,7 @@ def create_product_matrix(df):
     if df is None or df.empty: return pd.DataFrame()
     df = df.fillna("")
     if 'Shopify_Status' in df.columns:
+        # Filter anything not matched
         df = df[df['Shopify_Status'] != "✅ Match"]
     if df.empty: return pd.DataFrame()
 
@@ -620,6 +621,7 @@ def create_product_matrix(df):
         
     matrix_df = pd.DataFrame(matrix_rows)
     
+    # --- FIX: INITIALIZE UNTAPPD COLUMNS HERE ---
     u_cols = ['Untappd_Status', 'Untappd_ID', 'Untappd_Brewery', 'Untappd_Product', 
               'Untappd_ABV', 'Untappd_Style', 'Untappd_Desc', 'Label_Thumb', 'Brewery_Loc']
     for c in u_cols:
@@ -1031,6 +1033,7 @@ if st.session_state.header_data is not None:
                         df_found,
                         num_rows="fixed",
                         width='stretch', 
+                        height=600,
                         key=f"editor_found_{st.session_state.matrix_key}",
                         column_config=col_conf_found,
                         disabled=["Untappd_Status", "Label_Thumb"] 
@@ -1061,6 +1064,7 @@ if st.session_state.header_data is not None:
                         df_missing,
                         num_rows="fixed",
                         width='stretch', 
+                        height=600,
                         key=f"editor_missing_{st.session_state.matrix_key}",
                         column_config=col_conf_missing
                     )
@@ -1068,8 +1072,15 @@ if st.session_state.header_data is not None:
                     edited_missing = pd.DataFrame(columns=valid_cols)
 
                 # --- MERGE & SAVE BACK ---
-                if not edited_found.empty or not edited_missing.empty:
-                    combined = pd.concat([edited_found, edited_missing], ignore_index=True)
+                # Check each df to ensure we only concat valid ones
+                frames_to_concat = []
+                if not edited_found.empty:
+                    frames_to_concat.append(edited_found)
+                if not edited_missing.empty:
+                    frames_to_concat.append(edited_missing)
+
+                if frames_to_concat:
+                    combined = pd.concat(frames_to_concat, ignore_index=True)
                     st.session_state.matrix_data = combined
 
                 st.download_button("📥 Download To-Do List", st.session_state.matrix_data.to_csv(index=False), "missing_products.csv")
