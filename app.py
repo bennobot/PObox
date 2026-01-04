@@ -177,7 +177,11 @@ def batch_untappd_lookup(matrix_df):
                 row['Untappd_ID'] = "MANUAL"
                 row['Untappd_Brewery'] = row['Supplier_Name']
                 row['Untappd_Product'] = row['Product_Name']
-                row['Untappd_ABV'] = row['ABV']
+                
+                # --- CHANGE: Clean ABV string ---
+                raw_abv = str(row.get('ABV', '')).replace('%', '').strip()
+                row['Untappd_ABV'] = raw_abv
+                
                 row['Untappd_Style'] = ""
                 row['Untappd_Desc'] = ""
                 row['Label_Thumb'] = ""
@@ -1119,3 +1123,4 @@ if st.session_state.header_data is not None:
                             for log in logs: st.write(log)
             else:
                 st.error("Cin7 Secrets missing.")
+
