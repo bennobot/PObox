@@ -131,7 +131,7 @@ def search_untappd_item(supplier, product):
                     "name": best.get("name"),
                     "brewery": best.get("brewery"),
                     "abv": best.get("abv"),
-                    "style": best.get("style"), # Added Style
+                    "style": best.get("style"), 
                     "description": best.get("description"),
                     "label_image_thumb": best.get("label_image_thumb"),
                     "brewery_location": best.get("brewery_location")
@@ -142,7 +142,6 @@ def search_untappd_item(supplier, product):
 def batch_untappd_lookup(matrix_df):
     if matrix_df.empty: return matrix_df, ["Matrix Empty"]
     
-    # Added Untappd_Style to cols
     cols = ['Untappd_Status', 'Untappd_ID', 'Untappd_Brewery', 'Untappd_Product', 
             'Untappd_ABV', 'Untappd_Style', 'Untappd_Desc', 'Label_Thumb', 'Brewery_Loc']
     
@@ -167,7 +166,7 @@ def batch_untappd_lookup(matrix_df):
                 row['Untappd_Brewery'] = res['brewery']
                 row['Untappd_Product'] = res['name']
                 row['Untappd_ABV'] = res['abv']
-                row['Untappd_Style'] = res['style'] # Map Style
+                row['Untappd_Style'] = res['style']
                 row['Untappd_Desc'] = res['description']
                 row['Label_Thumb'] = res['label_image_thumb']
                 row['Brewery_Loc'] = res['brewery_location']
@@ -179,7 +178,7 @@ def batch_untappd_lookup(matrix_df):
                 row['Untappd_Brewery'] = row['Supplier_Name']
                 row['Untappd_Product'] = row['Product_Name']
                 row['Untappd_ABV'] = row['ABV']
-                row['Untappd_Style'] = "" # Blank for manual
+                row['Untappd_Style'] = ""
                 row['Untappd_Desc'] = ""
                 row['Label_Thumb'] = ""
                 row['Brewery_Loc'] = ""
@@ -204,6 +203,7 @@ def get_cin7_base_url():
 
 @st.cache_data(ttl=3600)
 def fetch_cin7_brands():
+    """Fetches list of Brands from Cin7 to use as Master Supplier List."""
     if "cin7" not in st.secrets: return []
     creds = st.secrets["cin7"]
     headers = {
@@ -544,6 +544,25 @@ def get_master_supplier_list():
         df = conn.read(worksheet="MasterData", ttl=600)
         return df['Supplier_Master'].dropna().astype(str).tolist()
     except: return []
+
+# --- NEW: FETCH STYLE LIST FROM GSHEETS ---
+@st.cache_data(ttl=3600)
+def get_beer_style_list():
+    """Fetches valid Beer Styles for dropdown validation."""
+    try:
+        conn = st.connection("gsheets", type=GSheetsConnection)
+        # Assumes a tab named 'Styles' with a column named 'Style'
+        df = conn.read(worksheet="Styles")
+        if 'Style' in df.columns:
+            return sorted(df['Style'].dropna().astype(str).unique().tolist())
+    except: pass
+    
+    # Fallback list if GSheet fails
+    return [
+        "IPA - American", "IPA - New England / Hazy", "Pale Ale - American", 
+        "Stout - Imperial / Double", "Sour - Fruited", "Lager - Helles", 
+        "Pilsner - German", "Cider - Traditional", "Lambic - Gueuze"
+    ]
 
 def normalize_supplier_names(df, master_list):
     if df is None or df.empty or not master_list: return df
@@ -972,6 +991,7 @@ if st.session_state.header_data is not None:
                         df_found,
                         num_rows="fixed",
                         width='stretch', 
+                        height=600,
                         key=f"editor_found_{st.session_state.matrix_key}",
                         column_config=col_conf_found,
                         disabled=["Untappd_Status", "Label_Thumb"] 
@@ -982,15 +1002,27 @@ if st.session_state.header_data is not None:
                 # --- TABLE 2: UNMATCHED ITEMS (MANUAL ENTRY) ---
                 if not df_missing.empty:
                     st.warning("📝 Manual Entry (Pre-filled from Invoice)")
+                    
+                    # Fetch styles for dropdown
+                    style_opts = get_beer_style_list()
+                    
                     col_conf_missing = {
                         "Label_Thumb": st.column_config.ImageColumn("Label", width="small"), 
                         "Untappd_Status": st.column_config.TextColumn("Status", disabled=True),
+                        # DROPDOWN CONFIG
+                        "Untappd_Style": st.column_config.SelectboxColumn(
+                            "Style",
+                            options=style_opts,
+                            width="medium",
+                            required=False
+                        ),
                         "Untappd_Desc": st.column_config.TextColumn("Description", width="medium"),
                     }
                     edited_missing = st.data_editor(
                         df_missing,
                         num_rows="fixed",
                         width='stretch', 
+                        height=600,
                         key=f"editor_missing_{st.session_state.matrix_key}",
                         column_config=col_conf_missing
                     )
@@ -1080,4 +1112,3 @@ if st.session_state.header_data is not None:
                             for log in logs: st.write(log)
             else:
                 st.error("Cin7 Secrets missing.")
-
