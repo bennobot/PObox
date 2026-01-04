@@ -991,7 +991,6 @@ if st.session_state.header_data is not None:
                         df_found,
                         num_rows="fixed",
                         width='stretch', 
-                        height=600,
                         key=f"editor_found_{st.session_state.matrix_key}",
                         column_config=col_conf_found,
                         disabled=["Untappd_Status", "Label_Thumb"] 
@@ -1021,8 +1020,7 @@ if st.session_state.header_data is not None:
                     edited_missing = st.data_editor(
                         df_missing,
                         num_rows="fixed",
-                        width='stretch', 
-                        height=600,
+                        width='stretch', # Fixed width param
                         key=f"editor_missing_{st.session_state.matrix_key}",
                         column_config=col_conf_missing
                     )
