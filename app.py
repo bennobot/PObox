@@ -25,6 +25,9 @@ warnings.filterwarnings("ignore", category=FutureWarning, module="google.generat
 
 st.set_page_config(layout="wide", page_title="Brewery Invoice Parser")
 
+# --- INITIALIZE VARIABLES ---
+custom_rule = None # Fix NameError
+
 # ==========================================
 # CUSTOM STYLING
 # ==========================================
@@ -555,11 +558,22 @@ def get_beer_style_list():
     try:
         conn = st.connection("gsheets", type=GSheetsConnection)
         sheet_url = "https://docs.google.com/spreadsheets/d/1Skd85vSu3e16z9iAVG8bZjhwqIWRnUxZXiVv1QbmPHA"
-        df = conn.read(spreadsheet=sheet_url, worksheet="Style", usecols=[0])
+        
+        df = conn.read(
+            spreadsheet=sheet_url,
+            worksheet="Style", # Tab Name
+            usecols=[0] # Column A
+        )
         if not df.empty:
             return sorted(df.iloc[:, 0].dropna().astype(str).unique().tolist())
-    except Exception: pass
-    return ["IPA", "Pale Ale", "Stout", "Lager", "Sour", "Cider"] # Fallback
+    except Exception:
+        pass
+    
+    return [
+        "IPA - American", "IPA - New England / Hazy", "Pale Ale - American", 
+        "Stout - Imperial / Double", "Sour - Fruited", "Lager - Helles", 
+        "Pilsner - German", "Cider - Traditional", "Lambic - Gueuze"
+    ]
 
 def normalize_supplier_names(df, master_list):
     if df is None or df.empty or not master_list: return df
@@ -587,6 +601,7 @@ def create_product_matrix(df):
     if df is None or df.empty: return pd.DataFrame()
     df = df.fillna("")
     if 'Shopify_Status' in df.columns:
+        # Filter anything not matched
         df = df[df['Shopify_Status'] != "✅ Match"]
     if df.empty: return pd.DataFrame()
 
@@ -734,6 +749,14 @@ with st.sidebar:
         else: st.write("**GSheets Auth:** ❌ Missing")
 
     st.divider()
+    
+    st.subheader("🧪 The Lab")
+    with st.form("teaching_form"):
+        st.caption("Test a new rule here. Press Ctrl+Enter to apply.")
+        custom_rule = st.text_area("Inject Temporary Rule:", height=100)
+        st.form_submit_button("Set Rule")
+
+    st.divider()
     if st.button("Log Out"):
         st.session_state.password_correct = False
         st.rerun()
@@ -857,14 +880,18 @@ if st.button("🚀 Process Invoice", type="primary"):
                 st.write("5. Finalizing Data...")
                 
                 st.session_state.header_data = pd.DataFrame([data['header']])
+                
+                # Init Cin7 columns
                 st.session_state.header_data['Cin7_Supplier_ID'] = ""
                 st.session_state.header_data['Cin7_Supplier_Name'] = ""
                 
                 df_lines = pd.DataFrame(data['line_items'])
+                
                 df_lines = clean_product_names(df_lines)
                 if st.session_state.master_suppliers:
                     df_lines = normalize_supplier_names(df_lines, st.session_state.master_suppliers)
 
+                # Initialize columns so Matrix generation doesn't fail on first run
                 df_lines['Shopify_Status'] = "Pending"
                 cols = ["Supplier_Name", "Collaborator", "Product_Name", "ABV", "Format", "Pack_Size", "Volume", "Item_Price", "Quantity"]
                 existing = [c for c in cols if c in df_lines.columns]
