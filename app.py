@@ -9,7 +9,7 @@ import io
 import requests
 import time
 import warnings
-from datetime import datetime # Added for Date generation
+from datetime import datetime
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 from streamlit_gsheets import GSheetsConnection
@@ -191,7 +191,7 @@ def batch_untappd_lookup(matrix_df):
         
     return pd.DataFrame(updated_rows), logs
 
-# --- 1C. SHOPIFY & CIN7 ---
+# --- 1C. SHOPIFY & CIN7 & GSHEETS ---
 def get_cin7_headers():
     if "cin7" not in st.secrets: return None
     creds = st.secrets["cin7"]
@@ -549,10 +549,9 @@ def get_master_supplier_list():
         return df['Supplier_Master'].dropna().astype(str).tolist()
     except: return []
 
-# --- NEW: FETCH SUPPLIER CODES (4-CHAR) FOR SKU GEN ---
+# --- FETCH SUPPLIER CODES (4-CHAR) FOR SKU GEN ---
 @st.cache_data(ttl=3600)
 def fetch_supplier_codes():
-    """Fetches dictionary {SupplierName: 4CharCode} from MasterData sheet."""
     try:
         conn = st.connection("gsheets", type=GSheetsConnection)
         sheet_url = "https://docs.google.com/spreadsheets/d/1Skd85vSu3e16z9iAVG8bZjhwqIWRnUxZXiVv1QbmPHA"
@@ -568,15 +567,13 @@ def fetch_supplier_codes():
     except Exception: pass
     return {}
 
-# --- NEW: FETCH FORMAT CODES FOR SKU GEN ---
+# --- FETCH FORMAT CODES FOR SKU GEN ---
 @st.cache_data(ttl=3600)
 def fetch_format_codes():
-    """Fetches dictionary {FormatName: Code} from SKU sheet."""
     try:
         conn = st.connection("gsheets", type=GSheetsConnection)
         sheet_url = "https://docs.google.com/spreadsheets/d/1Skd85vSu3e16z9iAVG8bZjhwqIWRnUxZXiVv1QbmPHA"
         
-        # Col A = Key (Format Name), Col B = Value (Code)
         df = conn.read(
             spreadsheet=sheet_url,
             worksheet="SKU",
@@ -588,9 +585,34 @@ def fetch_format_codes():
     except Exception: pass
     return {}
 
+# --- NEW: FETCH WEIGHT MAP ---
+@st.cache_data(ttl=3600)
+def fetch_weight_map():
+    """Fetches dictionary {(Format, Volume): Weight} from Weight sheet."""
+    try:
+        conn = st.connection("gsheets", type=GSheetsConnection)
+        sheet_url = "https://docs.google.com/spreadsheets/d/1Skd85vSu3e16z9iAVG8bZjhwqIWRnUxZXiVv1QbmPHA"
+        
+        # Cols A=Format, B=Volume, D=Weight
+        df = conn.read(
+            spreadsheet=sheet_url,
+            worksheet="Weight",
+            usecols=[0, 1, 3] 
+        )
+        if not df.empty:
+            df = df.dropna()
+            # Construct dictionary with tuple key: (Format, Volume) -> Weight
+            weight_dict = {}
+            for _, row in df.iterrows():
+                key = (str(row.iloc[0]).strip(), str(row.iloc[1]).strip())
+                val = float(row.iloc[2]) if pd.notna(row.iloc[2]) else 0.0
+                weight_dict[key] = val
+            return weight_dict
+    except Exception: pass
+    return {}
+
 @st.cache_data(ttl=3600)
 def get_beer_style_list():
-    """Fetches valid Beer Styles for dropdown validation from a specific sheet."""
     try:
         conn = st.connection("gsheets", type=GSheetsConnection)
         sheet_url = "https://docs.google.com/spreadsheets/d/1Skd85vSu3e16z9iAVG8bZjhwqIWRnUxZXiVv1QbmPHA"
@@ -700,7 +722,6 @@ def stage_products_for_upload(matrix_df):
         for i in range(1, 4):
             fmt_val = str(row.get(f'Format{i}', '')).strip()
             
-            # --- FIX: EXCLUDE 'nan' AND 'none' STRINGS ---
             if fmt_val and fmt_val.lower() not in ['nan', 'none']:
                 new_row = {
                     'untappd_brewery': row['Untappd_Brewery'],
@@ -713,7 +734,8 @@ def stage_products_for_upload(matrix_df):
                     'pack_size': row.get(f'Pack_Size{i}', ''),
                     'volume': row.get(f'Volume{i}', ''),
                     'item_price': row.get(f'Item_Price{i}', ''),
-                    'Family_SKU': ''
+                    'Family_SKU': '',
+                    'Weight': 0.0 # Placeholder
                 }
                 new_rows.append(new_row)
                 
@@ -783,7 +805,6 @@ with st.sidebar:
         else: st.write("**Untappd:** ❌ Missing")
         if "connections" in st.secrets and "gsheets" in st.secrets["connections"]:
             st.write("**GSheets Auth:** ✅ Connected")
-            st.markdown("[🔗 Style Sheet](https://docs.google.com/spreadsheets/d/1Skd85vSu3e16z9iAVG8bZjhwqIWRnUxZXiVv1QbmPHA)")
         else: st.write("**GSheets Auth:** ❌ Missing")
 
     st.divider()
@@ -1000,6 +1021,7 @@ if st.session_state.header_data is not None:
             "Matched_Variant": st.column_config.TextColumn("Variant Match", disabled=True),
         }
 
+        # USE CONTAINER WIDTH
         edited_lines = st.data_editor(
             display_df, 
             num_rows="dynamic", 
@@ -1066,6 +1088,8 @@ if st.session_state.header_data is not None:
             if st.session_state.matrix_data is not None and not st.session_state.matrix_data.empty:
                 
                 disp_matrix = st.session_state.matrix_data.copy()
+                
+                # Split logic based on Untappd Status
                 match_mask = disp_matrix['Untappd_Status'] == "✅ Found"
                 df_found = disp_matrix[match_mask]
                 df_missing = disp_matrix[~match_mask]
@@ -1145,43 +1169,58 @@ if st.session_state.header_data is not None:
         
         if st.session_state.upload_data is not None and not st.session_state.upload_data.empty:
             
-            # --- GENERATE SKU BUTTON ---
-            if st.button("🛠️ Generate Family SKUs"):
+            # --- GENERATE UPLOAD DATA BUTTON (RENAMED) ---
+            if st.button("🛠️ Generate Upload Data"):
                 supplier_map = fetch_supplier_codes()
-                format_map = fetch_format_codes() # NEW: Fetch format map
+                format_map = fetch_format_codes()
+                weight_map = fetch_weight_map() # Fetch Weight Data
                 today_str = datetime.now().strftime('%d%m%Y')
                 
                 updated_upload_df = st.session_state.upload_data.copy()
                 
-                # Create a SKU list manually to allow access to index (row number)
                 sku_list = []
+                weight_list = []
+                
                 for idx, row in updated_upload_df.iterrows():
                     supp_name = row.get('untappd_brewery', '')
                     prod_name = row.get('untappd_product', '')
-                    fmt_name = row.get('format', '')
+                    fmt_name = str(row.get('format', '')).strip()
+                    vol_name = str(row.get('volume', '')).strip()
+                    pack_val = row.get('pack_size', '')
                     
+                    # 1. SKU Generation
                     s_code = supplier_map.get(supp_name, "XXXX")
                     p_code = generate_sku_parts(prod_name)
-                    
-                    # 3. Get Format Code
-                    f_code = format_map.get(fmt_name, "UN") # Default UN (Unknown)
-                    
-                    # {Supplier}{Product}-{Date}-{LineNum}-{Format}
+                    f_code = format_map.get(fmt_name, "UN")
                     sku = f"{s_code}{p_code}-{today_str}-{idx}-{f_code}"
                     sku_list.append(sku)
+                    
+                    # 2. Weight Calculation
+                    # Ensure lookup matches sheet format (strings)
+                    unit_weight = weight_map.get((fmt_name, vol_name), 0.0)
+                    
+                    # Handle pack size safely
+                    try:
+                        pack_mult = float(pack_val) if pack_val and str(pack_val).lower() != 'nan' else 1.0
+                    except:
+                        pack_mult = 1.0
+                        
+                    total_weight = unit_weight * pack_mult
+                    weight_list.append(total_weight)
 
                 updated_upload_df['Family_SKU'] = sku_list
+                updated_upload_df['Weight'] = weight_list
                 
-                # Move Family_SKU to first column
+                # Reorder columns: SKU first
                 cols = list(updated_upload_df.columns)
-                cols.insert(0, cols.pop(cols.index('Family_SKU')))
+                if 'Family_SKU' in cols:
+                    cols.insert(0, cols.pop(cols.index('Family_SKU')))
                 updated_upload_df = updated_upload_df[cols]
                 
                 st.session_state.upload_data = updated_upload_df
-                st.success("SKUs Generated!")
+                st.success("Upload Data Generated (SKUs & Weights)!")
                 st.rerun()
 
-            # --- NO HEIGHT SET ---
             st.dataframe(st.session_state.upload_data, width=2000)
             
         else:
