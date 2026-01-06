@@ -25,9 +25,6 @@ warnings.filterwarnings("ignore", category=FutureWarning, module="google.generat
 
 st.set_page_config(layout="wide", page_title="Brewery Invoice Parser")
 
-# --- INITIALIZE VARIABLES ---
-custom_rule = None # Fix NameError
-
 # ==========================================
 # CUSTOM STYLING
 # ==========================================
@@ -193,7 +190,7 @@ def batch_untappd_lookup(matrix_df):
         
     return pd.DataFrame(updated_rows), logs
 
-# --- 1C. SHOPIFY & CIN7 ---
+# --- 1C. SHOPIFY & CIN7 & GSHEETS ---
 def get_cin7_headers():
     if "cin7" not in st.secrets: return None
     creds = st.secrets["cin7"]
@@ -551,29 +548,38 @@ def get_master_supplier_list():
         return df['Supplier_Master'].dropna().astype(str).tolist()
     except: return []
 
-# --- NEW: FETCH STYLE LIST FROM SPECIFIC GSHEET ---
+# --- NEW: FETCH SUPPLIER CODES (4-CHAR) FOR SKU GEN ---
+@st.cache_data(ttl=3600)
+def fetch_supplier_codes():
+    """Fetches dictionary {SupplierName: 4CharCode} from MasterData sheet."""
+    try:
+        conn = st.connection("gsheets", type=GSheetsConnection)
+        sheet_url = "https://docs.google.com/spreadsheets/d/1Skd85vSu3e16z9iAVG8bZjhwqIWRnUxZXiVv1QbmPHA"
+        
+        # Assume Col A = Name, Col B = Code (Index 1)
+        df = conn.read(
+            spreadsheet=sheet_url,
+            worksheet="MasterData",
+            usecols=[0, 1] 
+        )
+        if not df.empty:
+            # Drop empty and creating dict mapping
+            df = df.dropna()
+            return pd.Series(df.iloc[:, 1].values, index=df.iloc[:, 0]).to_dict()
+    except Exception: pass
+    return {}
+
 @st.cache_data(ttl=3600)
 def get_beer_style_list():
     """Fetches valid Beer Styles for dropdown validation from a specific sheet."""
     try:
         conn = st.connection("gsheets", type=GSheetsConnection)
         sheet_url = "https://docs.google.com/spreadsheets/d/1Skd85vSu3e16z9iAVG8bZjhwqIWRnUxZXiVv1QbmPHA"
-        
-        df = conn.read(
-            spreadsheet=sheet_url,
-            worksheet="Style", # Tab Name
-            usecols=[0] # Column A
-        )
+        df = conn.read(spreadsheet=sheet_url, worksheet="Style", usecols=[0])
         if not df.empty:
             return sorted(df.iloc[:, 0].dropna().astype(str).unique().tolist())
-    except Exception:
-        pass
-    
-    return [
-        "IPA - American", "IPA - New England / Hazy", "Pale Ale - American", 
-        "Stout - Imperial / Double", "Sour - Fruited", "Lager - Helles", 
-        "Pilsner - German", "Cider - Traditional", "Lambic - Gueuze"
-    ]
+    except Exception: pass
+    return ["IPA", "Pale Ale"] # Fallback
 
 def normalize_supplier_names(df, master_list):
     if df is None or df.empty or not master_list: return df
@@ -601,7 +607,6 @@ def create_product_matrix(df):
     if df is None or df.empty: return pd.DataFrame()
     df = df.fillna("")
     if 'Shopify_Status' in df.columns:
-        # Filter anything not matched
         df = df[df['Shopify_Status'] != "✅ Match"]
     if df.empty: return pd.DataFrame()
 
@@ -623,7 +628,6 @@ def create_product_matrix(df):
         
     matrix_df = pd.DataFrame(matrix_rows)
     
-    # --- FIX: INITIALIZE UNTAPPD COLUMNS HERE ---
     u_cols = ['Untappd_Status', 'Untappd_ID', 'Untappd_Brewery', 'Untappd_Product', 
               'Untappd_ABV', 'Untappd_Style', 'Untappd_Desc', 'Label_Thumb', 'Brewery_Loc']
     for c in u_cols:
@@ -642,28 +646,43 @@ def create_product_matrix(df):
             
     return matrix_df[final_cols]
 
-# --- NEW FUNCTION: STAGE UPLOAD DATA ---
+# --- SKU GENERATION LOGIC ---
+def generate_sku_parts(product_name):
+    """Generates the 4-char Product string for SKU."""
+    clean_name = re.sub(r'[^a-zA-Z0-9\s]', '', str(product_name)).upper()
+    words = clean_name.split()
+    
+    if not words: return "XXXX"
+    
+    if len(words) >= 4:
+        # First char of first 4 words
+        return "".join([w[0] for w in words[:4]])
+    elif len(words) >= 2:
+        # First 2 chars of first 2 words
+        w1 = words[0][:2]
+        w2 = words[1][:2]
+        return (w1 + w2).ljust(4, 'X')[:4]
+    else:
+        # 1 word: First 2 chars + XX
+        w1 = words[0][:2]
+        return (w1 + "XX").ljust(4, 'X')[:4]
+
+# --- STAGE UPLOAD DATA ---
 def stage_products_for_upload(matrix_df):
-    """Explodes matrix data into individual rows for uploading."""
     if matrix_df.empty: return pd.DataFrame(), []
     
     new_rows = []
     errors = []
-    
-    # Required fields to be non-empty strings
     required = ['Untappd_Brewery', 'Untappd_Product', 'Untappd_ABV', 'Untappd_Style', 'Untappd_Desc']
     
     for idx, row in matrix_df.iterrows():
-        # Check validation
         missing = [field for field in required if not str(row.get(field, '')).strip()]
         if missing:
             errors.append(f"Row {idx+1} ({row.get('Untappd_Product', 'Unknown')}): Missing {', '.join(missing)}")
-            continue # Skip this row
+            continue
 
-        # Explode Formats (1, 2, 3)
         for i in range(1, 4):
             fmt_val = str(row.get(f'Format{i}', '')).strip()
-            # Only process if Format is present
             if fmt_val:
                 new_row = {
                     'untappd_brewery': row['Untappd_Brewery'],
@@ -675,7 +694,9 @@ def stage_products_for_upload(matrix_df):
                     'format': fmt_val,
                     'pack_size': row.get(f'Pack_Size{i}', ''),
                     'volume': row.get(f'Volume{i}', ''),
-                    'item_price': row.get(f'Item_Price{i}', '')
+                    'item_price': row.get(f'Item_Price{i}', ''),
+                    # Placeholder for SKU gen
+                    'Family_SKU': ''
                 }
                 new_rows.append(new_row)
                 
@@ -690,7 +711,7 @@ def stage_products_for_upload(matrix_df):
 if 'header_data' not in st.session_state: st.session_state.header_data = None
 if 'line_items' not in st.session_state: st.session_state.line_items = None
 if 'matrix_data' not in st.session_state: st.session_state.matrix_data = None
-if 'upload_data' not in st.session_state: st.session_state.upload_data = None # NEW
+if 'upload_data' not in st.session_state: st.session_state.upload_data = None 
 if 'checker_data' not in st.session_state: st.session_state.checker_data = None
 # Master suppliers now loaded via cache from Cin7 API
 if 'master_suppliers' not in st.session_state: st.session_state.master_suppliers = fetch_cin7_brands()
@@ -745,7 +766,6 @@ with st.sidebar:
         else: st.write("**Untappd:** ❌ Missing")
         if "connections" in st.secrets and "gsheets" in st.secrets["connections"]:
             st.write("**GSheets Auth:** ✅ Connected")
-            st.markdown("[🔗 Style Sheet](https://docs.google.com/spreadsheets/d/1Skd85vSu3e16z9iAVG8bZjhwqIWRnUxZXiVv1QbmPHA)")
         else: st.write("**GSheets Auth:** ❌ Missing")
 
     st.divider()
@@ -1015,7 +1035,7 @@ if st.session_state.header_data is not None:
                              updated_matrix, u_logs = batch_untappd_lookup(st.session_state.matrix_data)
                              st.session_state.matrix_data = updated_matrix
                              st.session_state.untappd_logs = u_logs
-                             st.session_state.matrix_key += 1
+                             st.session_state.matrix_key += 1 # Force Refresh
                              st.success("Search Complete!")
                              st.rerun()
                     else:
@@ -1090,7 +1110,7 @@ if st.session_state.header_data is not None:
                     combined = pd.concat(frames_to_concat, ignore_index=True)
                     st.session_state.matrix_data = combined
                 
-                # --- NEW BUTTON FOR TAB 3 ---
+                # --- VALIDATE & STAGE BUTTON ---
                 if st.button("✨ Validate & Stage for Upload", type="primary"):
                     staged_df, errors = stage_products_for_upload(st.session_state.matrix_data)
                     if errors:
@@ -1104,9 +1124,41 @@ if st.session_state.header_data is not None:
     # --- TAB 3: PRODUCT UPLOAD (NEW) ---
     with current_tabs[2]:
         st.subheader("3. Product Upload Stage")
+        
         if st.session_state.upload_data is not None and not st.session_state.upload_data.empty:
-            st.info("These products are ready for SKU generation and platform upload.")
-            st.dataframe(st.session_state.upload_data, width=2000) # Read-only view
+            
+            # --- GENERATE SKU BUTTON ---
+            if st.button("🛠️ Generate Family SKUs"):
+                supplier_map = fetch_supplier_codes()
+                
+                # Apply SKU generation logic to the existing dataframe
+                updated_upload_df = st.session_state.upload_data.copy()
+                
+                def make_sku(row):
+                    supp_name = row.get('untappd_brewery', '')
+                    prod_name = row.get('untappd_product', '')
+                    
+                    # 1. Get 4-char Supplier Code (Default XXXX)
+                    s_code = supplier_map.get(supp_name, "XXXX")
+                    
+                    # 2. Get 4-char Product Code
+                    p_code = generate_sku_parts(prod_name)
+                    
+                    return f"{s_code}-{p_code}"
+
+                updated_upload_df['Family_SKU'] = updated_upload_df.apply(make_sku, axis=1)
+                
+                # Move Family_SKU to first column
+                cols = list(updated_upload_df.columns)
+                cols.insert(0, cols.pop(cols.index('Family_SKU')))
+                updated_upload_df = updated_upload_df[cols]
+                
+                st.session_state.upload_data = updated_upload_df
+                st.success("SKUs Generated!")
+                st.rerun()
+
+            st.dataframe(st.session_state.upload_data, width=2000, height=600)
+            
         else:
             st.info("No data staged yet. Go to Tab 2 and click 'Validate & Stage'.")
 
