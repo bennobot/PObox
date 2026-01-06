@@ -556,14 +556,12 @@ def fetch_supplier_codes():
         conn = st.connection("gsheets", type=GSheetsConnection)
         sheet_url = "https://docs.google.com/spreadsheets/d/1Skd85vSu3e16z9iAVG8bZjhwqIWRnUxZXiVv1QbmPHA"
         
-        # Assume Col A = Name, Col B = Code (Index 1)
         df = conn.read(
             spreadsheet=sheet_url,
             worksheet="MasterData",
             usecols=[0, 1] 
         )
         if not df.empty:
-            # Drop empty and creating dict mapping
             df = df.dropna()
             return pd.Series(df.iloc[:, 1].values, index=df.iloc[:, 0]).to_dict()
     except Exception: pass
@@ -628,7 +626,6 @@ def create_product_matrix(df):
         
     matrix_df = pd.DataFrame(matrix_rows)
     
-    # --- FIX: INITIALIZE UNTAPPD COLUMNS HERE ---
     u_cols = ['Untappd_Status', 'Untappd_ID', 'Untappd_Brewery', 'Untappd_Product', 
               'Untappd_ABV', 'Untappd_Style', 'Untappd_Desc', 'Label_Thumb', 'Brewery_Loc']
     for c in u_cols:
@@ -656,15 +653,12 @@ def generate_sku_parts(product_name):
     if not words: return "XXXX"
     
     if len(words) >= 4:
-        # First char of first 4 words
         return "".join([w[0] for w in words[:4]])
     elif len(words) >= 2:
-        # First 2 chars of first 2 words
         w1 = words[0][:2]
         w2 = words[1][:2]
         return (w1 + w2).ljust(4, 'X')[:4]
     else:
-        # 1 word: First 2 chars + XX
         w1 = words[0][:2]
         return (w1 + "XX").ljust(4, 'X')[:4]
 
@@ -684,7 +678,9 @@ def stage_products_for_upload(matrix_df):
 
         for i in range(1, 4):
             fmt_val = str(row.get(f'Format{i}', '')).strip()
-            if fmt_val:
+            
+            # --- FIX: EXCLUDE 'nan' AND 'none' STRINGS ---
+            if fmt_val and fmt_val.lower() not in ['nan', 'none']:
                 new_row = {
                     'untappd_brewery': row['Untappd_Brewery'],
                     'collaborator': row.get('Collaborator', ''),
@@ -696,7 +692,6 @@ def stage_products_for_upload(matrix_df):
                     'pack_size': row.get(f'Pack_Size{i}', ''),
                     'volume': row.get(f'Volume{i}', ''),
                     'item_price': row.get(f'Item_Price{i}', ''),
-                    # Placeholder for SKU gen
                     'Family_SKU': ''
                 }
                 new_rows.append(new_row)
@@ -767,7 +762,6 @@ with st.sidebar:
         else: st.write("**Untappd:** ❌ Missing")
         if "connections" in st.secrets and "gsheets" in st.secrets["connections"]:
             st.write("**GSheets Auth:** ✅ Connected")
-            st.markdown("[🔗 Style Sheet](https://docs.google.com/spreadsheets/d/1Skd85vSu3e16z9iAVG8bZjhwqIWRnUxZXiVv1QbmPHA)")
         else: st.write("**GSheets Auth:** ❌ Missing")
 
     st.divider()
@@ -1076,6 +1070,7 @@ if st.session_state.header_data is not None:
                         df_found,
                         num_rows="fixed",
                         width='stretch',
+                        # NO HEIGHT SET (Auto)
                         key=f"editor_found_{st.session_state.matrix_key}",
                         column_config=col_conf_found,
                         disabled=["Untappd_Status", "Label_Thumb"] 
@@ -1097,6 +1092,7 @@ if st.session_state.header_data is not None:
                         df_missing,
                         num_rows="fixed",
                         width='stretch',
+                        # NO HEIGHT SET (Auto)
                         key=f"editor_missing_{st.session_state.matrix_key}",
                         column_config=col_conf_missing
                     )
@@ -1133,20 +1129,16 @@ if st.session_state.header_data is not None:
             if st.button("🛠️ Generate Family SKUs"):
                 supplier_map = fetch_supplier_codes()
                 
-                # Apply SKU generation logic to the existing dataframe
                 updated_upload_df = st.session_state.upload_data.copy()
                 
                 def make_sku(row):
                     supp_name = row.get('untappd_brewery', '')
                     prod_name = row.get('untappd_product', '')
                     
-                    # 1. Get 4-char Supplier Code (Default XXXX)
                     s_code = supplier_map.get(supp_name, "XXXX")
-                    
-                    # 2. Get 4-char Product Code
                     p_code = generate_sku_parts(prod_name)
                     
-                    # NO HYPHEN
+                    # --- FIX: NO HYPHEN ---
                     return f"{s_code}{p_code}"
 
                 updated_upload_df['Family_SKU'] = updated_upload_df.apply(make_sku, axis=1)
