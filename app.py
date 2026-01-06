@@ -9,6 +9,7 @@ import io
 import requests
 import time
 import warnings
+from datetime import datetime # Added for Date generation
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 from streamlit_gsheets import GSheetsConnection
@@ -567,6 +568,26 @@ def fetch_supplier_codes():
     except Exception: pass
     return {}
 
+# --- NEW: FETCH FORMAT CODES FOR SKU GEN ---
+@st.cache_data(ttl=3600)
+def fetch_format_codes():
+    """Fetches dictionary {FormatName: Code} from SKU sheet."""
+    try:
+        conn = st.connection("gsheets", type=GSheetsConnection)
+        sheet_url = "https://docs.google.com/spreadsheets/d/1Skd85vSu3e16z9iAVG8bZjhwqIWRnUxZXiVv1QbmPHA"
+        
+        # Col A = Key (Format Name), Col B = Value (Code)
+        df = conn.read(
+            spreadsheet=sheet_url,
+            worksheet="SKU",
+            usecols=[0, 1]
+        )
+        if not df.empty:
+            df = df.dropna()
+            return pd.Series(df.iloc[:, 1].values, index=df.iloc[:, 0]).to_dict()
+    except Exception: pass
+    return {}
+
 @st.cache_data(ttl=3600)
 def get_beer_style_list():
     """Fetches valid Beer Styles for dropdown validation from a specific sheet."""
@@ -762,6 +783,7 @@ with st.sidebar:
         else: st.write("**Untappd:** ❌ Missing")
         if "connections" in st.secrets and "gsheets" in st.secrets["connections"]:
             st.write("**GSheets Auth:** ✅ Connected")
+            st.markdown("[🔗 Style Sheet](https://docs.google.com/spreadsheets/d/1Skd85vSu3e16z9iAVG8bZjhwqIWRnUxZXiVv1QbmPHA)")
         else: st.write("**GSheets Auth:** ❌ Missing")
 
     st.divider()
@@ -1070,7 +1092,6 @@ if st.session_state.header_data is not None:
                         df_found,
                         num_rows="fixed",
                         width='stretch',
-                        # NO HEIGHT SET (Auto)
                         key=f"editor_found_{st.session_state.matrix_key}",
                         column_config=col_conf_found,
                         disabled=["Untappd_Status", "Label_Thumb"] 
@@ -1092,7 +1113,6 @@ if st.session_state.header_data is not None:
                         df_missing,
                         num_rows="fixed",
                         width='stretch',
-                        # NO HEIGHT SET (Auto)
                         key=f"editor_missing_{st.session_state.matrix_key}",
                         column_config=col_conf_missing
                     )
@@ -1128,20 +1148,29 @@ if st.session_state.header_data is not None:
             # --- GENERATE SKU BUTTON ---
             if st.button("🛠️ Generate Family SKUs"):
                 supplier_map = fetch_supplier_codes()
+                format_map = fetch_format_codes() # NEW: Fetch format map
+                today_str = datetime.now().strftime('%d%m%Y')
                 
                 updated_upload_df = st.session_state.upload_data.copy()
                 
-                def make_sku(row):
+                # Create a SKU list manually to allow access to index (row number)
+                sku_list = []
+                for idx, row in updated_upload_df.iterrows():
                     supp_name = row.get('untappd_brewery', '')
                     prod_name = row.get('untappd_product', '')
+                    fmt_name = row.get('format', '')
                     
                     s_code = supplier_map.get(supp_name, "XXXX")
                     p_code = generate_sku_parts(prod_name)
                     
-                    # --- FIX: NO HYPHEN ---
-                    return f"{s_code}{p_code}"
+                    # 3. Get Format Code
+                    f_code = format_map.get(fmt_name, "UN") # Default UN (Unknown)
+                    
+                    # {Supplier}{Product}-{Date}-{LineNum}-{Format}
+                    sku = f"{s_code}{p_code}-{today_str}-{idx}-{f_code}"
+                    sku_list.append(sku)
 
-                updated_upload_df['Family_SKU'] = updated_upload_df.apply(make_sku, axis=1)
+                updated_upload_df['Family_SKU'] = sku_list
                 
                 # Move Family_SKU to first column
                 cols = list(updated_upload_df.columns)
