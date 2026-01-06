@@ -178,7 +178,6 @@ def batch_untappd_lookup(matrix_df):
                 row['Untappd_Brewery'] = row['Supplier_Name']
                 row['Untappd_Product'] = row['Product_Name']
                 
-                # Strip % if present
                 raw_abv = str(row.get('ABV', '')).replace('%', '').strip()
                 row['Untappd_ABV'] = raw_abv
                 
@@ -556,22 +555,11 @@ def get_beer_style_list():
     try:
         conn = st.connection("gsheets", type=GSheetsConnection)
         sheet_url = "https://docs.google.com/spreadsheets/d/1Skd85vSu3e16z9iAVG8bZjhwqIWRnUxZXiVv1QbmPHA"
-        
-        df = conn.read(
-            spreadsheet=sheet_url,
-            worksheet="Style", # Tab Name
-            usecols=[0] # Column A
-        )
+        df = conn.read(spreadsheet=sheet_url, worksheet="Style", usecols=[0])
         if not df.empty:
             return sorted(df.iloc[:, 0].dropna().astype(str).unique().tolist())
-    except Exception:
-        pass
-    
-    return [
-        "IPA - American", "IPA - New England / Hazy", "Pale Ale - American", 
-        "Stout - Imperial / Double", "Sour - Fruited", "Lager - Helles", 
-        "Pilsner - German", "Cider - Traditional", "Lambic - Gueuze"
-    ]
+    except Exception: pass
+    return ["IPA", "Pale Ale", "Stout", "Lager", "Sour", "Cider"] # Fallback
 
 def normalize_supplier_names(df, master_list):
     if df is None or df.empty or not master_list: return df
@@ -599,7 +587,6 @@ def create_product_matrix(df):
     if df is None or df.empty: return pd.DataFrame()
     df = df.fillna("")
     if 'Shopify_Status' in df.columns:
-        # Filter anything not matched
         df = df[df['Shopify_Status'] != "✅ Match"]
     if df.empty: return pd.DataFrame()
 
@@ -640,6 +627,45 @@ def create_product_matrix(df):
             
     return matrix_df[final_cols]
 
+# --- NEW FUNCTION: STAGE UPLOAD DATA ---
+def stage_products_for_upload(matrix_df):
+    """Explodes matrix data into individual rows for uploading."""
+    if matrix_df.empty: return pd.DataFrame(), []
+    
+    new_rows = []
+    errors = []
+    
+    # Required fields to be non-empty strings
+    required = ['Untappd_Brewery', 'Untappd_Product', 'Untappd_ABV', 'Untappd_Style', 'Untappd_Desc']
+    
+    for idx, row in matrix_df.iterrows():
+        # Check validation
+        missing = [field for field in required if not str(row.get(field, '')).strip()]
+        if missing:
+            errors.append(f"Row {idx+1} ({row.get('Untappd_Product', 'Unknown')}): Missing {', '.join(missing)}")
+            continue # Skip this row
+
+        # Explode Formats (1, 2, 3)
+        for i in range(1, 4):
+            fmt_val = str(row.get(f'Format{i}', '')).strip()
+            # Only process if Format is present
+            if fmt_val:
+                new_row = {
+                    'untappd_brewery': row['Untappd_Brewery'],
+                    'collaborator': row.get('Collaborator', ''),
+                    'untappd_product': row['Untappd_Product'],
+                    'untappd_abv': row['Untappd_ABV'],
+                    'untappd_style': row['Untappd_Style'],
+                    'description': row['Untappd_Desc'],
+                    'format': fmt_val,
+                    'pack_size': row.get(f'Pack_Size{i}', ''),
+                    'volume': row.get(f'Volume{i}', ''),
+                    'item_price': row.get(f'Item_Price{i}', '')
+                }
+                new_rows.append(new_row)
+                
+    return pd.DataFrame(new_rows), errors
+
 
 # ==========================================
 # 2. SESSION & SIDEBAR
@@ -649,6 +675,7 @@ def create_product_matrix(df):
 if 'header_data' not in st.session_state: st.session_state.header_data = None
 if 'line_items' not in st.session_state: st.session_state.line_items = None
 if 'matrix_data' not in st.session_state: st.session_state.matrix_data = None
+if 'upload_data' not in st.session_state: st.session_state.upload_data = None # NEW
 if 'checker_data' not in st.session_state: st.session_state.checker_data = None
 # Master suppliers now loaded via cache from Cin7 API
 if 'master_suppliers' not in st.session_state: st.session_state.master_suppliers = fetch_cin7_brands()
@@ -694,43 +721,17 @@ with st.sidebar:
     st.divider()
     # --- CONNECTION STATUS DISPLAY ---
     with st.expander("🔌 Connection Status", expanded=False):
-        # Gemini
         st.write(f"**Gemini AI:** {'✅ Ready' if api_key else '❌ Missing'}")
-
-        # Shopify
-        if "shopify" in st.secrets:
-            st.write(f"**Shopify:** ✅ `{st.secrets['shopify'].get('shop_url', 'Unknown')}`")
-        else:
-            st.write("**Shopify:** ❌ Missing")
-
-        # Cin7
-        if "cin7" in st.secrets:
-            aid = st.secrets["cin7"].get("account_id", "")
-            masked = f"{aid[:4]}..." if len(aid) > 4 else "Loaded"
-            st.write(f"**Cin7:** ✅ ID: `{masked}`")
-        else:
-            st.write("**Cin7:** ❌ Missing")
-
-        # Untappd
-        if "untappd" in st.secrets:
-            st.write("**Untappd:** ✅ Ready")
-        else:
-            st.write("**Untappd:** ❌ Missing")
-
-        # Google Sheets
+        if "shopify" in st.secrets: st.write(f"**Shopify:** ✅ `{st.secrets['shopify'].get('shop_url', 'Unknown')}`")
+        else: st.write("**Shopify:** ❌ Missing")
+        if "cin7" in st.secrets: st.write(f"**Cin7:** ✅ Loaded")
+        else: st.write("**Cin7:** ❌ Missing")
+        if "untappd" in st.secrets: st.write("**Untappd:** ✅ Ready")
+        else: st.write("**Untappd:** ❌ Missing")
         if "connections" in st.secrets and "gsheets" in st.secrets["connections"]:
             st.write("**GSheets Auth:** ✅ Connected")
             st.markdown("[🔗 Style Sheet](https://docs.google.com/spreadsheets/d/1Skd85vSu3e16z9iAVG8bZjhwqIWRnUxZXiVv1QbmPHA)")
-        else:
-            st.write("**GSheets Auth:** ❌ Missing")
-
-    st.divider()
-    
-    st.subheader("🧪 The Lab")
-    with st.form("teaching_form"):
-        st.caption("Test a new rule here. Press Ctrl+Enter to apply.")
-        custom_rule = st.text_area("Inject Temporary Rule:", height=100)
-        st.form_submit_button("Set Rule")
+        else: st.write("**GSheets Auth:** ❌ Missing")
 
     st.divider()
     if st.button("Log Out"):
@@ -856,18 +857,14 @@ if st.button("🚀 Process Invoice", type="primary"):
                 st.write("5. Finalizing Data...")
                 
                 st.session_state.header_data = pd.DataFrame([data['header']])
-                
-                # Init Cin7 columns
                 st.session_state.header_data['Cin7_Supplier_ID'] = ""
                 st.session_state.header_data['Cin7_Supplier_Name'] = ""
                 
                 df_lines = pd.DataFrame(data['line_items'])
-                
                 df_lines = clean_product_names(df_lines)
                 if st.session_state.master_suppliers:
                     df_lines = normalize_supplier_names(df_lines, st.session_state.master_suppliers)
 
-                # Initialize columns so Matrix generation doesn't fail on first run
                 df_lines['Shopify_Status'] = "Pending"
                 cols = ["Supplier_Name", "Collaborator", "Product_Name", "ABV", "Format", "Pack_Size", "Volume", "Item_Price", "Quantity"]
                 existing = [c for c in cols if c in df_lines.columns]
@@ -877,8 +874,8 @@ if st.button("🚀 Process Invoice", type="primary"):
                 st.session_state.shopify_logs = []
                 st.session_state.untappd_logs = []
                 st.session_state.matrix_data = None
+                st.session_state.upload_data = None # Clear previous upload data
                 
-                # UPDATE KEYS TO FORCE REFRESH
                 st.session_state.line_items_key += 1
                 
                 status.update(label="Processing Complete!", state="complete", expanded=False)
@@ -907,8 +904,8 @@ if st.session_state.header_data is not None:
 
     all_matched = (unmatched_count == 0) and ('Shopify_Status' in df.columns)
 
-    # 2. TABS
-    tabs = ["📝 1. Line Items", "⚠️ 2. Resolve Missing", "🚀 3. Finalize PO"]
+    # 4 TABS NOW
+    tabs = ["📝 1. Line Items", "⚠️ 2. Resolve Missing", "☁️ 3. Product Upload", "🚀 4. Finalize PO"]
     current_tabs = st.tabs(tabs)
     
     # --- TAB 1: LINE ITEMS ---
@@ -938,11 +935,10 @@ if st.session_state.header_data is not None:
             "Matched_Variant": st.column_config.TextColumn("Variant Match", disabled=True),
         }
 
-        # USE CONTAINER WIDTH
         edited_lines = st.data_editor(
             display_df, 
             num_rows="dynamic", 
-            width='stretch', # Fixed width param
+            width='stretch',
             key=f"line_editor_{st.session_state.line_items_key}",
             column_config=column_config
         )
@@ -992,7 +988,7 @@ if st.session_state.header_data is not None:
                              updated_matrix, u_logs = batch_untappd_lookup(st.session_state.matrix_data)
                              st.session_state.matrix_data = updated_matrix
                              st.session_state.untappd_logs = u_logs
-                             st.session_state.matrix_key += 1 # Force Refresh
+                             st.session_state.matrix_key += 1
                              st.success("Search Complete!")
                              st.rerun()
                     else:
@@ -1005,8 +1001,6 @@ if st.session_state.header_data is not None:
             if st.session_state.matrix_data is not None and not st.session_state.matrix_data.empty:
                 
                 disp_matrix = st.session_state.matrix_data.copy()
-                
-                # Split logic based on Untappd Status
                 match_mask = disp_matrix['Untappd_Status'] == "✅ Found"
                 df_found = disp_matrix[match_mask]
                 df_missing = disp_matrix[~match_mask]
@@ -1021,7 +1015,7 @@ if st.session_state.header_data is not None:
                 df_found = df_found[valid_cols]
                 df_missing = df_missing[valid_cols]
 
-                # --- TABLE 1: MATCHED ITEMS ---
+                # TABLE 1: MATCHED
                 if not df_found.empty:
                     st.success("✅ Verified Untappd Matches")
                     col_conf_found = {
@@ -1032,8 +1026,7 @@ if st.session_state.header_data is not None:
                     edited_found = st.data_editor(
                         df_found,
                         num_rows="fixed",
-                        width='stretch', 
-                        # NO HEIGHT SET (Auto)
+                        width='stretch',
                         key=f"editor_found_{st.session_state.matrix_key}",
                         column_config=col_conf_found,
                         disabled=["Untappd_Status", "Label_Thumb"] 
@@ -1041,53 +1034,58 @@ if st.session_state.header_data is not None:
                 else:
                     edited_found = pd.DataFrame(columns=valid_cols)
 
-                # --- TABLE 2: UNMATCHED ITEMS (MANUAL ENTRY) ---
+                # TABLE 2: UNMATCHED
                 if not df_missing.empty:
                     st.warning("📝 Manual Entry (Pre-filled from Invoice)")
-                    
-                    # Fetch styles for dropdown
                     style_opts = get_beer_style_list()
-                    
                     col_conf_missing = {
                         "Label_Thumb": st.column_config.ImageColumn("Label", width="small"), 
                         "Untappd_Status": st.column_config.TextColumn("Status", disabled=True),
-                        # DROPDOWN CONFIG
-                        "Untappd_Style": st.column_config.SelectboxColumn(
-                            "Style",
-                            options=style_opts,
-                            width="medium",
-                            required=False
-                        ),
+                        "Untappd_Style": st.column_config.SelectboxColumn("Style", options=style_opts, width="medium", required=False),
                         "Untappd_Desc": st.column_config.TextColumn("Description", width="medium"),
                     }
                     edited_missing = st.data_editor(
                         df_missing,
                         num_rows="fixed",
-                        width='stretch', 
-                        # NO HEIGHT SET (Auto)
+                        width='stretch',
                         key=f"editor_missing_{st.session_state.matrix_key}",
                         column_config=col_conf_missing
                     )
                 else:
                     edited_missing = pd.DataFrame(columns=valid_cols)
 
-                # --- MERGE & SAVE BACK ---
-                # Check each df to ensure we only concat valid ones
+                # MERGE BACK
                 frames_to_concat = []
-                if not edited_found.empty:
-                    frames_to_concat.append(edited_found)
-                if not edited_missing.empty:
-                    frames_to_concat.append(edited_missing)
+                if not edited_found.empty: frames_to_concat.append(edited_found)
+                if not edited_missing.empty: frames_to_concat.append(edited_missing)
 
                 if frames_to_concat:
                     combined = pd.concat(frames_to_concat, ignore_index=True)
                     st.session_state.matrix_data = combined
-
+                
+                # --- NEW BUTTON FOR TAB 3 ---
+                if st.button("✨ Validate & Stage for Upload", type="primary"):
+                    staged_df, errors = stage_products_for_upload(st.session_state.matrix_data)
+                    if errors:
+                        for e in errors: st.error(e)
+                    else:
+                        st.session_state.upload_data = staged_df
+                        st.success("Products staged successfully! Go to Tab 3.")
+                        
                 st.download_button("📥 Download To-Do List", st.session_state.matrix_data.to_csv(index=False), "missing_products.csv")
 
-    # --- TAB 3: HEADER / EXPORT ---
+    # --- TAB 3: PRODUCT UPLOAD (NEW) ---
     with current_tabs[2]:
-        st.subheader("3. Finalize & Export")
+        st.subheader("3. Product Upload Stage")
+        if st.session_state.upload_data is not None and not st.session_state.upload_data.empty:
+            st.info("These products are ready for SKU generation and platform upload.")
+            st.dataframe(st.session_state.upload_data, width=2000) # Read-only view
+        else:
+            st.info("No data staged yet. Go to Tab 2 and click 'Validate & Stage'.")
+
+    # --- TAB 4: HEADER / EXPORT ---
+    with current_tabs[3]:
+        st.subheader("4. Finalize & Export")
         
         current_payee = "Unknown"
         if not st.session_state.header_data.empty:
@@ -1122,11 +1120,10 @@ if st.session_state.header_data is not None:
             if not st.session_state.header_data.empty:
                 st.caption(f"ID: {st.session_state.header_data.iloc[0].get('Cin7_Supplier_ID', 'N/A')}")
 
-        # USE CONTAINER WIDTH
         edited_header = st.data_editor(
             st.session_state.header_data, 
             num_rows="fixed", 
-            width='stretch' # Fixed width param
+            width='stretch'
         )
         st.download_button("📥 Download Header CSV", edited_header.to_csv(index=False), "header.csv")
         
