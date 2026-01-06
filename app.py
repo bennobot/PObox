@@ -190,7 +190,7 @@ def batch_untappd_lookup(matrix_df):
         
     return pd.DataFrame(updated_rows), logs
 
-# --- 1C. SHOPIFY & CIN7 & GSHEETS ---
+# --- 1C. SHOPIFY & CIN7 ---
 def get_cin7_headers():
     if "cin7" not in st.secrets: return None
     creds = st.secrets["cin7"]
@@ -628,6 +628,7 @@ def create_product_matrix(df):
         
     matrix_df = pd.DataFrame(matrix_rows)
     
+    # --- FIX: INITIALIZE UNTAPPD COLUMNS HERE ---
     u_cols = ['Untappd_Status', 'Untappd_ID', 'Untappd_Brewery', 'Untappd_Product', 
               'Untappd_ABV', 'Untappd_Style', 'Untappd_Desc', 'Label_Thumb', 'Brewery_Loc']
     for c in u_cols:
@@ -766,6 +767,7 @@ with st.sidebar:
         else: st.write("**Untappd:** ❌ Missing")
         if "connections" in st.secrets and "gsheets" in st.secrets["connections"]:
             st.write("**GSheets Auth:** ✅ Connected")
+            st.markdown("[🔗 Style Sheet](https://docs.google.com/spreadsheets/d/1Skd85vSu3e16z9iAVG8bZjhwqIWRnUxZXiVv1QbmPHA)")
         else: st.write("**GSheets Auth:** ❌ Missing")
 
     st.divider()
@@ -1144,7 +1146,8 @@ if st.session_state.header_data is not None:
                     # 2. Get 4-char Product Code
                     p_code = generate_sku_parts(prod_name)
                     
-                    return f"{s_code}-{p_code}"
+                    # NO HYPHEN
+                    return f"{s_code}{p_code}"
 
                 updated_upload_df['Family_SKU'] = updated_upload_df.apply(make_sku, axis=1)
                 
@@ -1157,7 +1160,8 @@ if st.session_state.header_data is not None:
                 st.success("SKUs Generated!")
                 st.rerun()
 
-            st.dataframe(st.session_state.upload_data, width=2000, height=600)
+            # --- NO HEIGHT SET ---
+            st.dataframe(st.session_state.upload_data, width=2000)
             
         else:
             st.info("No data staged yet. Go to Tab 2 and click 'Validate & Stage'.")
