@@ -191,7 +191,7 @@ def batch_untappd_lookup(matrix_df):
         
     return pd.DataFrame(updated_rows), logs
 
-# --- 1C. SHOPIFY & CIN7 & GSHEETS ---
+# --- 1C. SHOPIFY & CIN7 ---
 def get_cin7_headers():
     if "cin7" not in st.secrets: return None
     creds = st.secrets["cin7"]
@@ -381,13 +381,7 @@ def fetch_shopify_products_by_vendor(vendor):
     version = creds.get("api_version", "2024-04")
     endpoint = f"https://{shop_url}/admin/api/{version}/graphql.json"
     headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
-    
-    query = """query ($query: String!, $cursor: String) { products(first: 50, query: $query, after: $cursor) { pageInfo { hasNextPage endCursor } edges { node { id title status 
-    format_meta: metafield(namespace: "custom", key: "Format") { value } 
-    abv_meta: metafield(namespace: "custom", key: "ABV") { value } 
-    keg_meta: metafield(namespace: "custom", key: "keg_type") { value }
-    variants(first: 20) { edges { node { id title sku inventoryQuantity } } } } } } }"""
-    
+    query = """query ($query: String!, $cursor: String) { products(first: 50, query: $query, after: $cursor) { pageInfo { hasNextPage endCursor } edges { node { id title status format_meta: metafield(namespace: "custom", key: "Format") { value } abv_meta: metafield(namespace: "custom", key: "ABV") { value } variants(first: 20) { edges { node { id title sku inventoryQuantity } } } } } } }"""
     search_vendor = vendor.replace("'", "\\'") 
     variables = {"query": f"vendor:'{search_vendor}'"} 
     
@@ -607,27 +601,58 @@ def fetch_format_codes():
     except Exception: pass
     return {}
 
-# --- FETCH WEIGHT MAP ---
+# --- FETCH WEIGHT MAP (Includes Size Code) ---
 @st.cache_data(ttl=3600)
 def fetch_weight_map():
-    """Fetches dictionary {(Format, Volume): Weight} from Weight sheet."""
+    """Fetches dict of Weight AND dict of Size Codes."""
+    try:
+        conn = st.connection("gsheets", type=GSheetsConnection)
+        sheet_url = "https://docs.google.com/spreadsheets/d/1Skd85vSu3e16z9iAVG8bZjhwqIWRnUxZXiVv1QbmPHA"
+        
+        # Cols A=Format, B=Volume, D=Weight, E=SizeCode
+        df = conn.read(
+            spreadsheet=sheet_url,
+            worksheet="Weight",
+            usecols=[0, 1, 3, 4] 
+        )
+        if not df.empty:
+            df = df.dropna(how='all')
+            weight_dict = {}
+            size_code_dict = {}
+            
+            for _, row in df.iterrows():
+                key = (str(row.iloc[0]).strip().lower(), str(row.iloc[1]).strip().lower())
+                
+                # Weight (Col 3 -> Index 2 in partial df)
+                val_weight = float(row.iloc[2]) if pd.notna(row.iloc[2]) else 0.0
+                
+                # Size Code (Col 4 -> Index 3 in partial df)
+                val_code = str(row.iloc[3]).strip() if pd.notna(row.iloc[3]) else ""
+                
+                weight_dict[key] = val_weight
+                size_code_dict[key] = val_code
+                
+            return weight_dict, size_code_dict
+    except Exception: pass
+    return {}, {}
+
+# --- FETCH KEG CODES (Connector -> Code) ---
+@st.cache_data(ttl=3600)
+def fetch_keg_codes():
+    """Fetches dictionary {ConnectorName: Code} from Keg sheet."""
     try:
         conn = st.connection("gsheets", type=GSheetsConnection)
         sheet_url = "https://docs.google.com/spreadsheets/d/1Skd85vSu3e16z9iAVG8bZjhwqIWRnUxZXiVv1QbmPHA"
         
         df = conn.read(
             spreadsheet=sheet_url,
-            worksheet="Weight",
-            usecols=[0, 1, 3] 
+            worksheet="Keg",
+            usecols=[0, 1] 
         )
         if not df.empty:
             df = df.dropna()
-            weight_dict = {}
-            for _, row in df.iterrows():
-                key = (str(row.iloc[0]).strip().lower(), str(row.iloc[1]).strip().lower())
-                val = float(row.iloc[2]) if pd.notna(row.iloc[2]) else 0.0
-                weight_dict[key] = val
-            return weight_dict
+            # Key = Connector Name (Col A), Value = Code (Col B)
+            return dict(zip(df.iloc[:, 0].astype(str).str.lower(), df.iloc[:, 1].astype(str)))
     except Exception: pass
     return {}
 
@@ -755,6 +780,7 @@ def stage_products_for_upload(matrix_df):
                     'volume': row.get(f'Volume{i}', ''),
                     'item_price': row.get(f'Item_Price{i}', ''),
                     'Family_SKU': '',
+                    'Variant_SKU': '', # NEW
                     'Weight': 0.0,
                     'Keg_Connector': ''
                 }
@@ -945,7 +971,6 @@ if st.button("🚀 Process Invoice", type="primary"):
                 """
 
                 # --- GENERATION CALL (USING 2.5-flash) ---
-                # Retry logic for 503 errors
                 max_retries = 3
                 for attempt in range(max_retries):
                     try:
@@ -1054,7 +1079,6 @@ if st.session_state.header_data is not None:
             "Matched_Variant": st.column_config.TextColumn("Variant Match", disabled=True),
         }
 
-        # USE CONTAINER WIDTH
         edited_lines = st.data_editor(
             display_df, 
             num_rows="dynamic", 
@@ -1121,8 +1145,6 @@ if st.session_state.header_data is not None:
             if st.session_state.matrix_data is not None and not st.session_state.matrix_data.empty:
                 
                 disp_matrix = st.session_state.matrix_data.copy()
-                
-                # Split logic based on Untappd Status
                 match_mask = disp_matrix['Untappd_Status'] == "✅ Found"
                 df_found = disp_matrix[match_mask]
                 df_missing = disp_matrix[~match_mask]
@@ -1206,7 +1228,9 @@ if st.session_state.header_data is not None:
             if st.button("🛠️ Generate Upload Data"):
                 supplier_map = fetch_supplier_codes()
                 format_map = fetch_format_codes()
-                weight_map = fetch_weight_map() 
+                weight_map, size_code_map = fetch_weight_map() # Fetches TWO maps now
+                keg_map = fetch_keg_codes() # Fetch Keg Connector Codes
+                
                 today_str = datetime.now().strftime('%d%m%Y')
                 
                 processed_rows = []
@@ -1218,8 +1242,11 @@ if st.session_state.header_data is not None:
                     vol_name = str(row.get('volume', '')).strip()
                     pack_val = row.get('pack_size', '')
                     
-                    # 1. Base Weight
-                    unit_weight = weight_map.get((fmt_name.lower(), vol_name.lower()), 0.0)
+                    # 1. Base Weight & Size Code Lookup (Key = fmt+vol lower)
+                    lookup_key = (fmt_name.lower(), vol_name.lower())
+                    unit_weight = weight_map.get(lookup_key, 0.0)
+                    size_code = size_code_map.get(lookup_key, "00") # Default 00 if missing
+                    
                     try:
                         pack_mult = float(pack_val) if pack_val and str(pack_val).lower() != 'nan' else 1.0
                     except: pack_mult = 1.0
@@ -1242,14 +1269,24 @@ if st.session_state.header_data is not None:
                     # 3. Generate Rows (Loop handles split)
                     s_code = supplier_map.get(supp_name, "XXXX")
                     p_code = generate_sku_parts(prod_name)
-                    # Use lower for lookup
-                    f_code = format_map.get(fmt_name.lower(), "UN") 
+                    f_code = format_map.get(fmt_name.lower(), "UN")
 
                     for conn in connectors:
                         new_row = row.to_dict()
                         new_row['Family_SKU'] = f"{s_code}{p_code}-{today_str}-{idx}-{f_code}"
                         new_row['Weight'] = total_weight
                         new_row['Keg_Connector'] = conn
+                        
+                        # --- VARIANT SKU GENERATION ---
+                        # FamilySKU - SizeCode [- KegConnectorCode]
+                        variant_sku_base = f"{new_row['Family_SKU']}-{size_code}"
+                        
+                        if conn: # If it's a keg format
+                            conn_code = keg_map.get(conn.lower(), "XX") # Look up connector name
+                            new_row['Variant_SKU'] = f"{variant_sku_base}-{conn_code}"
+                        else:
+                            new_row['Variant_SKU'] = variant_sku_base
+                            
                         processed_rows.append(new_row)
 
                 # Create Final DF
@@ -1257,7 +1294,7 @@ if st.session_state.header_data is not None:
                 
                 # Reorder columns
                 cols = list(final_df.columns)
-                for key in ['Weight', 'Keg_Connector', 'Family_SKU']:
+                for key in ['Variant_SKU', 'Weight', 'Keg_Connector', 'Family_SKU']:
                     if key in cols:
                         cols.insert(0, cols.pop(cols.index(key)))
                 final_df = final_df[cols]
