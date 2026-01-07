@@ -780,7 +780,8 @@ def stage_products_for_upload(matrix_df):
                     'volume': row.get(f'Volume{i}', ''),
                     'item_price': row.get(f'Item_Price{i}', ''),
                     'Family_SKU': '',
-                    'Variant_SKU': '', # NEW
+                    'Variant_SKU': '', 
+                    'Family_Name': '',
                     'Weight': 0.0,
                     'Keg_Connector': ''
                 }
@@ -1145,6 +1146,8 @@ if st.session_state.header_data is not None:
             if st.session_state.matrix_data is not None and not st.session_state.matrix_data.empty:
                 
                 disp_matrix = st.session_state.matrix_data.copy()
+                
+                # Split logic based on Untappd Status
                 match_mask = disp_matrix['Untappd_Status'] == "✅ Found"
                 df_found = disp_matrix[match_mask]
                 df_missing = disp_matrix[~match_mask]
@@ -1185,7 +1188,13 @@ if st.session_state.header_data is not None:
                     col_conf_missing = {
                         "Label_Thumb": st.column_config.ImageColumn("Label", width="small"), 
                         "Untappd_Status": st.column_config.TextColumn("Status", disabled=True),
-                        "Untappd_Style": st.column_config.SelectboxColumn("Style", options=style_opts, width="medium", required=False),
+                        # DROPDOWN CONFIG
+                        "Untappd_Style": st.column_config.SelectboxColumn(
+                            "Style",
+                            options=style_opts,
+                            width="medium",
+                            required=False
+                        ),
                         "Untappd_Desc": st.column_config.TextColumn("Description", width="medium"),
                     }
                     edited_missing = st.data_editor(
@@ -1228,8 +1237,8 @@ if st.session_state.header_data is not None:
             if st.button("🛠️ Generate Upload Data"):
                 supplier_map = fetch_supplier_codes()
                 format_map = fetch_format_codes()
-                weight_map, size_code_map = fetch_weight_map() # Fetches TWO maps now
-                keg_map = fetch_keg_codes() # Fetch Keg Connector Codes
+                weight_map, size_code_map = fetch_weight_map() 
+                keg_map = fetch_keg_codes() 
                 
                 today_str = datetime.now().strftime('%d%m%Y')
                 
@@ -1241,25 +1250,26 @@ if st.session_state.header_data is not None:
                     fmt_name = str(row.get('format', '')).strip()
                     vol_name = str(row.get('volume', '')).strip()
                     pack_val = row.get('pack_size', '')
+                    abv_val = str(row.get('untappd_abv', '')).strip()
+                    style_val = row.get('untappd_style', '')
                     
-                    # 1. Base Weight & Size Code Lookup (Key = fmt+vol lower)
+                    # 1. Base Weight & Size Code Lookup
                     lookup_key = (fmt_name.lower(), vol_name.lower())
                     unit_weight = weight_map.get(lookup_key, 0.0)
-                    size_code = size_code_map.get(lookup_key, "00") # Default 00 if missing
+                    size_code = size_code_map.get(lookup_key, "00") 
                     
                     try:
                         pack_mult = float(pack_val) if pack_val and str(pack_val).lower() != 'nan' else 1.0
                     except: pack_mult = 1.0
                     total_weight = unit_weight * pack_mult
 
-                    # 2. Keg Connector Logic (Case Insensitive)
+                    # 2. Keg Connector Logic
                     connectors = [""]
                     fmt_lower = fmt_name.lower()
                     
                     if "dolium" in fmt_lower and "us" in fmt_lower:
                         connectors = ["US Sankey D-Type Coupler"]
                     elif "poly" in fmt_lower:
-                        # THE SPLIT: Creates 2 rows for PolyKeg
                         connectors = ["Sankey Coupler", "Keykeg Coupler"]
                     elif "key" in fmt_lower:
                         connectors = ["Keykeg Coupler"]
@@ -1274,15 +1284,19 @@ if st.session_state.header_data is not None:
                     for conn in connectors:
                         new_row = row.to_dict()
                         new_row['Family_SKU'] = f"{s_code}{p_code}-{today_str}-{idx}-{f_code}"
+                        
+                        # FAMILY NAME GENERATION
+                        # {Supplier} / {Product} / {ABV}% / {Format}
+                        new_row['Family_Name'] = f"{supp_name} / {prod_name} / {abv_val}% / {fmt_name}"
+
                         new_row['Weight'] = total_weight
                         new_row['Keg_Connector'] = conn
                         
-                        # --- VARIANT SKU GENERATION ---
-                        # FamilySKU - SizeCode [- KegConnectorCode]
+                        # VARIANT SKU GENERATION
                         variant_sku_base = f"{new_row['Family_SKU']}-{size_code}"
                         
-                        if conn: # If it's a keg format
-                            conn_code = keg_map.get(conn.lower(), "XX") # Look up connector name
+                        if conn: 
+                            conn_code = keg_map.get(conn.lower(), "XX")
                             new_row['Variant_SKU'] = f"{variant_sku_base}-{conn_code}"
                         else:
                             new_row['Variant_SKU'] = variant_sku_base
@@ -1294,13 +1308,15 @@ if st.session_state.header_data is not None:
                 
                 # Reorder columns
                 cols = list(final_df.columns)
-                for key in ['Variant_SKU', 'Weight', 'Keg_Connector', 'Family_SKU']:
+                # Ensure preferred order at start
+                priority_cols = ['Variant_SKU', 'Family_Name', 'Weight', 'Keg_Connector', 'Family_SKU']
+                for key in priority_cols:
                     if key in cols:
                         cols.insert(0, cols.pop(cols.index(key)))
                 final_df = final_df[cols]
                 
                 st.session_state.upload_data = final_df
-                st.success("Upload Data Generated (SKUs, Weights, Connectors)!")
+                st.success("Upload Data Generated (SKUs, Names, Weights, Connectors)!")
                 st.rerun()
 
             st.dataframe(st.session_state.upload_data, width=2000)
