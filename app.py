@@ -381,7 +381,14 @@ def fetch_shopify_products_by_vendor(vendor):
     version = creds.get("api_version", "2024-04")
     endpoint = f"https://{shop_url}/admin/api/{version}/graphql.json"
     headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
-    query = """query ($query: String!, $cursor: String) { products(first: 50, query: $query, after: $cursor) { pageInfo { hasNextPage endCursor } edges { node { id title status format_meta: metafield(namespace: "custom", key: "Format") { value } abv_meta: metafield(namespace: "custom", key: "ABV") { value } variants(first: 20) { edges { node { id title sku inventoryQuantity } } } } } } }"""
+    
+    # --- UPDATE: FETCH KEG_TYPE METAFIELD ---
+    query = """query ($query: String!, $cursor: String) { products(first: 50, query: $query, after: $cursor) { pageInfo { hasNextPage endCursor } edges { node { id title status 
+    format_meta: metafield(namespace: "custom", key: "Format") { value } 
+    abv_meta: metafield(namespace: "custom", key: "ABV") { value } 
+    keg_meta: metafield(namespace: "custom", key: "keg_type") { value }
+    variants(first: 20) { edges { node { id title sku inventoryQuantity } } } } } } }"""
+    
     search_vendor = vendor.replace("'", "\\'") 
     variables = {"query": f"vendor:'{search_vendor}'"} 
     
@@ -478,15 +485,37 @@ def run_reconciliation_check(lines_df):
             for score, prod, clean_name in scored_candidates:
                 if score < 75: continue 
                 
+                # --- NEW STRICT KEG LOGIC ---
                 shop_fmt_meta = prod.get('format_meta', {}).get('value', '') or ""
                 shop_title_lower = prod['title'].lower()
                 shop_format_str = f"{shop_fmt_meta} {shop_title_lower}".lower()
                 
+                # Get specific Keg Type Metafield
+                shop_keg_type_meta = prod.get('keg_meta', {}) or {}
+                shop_keg_val = str(shop_keg_type_meta.get('value', '')).lower()
+
                 is_compatible = True
-                if "steel" in inv_fmt:
-                    if "keykeg" in shop_format_str or "poly" in shop_format_str or "dolium" in shop_format_str: is_compatible = False
-                elif "keykeg" in inv_fmt:
-                    if "steel" in shop_format_str or "stainless" in shop_format_str: is_compatible = False
+                
+                # Invoice says Keg...
+                if "keg" in inv_fmt:
+                    is_poly_inv = "poly" in inv_fmt or "dolium" in inv_fmt or "pet" in inv_fmt
+                    is_key_inv = "keykeg" in inv_fmt
+                    is_steel_inv = "steel" in inv_fmt or "stainless" in inv_fmt
+                    
+                    is_poly_shop = "poly" in shop_keg_val or "dolium" in shop_keg_val
+                    is_key_shop = "keykeg" in shop_keg_val
+                    is_steel_shop = "steel" in shop_keg_val or "stainless" in shop_keg_val
+                    
+                    # Logic 1: Invoice says Poly, Shopify says Keykeg or Steel -> FAIL
+                    if is_poly_inv and (is_key_shop or is_steel_shop): is_compatible = False
+                    
+                    # Logic 2: Invoice says Keykeg, Shopify says Poly or Steel -> FAIL
+                    if is_key_inv and (is_poly_shop or is_steel_shop): is_compatible = False
+                    
+                    # Logic 3: Invoice says Steel, Shopify says Poly or Keykeg -> FAIL
+                    if is_steel_inv and (is_poly_shop or is_key_shop): is_compatible = False
+                
+                # Invoice says Cask... (Old Logic retained)
                 elif "cask" in inv_fmt or "firkin" in inv_fmt:
                     if "keg" in shop_format_str and "cask" not in shop_format_str: is_compatible = False
                 
@@ -615,6 +644,7 @@ def fetch_weight_map():
 
 @st.cache_data(ttl=3600)
 def get_beer_style_list():
+    """Fetches valid Beer Styles for dropdown validation from a specific sheet."""
     try:
         conn = st.connection("gsheets", type=GSheetsConnection)
         sheet_url = "https://docs.google.com/spreadsheets/d/1Skd85vSu3e16z9iAVG8bZjhwqIWRnUxZXiVv1QbmPHA"
@@ -671,6 +701,7 @@ def create_product_matrix(df):
         
     matrix_df = pd.DataFrame(matrix_rows)
     
+    # --- FIX: INITIALIZE UNTAPPD COLUMNS HERE ---
     u_cols = ['Untappd_Status', 'Untappd_ID', 'Untappd_Brewery', 'Untappd_Product', 
               'Untappd_ABV', 'Untappd_Style', 'Untappd_Desc', 'Label_Thumb', 'Brewery_Loc']
     for c in u_cols:
@@ -925,21 +956,11 @@ if st.button("🚀 Process Invoice", type="primary"):
                 {full_text}
                 """
 
-                # --- GENERATION CALL (WITH RETRY) ---
-                max_retries = 3
-                for attempt in range(max_retries):
-                    try:
-                        response = client.models.generate_content(
-                            model='gemini-2.5-flash', 
-                            contents=prompt
-                        )
-                        break # Success
-                    except Exception as e:
-                        if "503" in str(e) and attempt < max_retries - 1:
-                            time.sleep(2 ** (attempt + 1)) # Backoff 2s, 4s...
-                            continue
-                        else:
-                            raise e
+                # --- GENERATION CALL (USING 2.5-flash) ---
+                response = client.models.generate_content(
+                    model='gemini-2.5-flash', 
+                    contents=prompt
+                )
                 
                 st.write("4. Parsing Response...")
                 try:
@@ -1202,8 +1223,6 @@ if st.session_state.header_data is not None:
                     s_code = supplier_map.get(supp_name, "XXXX")
                     p_code = generate_sku_parts(prod_name)
                     f_code = format_map.get(fmt_name, "UN")
-                    
-                    # {Supplier}{Product}-{Date}-{LineNum}-{Format}
                     sku = f"{s_code}{p_code}-{today_str}-{idx}-{f_code}"
                     sku_list.append(sku)
                     
