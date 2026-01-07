@@ -191,7 +191,7 @@ def batch_untappd_lookup(matrix_df):
         
     return pd.DataFrame(updated_rows), logs
 
-# --- 1C. SHOPIFY & CIN7 ---
+# --- 1C. SHOPIFY & CIN7 & GSHEETS ---
 def get_cin7_headers():
     if "cin7" not in st.secrets: return None
     creds = st.secrets["cin7"]
@@ -381,7 +381,13 @@ def fetch_shopify_products_by_vendor(vendor):
     version = creds.get("api_version", "2024-04")
     endpoint = f"https://{shop_url}/admin/api/{version}/graphql.json"
     headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
-    query = """query ($query: String!, $cursor: String) { products(first: 50, query: $query, after: $cursor) { pageInfo { hasNextPage endCursor } edges { node { id title status format_meta: metafield(namespace: "custom", key: "Format") { value } abv_meta: metafield(namespace: "custom", key: "ABV") { value } variants(first: 20) { edges { node { id title sku inventoryQuantity } } } } } } }"""
+    
+    query = """query ($query: String!, $cursor: String) { products(first: 50, query: $query, after: $cursor) { pageInfo { hasNextPage endCursor } edges { node { id title status 
+    format_meta: metafield(namespace: "custom", key: "Format") { value } 
+    abv_meta: metafield(namespace: "custom", key: "ABV") { value } 
+    keg_meta: metafield(namespace: "custom", key: "keg_type") { value }
+    variants(first: 20) { edges { node { id title sku inventoryQuantity } } } } } } }"""
+    
     search_vendor = vendor.replace("'", "\\'") 
     variables = {"query": f"vendor:'{search_vendor}'"} 
     
@@ -482,11 +488,24 @@ def run_reconciliation_check(lines_df):
                 shop_title_lower = prod['title'].lower()
                 shop_format_str = f"{shop_fmt_meta} {shop_title_lower}".lower()
                 
+                shop_keg_type_meta = prod.get('keg_meta', {}) or {}
+                shop_keg_val = str(shop_keg_type_meta.get('value', '')).lower()
+
                 is_compatible = True
-                if "steel" in inv_fmt:
-                    if "keykeg" in shop_format_str or "poly" in shop_format_str or "dolium" in shop_format_str: is_compatible = False
-                elif "keykeg" in inv_fmt:
-                    if "steel" in shop_format_str or "stainless" in shop_format_str: is_compatible = False
+                
+                if "keg" in inv_fmt:
+                    is_poly_inv = "poly" in inv_fmt or "dolium" in inv_fmt or "pet" in inv_fmt
+                    is_key_inv = "keykeg" in inv_fmt
+                    is_steel_inv = "steel" in inv_fmt or "stainless" in inv_fmt
+                    
+                    is_poly_shop = "poly" in shop_keg_val or "dolium" in shop_keg_val
+                    is_key_shop = "keykeg" in shop_keg_val
+                    is_steel_shop = "steel" in shop_keg_val or "stainless" in shop_keg_val
+                    
+                    if is_poly_inv and (is_key_shop or is_steel_shop): is_compatible = False
+                    if is_key_inv and (is_poly_shop or is_steel_shop): is_compatible = False
+                    if is_steel_inv and (is_poly_shop or is_key_shop): is_compatible = False
+                
                 elif "cask" in inv_fmt or "firkin" in inv_fmt:
                     if "keg" in shop_format_str and "cask" not in shop_format_str: is_compatible = False
                 
@@ -571,7 +590,7 @@ def fetch_supplier_codes():
 # --- FETCH FORMAT CODES FOR SKU GEN ---
 @st.cache_data(ttl=3600)
 def fetch_format_codes():
-    """Fetches dictionary {FormatName: Code} from SKU sheet."""
+    """Fetches dictionary {FormatName: Code} from SKU sheet (Case Insensitive)."""
     try:
         conn = st.connection("gsheets", type=GSheetsConnection)
         sheet_url = "https://docs.google.com/spreadsheets/d/1Skd85vSu3e16z9iAVG8bZjhwqIWRnUxZXiVv1QbmPHA"
@@ -583,7 +602,8 @@ def fetch_format_codes():
         )
         if not df.empty:
             df = df.dropna()
-            return pd.Series(df.iloc[:, 1].values, index=df.iloc[:, 0]).to_dict()
+            # Convert keys to lowercase for matching
+            return dict(zip(df.iloc[:, 0].astype(str).str.lower(), df.iloc[:, 1].astype(str)))
     except Exception: pass
     return {}
 
@@ -595,7 +615,6 @@ def fetch_weight_map():
         conn = st.connection("gsheets", type=GSheetsConnection)
         sheet_url = "https://docs.google.com/spreadsheets/d/1Skd85vSu3e16z9iAVG8bZjhwqIWRnUxZXiVv1QbmPHA"
         
-        # Cols A=Format, B=Volume, D=Weight
         df = conn.read(
             spreadsheet=sheet_url,
             worksheet="Weight",
@@ -603,10 +622,9 @@ def fetch_weight_map():
         )
         if not df.empty:
             df = df.dropna()
-            # Construct dictionary with tuple key: (Format, Volume) -> Weight
             weight_dict = {}
             for _, row in df.iterrows():
-                key = (str(row.iloc[0]).strip(), str(row.iloc[1]).strip())
+                key = (str(row.iloc[0]).strip().lower(), str(row.iloc[1]).strip().lower())
                 val = float(row.iloc[2]) if pd.notna(row.iloc[2]) else 0.0
                 weight_dict[key] = val
             return weight_dict
@@ -615,7 +633,6 @@ def fetch_weight_map():
 
 @st.cache_data(ttl=3600)
 def get_beer_style_list():
-    """Fetches valid Beer Styles for dropdown validation from a specific sheet."""
     try:
         conn = st.connection("gsheets", type=GSheetsConnection)
         sheet_url = "https://docs.google.com/spreadsheets/d/1Skd85vSu3e16z9iAVG8bZjhwqIWRnUxZXiVv1QbmPHA"
@@ -672,7 +689,6 @@ def create_product_matrix(df):
         
     matrix_df = pd.DataFrame(matrix_rows)
     
-    # --- FIX: INITIALIZE UNTAPPD COLUMNS HERE ---
     u_cols = ['Untappd_Status', 'Untappd_ID', 'Untappd_Brewery', 'Untappd_Product', 
               'Untappd_ABV', 'Untappd_Style', 'Untappd_Desc', 'Label_Thumb', 'Brewery_Loc']
     for c in u_cols:
@@ -740,7 +756,7 @@ def stage_products_for_upload(matrix_df):
                     'item_price': row.get(f'Item_Price{i}', ''),
                     'Family_SKU': '',
                     'Weight': 0.0,
-                    'Keg_Connector': '' # Placeholder for logic below
+                    'Keg_Connector': ''
                 }
                 new_rows.append(new_row)
                 
@@ -929,10 +945,21 @@ if st.button("🚀 Process Invoice", type="primary"):
                 """
 
                 # --- GENERATION CALL (USING 2.5-flash) ---
-                response = client.models.generate_content(
-                    model='gemini-2.5-flash', 
-                    contents=prompt
-                )
+                # Retry logic for 503 errors
+                max_retries = 3
+                for attempt in range(max_retries):
+                    try:
+                        response = client.models.generate_content(
+                            model='gemini-2.5-flash', 
+                            contents=prompt
+                        )
+                        break # Success
+                    except Exception as e:
+                        if "503" in str(e) and attempt < max_retries - 1:
+                            time.sleep(2 ** (attempt + 1))
+                            continue
+                        else:
+                            raise e
                 
                 st.write("4. Parsing Response...")
                 try:
@@ -1027,6 +1054,7 @@ if st.session_state.header_data is not None:
             "Matched_Variant": st.column_config.TextColumn("Variant Match", disabled=True),
         }
 
+        # USE CONTAINER WIDTH
         edited_lines = st.data_editor(
             display_df, 
             num_rows="dynamic", 
@@ -1181,8 +1209,6 @@ if st.session_state.header_data is not None:
                 weight_map = fetch_weight_map() 
                 today_str = datetime.now().strftime('%d%m%Y')
                 
-                # BUILD NEW LIST INSTEAD OF MODIFYING DF IN-PLACE
-                # This supports the PolyKeg split (1 row -> 2 rows)
                 processed_rows = []
                 
                 for idx, row in st.session_state.upload_data.iterrows():
@@ -1193,13 +1219,13 @@ if st.session_state.header_data is not None:
                     pack_val = row.get('pack_size', '')
                     
                     # 1. Base Weight
-                    unit_weight = weight_map.get((fmt_name, vol_name), 0.0)
+                    unit_weight = weight_map.get((fmt_name.lower(), vol_name.lower()), 0.0)
                     try:
                         pack_mult = float(pack_val) if pack_val and str(pack_val).lower() != 'nan' else 1.0
                     except: pack_mult = 1.0
                     total_weight = unit_weight * pack_mult
 
-                    # 2. Keg Connector Logic
+                    # 2. Keg Connector Logic (Case Insensitive)
                     connectors = [""]
                     fmt_lower = fmt_name.lower()
                     
@@ -1216,7 +1242,8 @@ if st.session_state.header_data is not None:
                     # 3. Generate Rows (Loop handles split)
                     s_code = supplier_map.get(supp_name, "XXXX")
                     p_code = generate_sku_parts(prod_name)
-                    f_code = format_map.get(fmt_name, "UN")
+                    # Use lower for lookup
+                    f_code = format_map.get(fmt_name.lower(), "UN") 
 
                     for conn in connectors:
                         new_row = row.to_dict()
@@ -1228,9 +1255,8 @@ if st.session_state.header_data is not None:
                 # Create Final DF
                 final_df = pd.DataFrame(processed_rows)
                 
-                # Reorder columns: SKU first, then Connector, then Weight
+                # Reorder columns
                 cols = list(final_df.columns)
-                # Move keys to front
                 for key in ['Weight', 'Keg_Connector', 'Family_SKU']:
                     if key in cols:
                         cols.insert(0, cols.pop(cols.index(key)))
