@@ -714,6 +714,7 @@ def create_product_matrix(df):
         
     matrix_df = pd.DataFrame(matrix_rows)
     
+    # --- FIX: INITIALIZE UNTAPPD COLUMNS HERE ---
     u_cols = ['Untappd_Status', 'Untappd_ID', 'Untappd_Brewery', 'Untappd_Product', 
               'Untappd_ABV', 'Untappd_Style', 'Untappd_Desc', 'Label_Thumb', 'Brewery_Loc']
     for c in u_cols:
@@ -782,6 +783,7 @@ def stage_products_for_upload(matrix_df):
                     'Family_SKU': '',
                     'Variant_SKU': '', 
                     'Family_Name': '',
+                    'Variant_Name': '', # NEW
                     'Weight': 0.0,
                     'Keg_Connector': ''
                 }
@@ -1188,13 +1190,7 @@ if st.session_state.header_data is not None:
                     col_conf_missing = {
                         "Label_Thumb": st.column_config.ImageColumn("Label", width="small"), 
                         "Untappd_Status": st.column_config.TextColumn("Status", disabled=True),
-                        # DROPDOWN CONFIG
-                        "Untappd_Style": st.column_config.SelectboxColumn(
-                            "Style",
-                            options=style_opts,
-                            width="medium",
-                            required=False
-                        ),
+                        "Untappd_Style": st.column_config.SelectboxColumn("Style", options=style_opts, width="medium", required=False),
                         "Untappd_Desc": st.column_config.TextColumn("Description", width="medium"),
                     }
                     edited_missing = st.data_editor(
@@ -1251,7 +1247,6 @@ if st.session_state.header_data is not None:
                     vol_name = str(row.get('volume', '')).strip()
                     pack_val = row.get('pack_size', '')
                     abv_val = str(row.get('untappd_abv', '')).strip()
-                    style_val = row.get('untappd_style', '')
                     
                     # 1. Base Weight & Size Code Lookup
                     lookup_key = (fmt_name.lower(), vol_name.lower())
@@ -1263,7 +1258,7 @@ if st.session_state.header_data is not None:
                     except: pack_mult = 1.0
                     total_weight = unit_weight * pack_mult
 
-                    # 2. Keg Connector Logic
+                    # 2. Keg Connector Logic (Case Insensitive)
                     connectors = [""]
                     fmt_lower = fmt_name.lower()
                     
@@ -1285,21 +1280,23 @@ if st.session_state.header_data is not None:
                         new_row = row.to_dict()
                         new_row['Family_SKU'] = f"{s_code}{p_code}-{today_str}-{idx}-{f_code}"
                         
-                        # FAMILY NAME GENERATION
-                        # {Supplier} / {Product} / {ABV}% / {Format}
                         new_row['Family_Name'] = f"{supp_name} / {prod_name} / {abv_val}% / {fmt_name}"
 
                         new_row['Weight'] = total_weight
                         new_row['Keg_Connector'] = conn
                         
-                        # VARIANT SKU GENERATION
+                        # VARIANT SKU
                         variant_sku_base = f"{new_row['Family_SKU']}-{size_code}"
                         
                         if conn: 
                             conn_code = keg_map.get(conn.lower(), "XX")
                             new_row['Variant_SKU'] = f"{variant_sku_base}-{conn_code}"
+                            # VARIANT NAME (With Connector)
+                            new_row['Variant_Name'] = f"{vol_name} - {conn}"
                         else:
                             new_row['Variant_SKU'] = variant_sku_base
+                            # VARIANT NAME (Simple Volume)
+                            new_row['Variant_Name'] = f"{vol_name}"
                             
                         processed_rows.append(new_row)
 
@@ -1308,8 +1305,7 @@ if st.session_state.header_data is not None:
                 
                 # Reorder columns
                 cols = list(final_df.columns)
-                # Ensure preferred order at start
-                priority_cols = ['Variant_SKU', 'Family_Name', 'Weight', 'Keg_Connector', 'Family_SKU']
+                priority_cols = ['Variant_Name', 'Variant_SKU', 'Family_Name', 'Weight', 'Keg_Connector', 'Family_SKU']
                 for key in priority_cols:
                     if key in cols:
                         cols.insert(0, cols.pop(cols.index(key)))
