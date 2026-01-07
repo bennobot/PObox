@@ -191,7 +191,7 @@ def batch_untappd_lookup(matrix_df):
         
     return pd.DataFrame(updated_rows), logs
 
-# --- 1C. SHOPIFY & CIN7 & GSHEETS ---
+# --- 1C. SHOPIFY & CIN7 ---
 def get_cin7_headers():
     if "cin7" not in st.secrets: return None
     creds = st.secrets["cin7"]
@@ -381,14 +381,7 @@ def fetch_shopify_products_by_vendor(vendor):
     version = creds.get("api_version", "2024-04")
     endpoint = f"https://{shop_url}/admin/api/{version}/graphql.json"
     headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
-    
-    # --- UPDATE: FETCH KEG_TYPE METAFIELD ---
-    query = """query ($query: String!, $cursor: String) { products(first: 50, query: $query, after: $cursor) { pageInfo { hasNextPage endCursor } edges { node { id title status 
-    format_meta: metafield(namespace: "custom", key: "Format") { value } 
-    abv_meta: metafield(namespace: "custom", key: "ABV") { value } 
-    keg_meta: metafield(namespace: "custom", key: "keg_type") { value }
-    variants(first: 20) { edges { node { id title sku inventoryQuantity } } } } } } }"""
-    
+    query = """query ($query: String!, $cursor: String) { products(first: 50, query: $query, after: $cursor) { pageInfo { hasNextPage endCursor } edges { node { id title status format_meta: metafield(namespace: "custom", key: "Format") { value } abv_meta: metafield(namespace: "custom", key: "ABV") { value } variants(first: 20) { edges { node { id title sku inventoryQuantity } } } } } } }"""
     search_vendor = vendor.replace("'", "\\'") 
     variables = {"query": f"vendor:'{search_vendor}'"} 
     
@@ -485,37 +478,15 @@ def run_reconciliation_check(lines_df):
             for score, prod, clean_name in scored_candidates:
                 if score < 75: continue 
                 
-                # --- NEW STRICT KEG LOGIC ---
                 shop_fmt_meta = prod.get('format_meta', {}).get('value', '') or ""
                 shop_title_lower = prod['title'].lower()
                 shop_format_str = f"{shop_fmt_meta} {shop_title_lower}".lower()
                 
-                # Get specific Keg Type Metafield
-                shop_keg_type_meta = prod.get('keg_meta', {}) or {}
-                shop_keg_val = str(shop_keg_type_meta.get('value', '')).lower()
-
                 is_compatible = True
-                
-                # Invoice says Keg...
-                if "keg" in inv_fmt:
-                    is_poly_inv = "poly" in inv_fmt or "dolium" in inv_fmt or "pet" in inv_fmt
-                    is_key_inv = "keykeg" in inv_fmt
-                    is_steel_inv = "steel" in inv_fmt or "stainless" in inv_fmt
-                    
-                    is_poly_shop = "poly" in shop_keg_val or "dolium" in shop_keg_val
-                    is_key_shop = "keykeg" in shop_keg_val
-                    is_steel_shop = "steel" in shop_keg_val or "stainless" in shop_keg_val
-                    
-                    # Logic 1: Invoice says Poly, Shopify says Keykeg or Steel -> FAIL
-                    if is_poly_inv and (is_key_shop or is_steel_shop): is_compatible = False
-                    
-                    # Logic 2: Invoice says Keykeg, Shopify says Poly or Steel -> FAIL
-                    if is_key_inv and (is_poly_shop or is_steel_shop): is_compatible = False
-                    
-                    # Logic 3: Invoice says Steel, Shopify says Poly or Keykeg -> FAIL
-                    if is_steel_inv and (is_poly_shop or is_key_shop): is_compatible = False
-                
-                # Invoice says Cask... (Old Logic retained)
+                if "steel" in inv_fmt:
+                    if "keykeg" in shop_format_str or "poly" in shop_format_str or "dolium" in shop_format_str: is_compatible = False
+                elif "keykeg" in inv_fmt:
+                    if "steel" in shop_format_str or "stainless" in shop_format_str: is_compatible = False
                 elif "cask" in inv_fmt or "firkin" in inv_fmt:
                     if "keg" in shop_format_str and "cask" not in shop_format_str: is_compatible = False
                 
@@ -768,7 +739,8 @@ def stage_products_for_upload(matrix_df):
                     'volume': row.get(f'Volume{i}', ''),
                     'item_price': row.get(f'Item_Price{i}', ''),
                     'Family_SKU': '',
-                    'Weight': 0.0 # Placeholder
+                    'Weight': 0.0,
+                    'Keg_Connector': '' # Placeholder for logic below
                 }
                 new_rows.append(new_row)
                 
@@ -1121,6 +1093,8 @@ if st.session_state.header_data is not None:
             if st.session_state.matrix_data is not None and not st.session_state.matrix_data.empty:
                 
                 disp_matrix = st.session_state.matrix_data.copy()
+                
+                # Split logic based on Untappd Status
                 match_mask = disp_matrix['Untappd_Status'] == "✅ Found"
                 df_found = disp_matrix[match_mask]
                 df_missing = disp_matrix[~match_mask]
@@ -1204,52 +1178,66 @@ if st.session_state.header_data is not None:
             if st.button("🛠️ Generate Upload Data"):
                 supplier_map = fetch_supplier_codes()
                 format_map = fetch_format_codes()
-                weight_map = fetch_weight_map() # Fetch Weight Data
+                weight_map = fetch_weight_map() 
                 today_str = datetime.now().strftime('%d%m%Y')
                 
-                updated_upload_df = st.session_state.upload_data.copy()
+                # BUILD NEW LIST INSTEAD OF MODIFYING DF IN-PLACE
+                # This supports the PolyKeg split (1 row -> 2 rows)
+                processed_rows = []
                 
-                sku_list = []
-                weight_list = []
-                
-                for idx, row in updated_upload_df.iterrows():
+                for idx, row in st.session_state.upload_data.iterrows():
                     supp_name = row.get('untappd_brewery', '')
                     prod_name = row.get('untappd_product', '')
                     fmt_name = str(row.get('format', '')).strip()
                     vol_name = str(row.get('volume', '')).strip()
                     pack_val = row.get('pack_size', '')
                     
-                    # 1. SKU Generation
+                    # 1. Base Weight
+                    unit_weight = weight_map.get((fmt_name, vol_name), 0.0)
+                    try:
+                        pack_mult = float(pack_val) if pack_val and str(pack_val).lower() != 'nan' else 1.0
+                    except: pack_mult = 1.0
+                    total_weight = unit_weight * pack_mult
+
+                    # 2. Keg Connector Logic
+                    connectors = [""]
+                    fmt_lower = fmt_name.lower()
+                    
+                    if "dolium" in fmt_lower and "us" in fmt_lower:
+                        connectors = ["US Sankey D-Type Coupler"]
+                    elif "poly" in fmt_lower:
+                        # THE SPLIT: Creates 2 rows for PolyKeg
+                        connectors = ["Sankey Coupler", "Keykeg Coupler"]
+                    elif "key" in fmt_lower:
+                        connectors = ["Keykeg Coupler"]
+                    elif "steel" in fmt_lower:
+                        connectors = ["Sankey Coupler"]
+                        
+                    # 3. Generate Rows (Loop handles split)
                     s_code = supplier_map.get(supp_name, "XXXX")
                     p_code = generate_sku_parts(prod_name)
                     f_code = format_map.get(fmt_name, "UN")
-                    sku = f"{s_code}{p_code}-{today_str}-{idx}-{f_code}"
-                    sku_list.append(sku)
-                    
-                    # 2. Weight Calculation
-                    # Ensure lookup matches sheet format (strings)
-                    unit_weight = weight_map.get((fmt_name, vol_name), 0.0)
-                    
-                    # Handle pack size safely
-                    try:
-                        pack_mult = float(pack_val) if pack_val and str(pack_val).lower() != 'nan' else 1.0
-                    except:
-                        pack_mult = 1.0
-                        
-                    total_weight = unit_weight * pack_mult
-                    weight_list.append(total_weight)
 
-                updated_upload_df['Family_SKU'] = sku_list
-                updated_upload_df['Weight'] = weight_list
+                    for conn in connectors:
+                        new_row = row.to_dict()
+                        new_row['Family_SKU'] = f"{s_code}{p_code}-{today_str}-{idx}-{f_code}"
+                        new_row['Weight'] = total_weight
+                        new_row['Keg_Connector'] = conn
+                        processed_rows.append(new_row)
+
+                # Create Final DF
+                final_df = pd.DataFrame(processed_rows)
                 
-                # Reorder columns: SKU first
-                cols = list(updated_upload_df.columns)
-                if 'Family_SKU' in cols:
-                    cols.insert(0, cols.pop(cols.index('Family_SKU')))
-                updated_upload_df = updated_upload_df[cols]
+                # Reorder columns: SKU first, then Connector, then Weight
+                cols = list(final_df.columns)
+                # Move keys to front
+                for key in ['Weight', 'Keg_Connector', 'Family_SKU']:
+                    if key in cols:
+                        cols.insert(0, cols.pop(cols.index(key)))
+                final_df = final_df[cols]
                 
-                st.session_state.upload_data = updated_upload_df
-                st.success("Upload Data Generated (SKUs & Weights)!")
+                st.session_state.upload_data = final_df
+                st.success("Upload Data Generated (SKUs, Weights, Connectors)!")
                 st.rerun()
 
             st.dataframe(st.session_state.upload_data, width=2000)
