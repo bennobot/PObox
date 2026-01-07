@@ -552,6 +552,7 @@ def get_master_supplier_list():
 # --- FETCH SUPPLIER CODES (4-CHAR) FOR SKU GEN ---
 @st.cache_data(ttl=3600)
 def fetch_supplier_codes():
+    """Fetches dictionary {SupplierName: 4CharCode} from MasterData sheet."""
     try:
         conn = st.connection("gsheets", type=GSheetsConnection)
         sheet_url = "https://docs.google.com/spreadsheets/d/1Skd85vSu3e16z9iAVG8bZjhwqIWRnUxZXiVv1QbmPHA"
@@ -570,6 +571,7 @@ def fetch_supplier_codes():
 # --- FETCH FORMAT CODES FOR SKU GEN ---
 @st.cache_data(ttl=3600)
 def fetch_format_codes():
+    """Fetches dictionary {FormatName: Code} from SKU sheet."""
     try:
         conn = st.connection("gsheets", type=GSheetsConnection)
         sheet_url = "https://docs.google.com/spreadsheets/d/1Skd85vSu3e16z9iAVG8bZjhwqIWRnUxZXiVv1QbmPHA"
@@ -585,7 +587,7 @@ def fetch_format_codes():
     except Exception: pass
     return {}
 
-# --- NEW: FETCH WEIGHT MAP ---
+# --- FETCH WEIGHT MAP ---
 @st.cache_data(ttl=3600)
 def fetch_weight_map():
     """Fetches dictionary {(Format, Volume): Weight} from Weight sheet."""
@@ -805,6 +807,7 @@ with st.sidebar:
         else: st.write("**Untappd:** ❌ Missing")
         if "connections" in st.secrets and "gsheets" in st.secrets["connections"]:
             st.write("**GSheets Auth:** ✅ Connected")
+            st.markdown("[🔗 Style Sheet](https://docs.google.com/spreadsheets/d/1Skd85vSu3e16z9iAVG8bZjhwqIWRnUxZXiVv1QbmPHA)")
         else: st.write("**GSheets Auth:** ❌ Missing")
 
     st.divider()
@@ -922,11 +925,21 @@ if st.button("🚀 Process Invoice", type="primary"):
                 {full_text}
                 """
 
-                # --- GENERATION CALL (USING 2.5-flash) ---
-                response = client.models.generate_content(
-                    model='gemini-2.5-flash', 
-                    contents=prompt
-                )
+                # --- GENERATION CALL (WITH RETRY) ---
+                max_retries = 3
+                for attempt in range(max_retries):
+                    try:
+                        response = client.models.generate_content(
+                            model='gemini-2.5-flash', 
+                            contents=prompt
+                        )
+                        break # Success
+                    except Exception as e:
+                        if "503" in str(e) and attempt < max_retries - 1:
+                            time.sleep(2 ** (attempt + 1)) # Backoff 2s, 4s...
+                            continue
+                        else:
+                            raise e
                 
                 st.write("4. Parsing Response...")
                 try:
@@ -1021,7 +1034,6 @@ if st.session_state.header_data is not None:
             "Matched_Variant": st.column_config.TextColumn("Variant Match", disabled=True),
         }
 
-        # USE CONTAINER WIDTH
         edited_lines = st.data_editor(
             display_df, 
             num_rows="dynamic", 
@@ -1088,8 +1100,6 @@ if st.session_state.header_data is not None:
             if st.session_state.matrix_data is not None and not st.session_state.matrix_data.empty:
                 
                 disp_matrix = st.session_state.matrix_data.copy()
-                
-                # Split logic based on Untappd Status
                 match_mask = disp_matrix['Untappd_Status'] == "✅ Found"
                 df_found = disp_matrix[match_mask]
                 df_missing = disp_matrix[~match_mask]
@@ -1192,6 +1202,8 @@ if st.session_state.header_data is not None:
                     s_code = supplier_map.get(supp_name, "XXXX")
                     p_code = generate_sku_parts(prod_name)
                     f_code = format_map.get(fmt_name, "UN")
+                    
+                    # {Supplier}{Product}-{Date}-{LineNum}-{Format}
                     sku = f"{s_code}{p_code}-{today_str}-{idx}-{f_code}"
                     sku_list.append(sku)
                     
