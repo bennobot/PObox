@@ -126,12 +126,6 @@ VALID FORMATS LIST:
 # ==========================================
 SUPPLIER_RULEBOOK = {
 
-   "Pig Iron Brewery limited": """
-   For Pig Iron Brewery limited the Supplier_Name is Fownd Brewing Company and the Payable_To is Pig Iron Brewery limited
-   All products are 9 gallon Cask
-   If the product is called Oort return Oort Cloud Mariner
-
-   
    "Thornbridge Brewery": """
    when the product name includes ekeg it is a steel keg, when it includes keg it is a Keykeg
 
@@ -238,4 +232,5 @@ SUPPLIER_RULEBOOK = {
    - Payable To: "German Drinks Company Limited".
    """
 }
+
 
