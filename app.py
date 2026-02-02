@@ -294,6 +294,28 @@ def get_cin7_supplier(name):
     if "&" in name: return get_cin7_supplier(name.replace("&", "and"))
     return None
 
+# --- NEW: CHECK FAMILY EXISTENCE ---
+def check_cin7_family_exists(family_name):
+    """Checks if a Product Family exists in Cin7 by Name."""
+    headers = get_cin7_headers()
+    if not headers: return False
+    
+    # URL Encode the family name (handles /, %, etc)
+    safe_name = quote(family_name)
+    url = f"{get_cin7_base_url()}/productFamily?Name={safe_name}"
+    
+    try:
+        response = requests.get(url, headers=headers)
+        if response.status_code == 200:
+            data = response.json()
+            families = data.get("ProductFamilies", [])
+            # Exact match check
+            for f in families:
+                if f["Name"].lower() == family_name.lower():
+                    return True
+    except Exception: pass
+    return False
+
 def create_cin7_purchase_order(header_df, lines_df, location_choice):
     headers = get_cin7_headers()
     if not headers: return False, "Cin7 Secrets missing.", []
@@ -1229,12 +1251,37 @@ if st.session_state.header_data is not None:
         
         if st.session_state.upload_data is not None and not st.session_state.upload_data.empty:
             
-            # --- GENERATE UPLOAD DATA BUTTON (RENAMED) ---
+            # --- CHECK FAMILY BUTTON ---
+            if st.button("🔍 Check Family Existence (L- & G-)"):
+                if "cin7" in st.secrets:
+                    unique_families = st.session_state.upload_data['Family_Name'].unique()
+                    results = []
+                    prog_bar = st.progress(0)
+                    for i, fam in enumerate(unique_families):
+                        prog_bar.progress((i + 1) / len(unique_families))
+                        
+                        l_name = f"L-{fam}"
+                        g_name = f"G-{fam}"
+                        
+                        l_exists = check_cin7_family_exists(l_name)
+                        g_exists = check_cin7_family_exists(g_name)
+                        
+                        results.append({
+                            "Family Name": fam,
+                            "L- Version": "✅ Exists" if l_exists else "❌ Missing",
+                            "G- Version": "✅ Exists" if g_exists else "❌ Missing"
+                        })
+                    
+                    st.dataframe(pd.DataFrame(results), width=1000)
+                else:
+                    st.error("Cin7 Secrets Missing")
+            
+            # --- GENERATE UPLOAD DATA BUTTON ---
             if st.button("🛠️ Generate Upload Data"):
                 supplier_map = fetch_supplier_codes()
                 format_map = fetch_format_codes()
                 weight_map, size_code_map = fetch_weight_map() 
-                keg_map = fetch_keg_codes() 
+                keg_map = fetch_keg_codes() # Fetch Keg Connector Codes
                 
                 today_str = datetime.now().strftime('%d%m%Y')
                 
@@ -1258,7 +1305,7 @@ if st.session_state.header_data is not None:
                     except: pack_mult = 1.0
                     total_weight = unit_weight * pack_mult
 
-                    # 2. Keg Connector Logic (Case Insensitive)
+                    # 2. Keg Connector Logic
                     connectors = [""]
                     fmt_lower = fmt_name.lower()
                     
@@ -1271,7 +1318,7 @@ if st.session_state.header_data is not None:
                     elif "steel" in fmt_lower:
                         connectors = ["Sankey Coupler"]
                         
-                    # 3. Generate Rows (Loop handles split)
+                    # 3. Generate Rows
                     s_code = supplier_map.get(supp_name, "XXXX")
                     p_code = generate_sku_parts(prod_name)
                     f_code = format_map.get(fmt_name.lower(), "UN")
@@ -1279,23 +1326,19 @@ if st.session_state.header_data is not None:
                     for conn in connectors:
                         new_row = row.to_dict()
                         new_row['Family_SKU'] = f"{s_code}{p_code}-{today_str}-{idx}-{f_code}"
-                        
                         new_row['Family_Name'] = f"{supp_name} / {prod_name} / {abv_val}% / {fmt_name}"
-
                         new_row['Weight'] = total_weight
                         new_row['Keg_Connector'] = conn
                         
-                        # VARIANT SKU
+                        # --- VARIANT SKU GENERATION ---
                         variant_sku_base = f"{new_row['Family_SKU']}-{size_code}"
                         
                         if conn: 
                             conn_code = keg_map.get(conn.lower(), "XX")
                             new_row['Variant_SKU'] = f"{variant_sku_base}-{conn_code}"
-                            # VARIANT NAME (With Connector)
                             new_row['Variant_Name'] = f"{vol_name} - {conn}"
                         else:
                             new_row['Variant_SKU'] = variant_sku_base
-                            # VARIANT NAME (Simple Volume)
                             new_row['Variant_Name'] = f"{vol_name}"
                             
                         processed_rows.append(new_row)
