@@ -1514,18 +1514,22 @@ if st.session_state.header_data is not None:
                             new_row['Variant_Name'] = var_name_base
                         
                         # --- VARIANT SKU GENERATION ---
-                        sku_suffix = f"-{size_code}"
+                        # Start with family SKU base
+                        variant_sku_final = new_row['Family_SKU']
                         
                         if is_multipack:
-                             sku_suffix += f"-{pack_int}X"
+                             # Format: FAMILY-SKU-12X44CL
+                             variant_sku_final += f"-{pack_int}X{size_code}"
+                        else:
+                             # Format: FAMILY-SKU-44CL (or Keg Code)
+                             variant_sku_final += f"-{size_code}"
                              
+                        # If Keg, append Connector Code (only if not multipack logic, though multipack kegs are rare)
                         if conn:
                             conn_code = keg_map.get(conn.lower(), "XX")
-                            sku_suffix += f"-{conn_code}"
+                            variant_sku_final += f"-{conn_code}"
                             
-                        new_row['Variant_SKU'] = f"{new_row['Family_SKU']}{sku_suffix}"
-                            
-                        processed_rows.append(new_row)
+                        new_row['Variant_SKU'] = variant_sku_final
 
                 # Create Final DF
                 final_df = pd.DataFrame(processed_rows)
@@ -1622,3 +1626,4 @@ if st.session_state.header_data is not None:
                             for log in logs: st.write(log)
             else:
                 st.error("Cin7 Secrets missing.")
+
