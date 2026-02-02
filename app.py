@@ -411,11 +411,11 @@ def create_cin7_variant(row_data, family_id, family_base_sku, family_base_name, 
         "InternalNote": internal_note,
         "Description": row_data['description'],
         "AdditionalAttribute1": fmt,
-        "AdditionalAttribute2": style, # e.g. Stout
-        "AdditionalAttribute3": fmt,   # Cask/Keg
+        "AdditionalAttribute2": style, 
+        "AdditionalAttribute3": fmt,
         "AdditionalAttribute4": "Beer",
-        "AdditionalAttribute6": var_sku_raw, # Strip prefix for searching
-        "AdditionalAttribute7": var_name_raw, # e.g. 9 Gallon
+        "AdditionalAttribute6": var_sku_raw, 
+        "AdditionalAttribute7": var_name_raw, 
         "AdditionalAttribute9": style,
         "AdditionalAttribute10": abv,
         "AttributeSet": "Products",
@@ -468,6 +468,7 @@ def sync_product_to_cin7(upload_df):
                 log.append(f"   ❌ Skipping variants for {fam_sku} due to family error.")
                 
     return log
+
 
 def create_cin7_purchase_order(header_df, lines_df, location_choice):
     headers = get_cin7_headers()
@@ -657,11 +658,24 @@ def run_reconciliation_check(lines_df):
                 shop_title_lower = prod['title'].lower()
                 shop_format_str = f"{shop_fmt_meta} {shop_title_lower}".lower()
                 
+                shop_keg_type_meta = prod.get('keg_meta', {}) or {}
+                shop_keg_val = str(shop_keg_type_meta.get('value', '')).lower()
+
                 is_compatible = True
-                if "steel" in inv_fmt:
-                    if "keykeg" in shop_format_str or "poly" in shop_format_str or "dolium" in shop_format_str: is_compatible = False
-                elif "keykeg" in inv_fmt:
-                    if "steel" in shop_format_str or "stainless" in shop_format_str: is_compatible = False
+                
+                if "keg" in inv_fmt:
+                    is_poly_inv = "poly" in inv_fmt or "dolium" in inv_fmt or "pet" in inv_fmt
+                    is_key_inv = "keykeg" in inv_fmt
+                    is_steel_inv = "steel" in inv_fmt or "stainless" in inv_fmt
+                    
+                    is_poly_shop = "poly" in shop_keg_val or "dolium" in shop_keg_val
+                    is_key_shop = "keykeg" in shop_keg_val
+                    is_steel_shop = "steel" in shop_keg_val or "stainless" in shop_keg_val
+                    
+                    if is_poly_inv and (is_key_shop or is_steel_shop): is_compatible = False
+                    if is_key_inv and (is_poly_shop or is_steel_shop): is_compatible = False
+                    if is_steel_inv and (is_poly_shop or is_key_shop): is_compatible = False
+                
                 elif "cask" in inv_fmt or "firkin" in inv_fmt:
                     if "keg" in shop_format_str and "cask" not in shop_format_str: is_compatible = False
                 
@@ -1418,7 +1432,6 @@ if st.session_state.header_data is not None:
                     unique_rows = st.session_state.upload_data.copy()
                     log_box = st.expander("Sync Log", expanded=True)
                     
-                    # Log collector
                     full_log = sync_product_to_cin7(unique_rows)
                     
                     for line in full_log:
@@ -1428,7 +1441,7 @@ if st.session_state.header_data is not None:
                 else:
                     st.error("Cin7 Secrets Missing")
 
-           # --- GENERATE UPLOAD DATA BUTTON (RENAMED) ---
+            # --- GENERATE UPLOAD DATA BUTTON (RENAMED) ---
             if st.button("🛠️ Generate Upload Data"):
                 supplier_map = fetch_supplier_codes()
                 format_map = fetch_format_codes()
@@ -1491,28 +1504,21 @@ if st.session_state.header_data is not None:
                         new_row['Keg_Connector'] = conn
                         
                         # --- VARIANT NAME GENERATION ---
-                        # Base: Volume (e.g. 440ml)
                         var_name_base = vol_name
-                        
-                        # If multipack, prefix with Pack Size (e.g. 12 x 440ml)
                         if is_multipack:
                             var_name_base = f"{pack_int} x {vol_name}"
                         
-                        # Append Connector if exists
                         if conn:
                             new_row['Variant_Name'] = f"{var_name_base} - {conn}"
                         else:
                             new_row['Variant_Name'] = var_name_base
                         
                         # --- VARIANT SKU GENERATION ---
-                        # FamilySKU - SizeCode
                         sku_suffix = f"-{size_code}"
                         
-                        # If multipack, append pack count to SKU (e.g. -12X)
                         if is_multipack:
                              sku_suffix += f"-{pack_int}X"
                              
-                        # If Keg, append Connector Code
                         if conn:
                             conn_code = keg_map.get(conn.lower(), "XX")
                             sku_suffix += f"-{conn_code}"
@@ -1535,6 +1541,11 @@ if st.session_state.header_data is not None:
                 st.session_state.upload_data = final_df
                 st.success("Upload Data Generated (SKUs, Names, Weights, Connectors)!")
                 st.rerun()
+
+            st.dataframe(st.session_state.upload_data, width=2000)
+            
+        else:
+            st.info("No data staged yet. Go to Tab 2 and click 'Validate & Stage'.")
 
     # --- TAB 4: HEADER / EXPORT ---
     with current_tabs[3]:
@@ -1611,4 +1622,3 @@ if st.session_state.header_data is not None:
                             for log in logs: st.write(log)
             else:
                 st.error("Cin7 Secrets missing.")
-
