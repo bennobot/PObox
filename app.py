@@ -1428,7 +1428,7 @@ if st.session_state.header_data is not None:
                 else:
                     st.error("Cin7 Secrets Missing")
 
-            # --- GENERATE UPLOAD DATA BUTTON (RENAMED) ---
+           # --- GENERATE UPLOAD DATA BUTTON (RENAMED) ---
             if st.button("🛠️ Generate Upload Data"):
                 supplier_map = fetch_supplier_codes()
                 format_map = fetch_format_codes()
@@ -1455,6 +1455,11 @@ if st.session_state.header_data is not None:
                     try:
                         pack_mult = float(pack_val) if pack_val and str(pack_val).lower() != 'nan' else 1.0
                     except: pack_mult = 1.0
+                    
+                    # Is it a multipack?
+                    is_multipack = pack_mult > 1.0
+                    pack_int = int(pack_mult)
+                    
                     total_weight = unit_weight * pack_mult
 
                     # 2. Keg Connector Logic
@@ -1471,7 +1476,7 @@ if st.session_state.header_data is not None:
                     elif "steel" in fmt_lower:
                         connectors = ["Sankey Coupler"]
                         
-                    # 3. Generate Rows
+                    # 3. Generate Rows (Loop handles split)
                     s_code = supplier_map.get(supp_name, "XXXX")
                     p_code = generate_sku_parts(prod_name)
                     f_code = format_map.get(fmt_name.lower(), "UN")
@@ -1479,20 +1484,40 @@ if st.session_state.header_data is not None:
                     for conn in connectors:
                         new_row = row.to_dict()
                         new_row['Family_SKU'] = f"{s_code}{p_code}-{today_str}-{idx}-{f_code}"
+                        
                         new_row['Family_Name'] = f"{supp_name} / {prod_name} / {abv_val}% / {fmt_name}"
+
                         new_row['Weight'] = total_weight
                         new_row['Keg_Connector'] = conn
                         
-                        # --- VARIANT SKU GENERATION ---
-                        variant_sku_base = f"{new_row['Family_SKU']}-{size_code}"
+                        # --- VARIANT NAME GENERATION ---
+                        # Base: Volume (e.g. 440ml)
+                        var_name_base = vol_name
                         
-                        if conn: 
-                            conn_code = keg_map.get(conn.lower(), "XX")
-                            new_row['Variant_SKU'] = f"{variant_sku_base}-{conn_code}"
-                            new_row['Variant_Name'] = f"{vol_name} - {conn}"
+                        # If multipack, prefix with Pack Size (e.g. 12 x 440ml)
+                        if is_multipack:
+                            var_name_base = f"{pack_int} x {vol_name}"
+                        
+                        # Append Connector if exists
+                        if conn:
+                            new_row['Variant_Name'] = f"{var_name_base} - {conn}"
                         else:
-                            new_row['Variant_SKU'] = variant_sku_base
-                            new_row['Variant_Name'] = f"{vol_name}"
+                            new_row['Variant_Name'] = var_name_base
+                        
+                        # --- VARIANT SKU GENERATION ---
+                        # FamilySKU - SizeCode
+                        sku_suffix = f"-{size_code}"
+                        
+                        # If multipack, append pack count to SKU (e.g. -12X)
+                        if is_multipack:
+                             sku_suffix += f"-{pack_int}X"
+                             
+                        # If Keg, append Connector Code
+                        if conn:
+                            conn_code = keg_map.get(conn.lower(), "XX")
+                            sku_suffix += f"-{conn_code}"
+                            
+                        new_row['Variant_SKU'] = f"{new_row['Family_SKU']}{sku_suffix}"
                             
                         processed_rows.append(new_row)
 
@@ -1510,11 +1535,6 @@ if st.session_state.header_data is not None:
                 st.session_state.upload_data = final_df
                 st.success("Upload Data Generated (SKUs, Names, Weights, Connectors)!")
                 st.rerun()
-
-            st.dataframe(st.session_state.upload_data, width=2000)
-            
-        else:
-            st.info("No data staged yet. Go to Tab 2 and click 'Validate & Stage'.")
 
     # --- TAB 4: HEADER / EXPORT ---
     with current_tabs[3]:
@@ -1591,3 +1611,4 @@ if st.session_state.header_data is not None:
                             for log in logs: st.write(log)
             else:
                 st.error("Cin7 Secrets missing.")
+
