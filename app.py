@@ -469,7 +469,6 @@ def sync_product_to_cin7(upload_df):
                 
     return log
 
-
 def create_cin7_purchase_order(header_df, lines_df, location_choice):
     headers = get_cin7_headers()
     if not headers: return False, "Cin7 Secrets missing.", []
@@ -1469,10 +1468,10 @@ if st.session_state.header_data is not None:
                         pack_mult = float(pack_val) if pack_val and str(pack_val).lower() != 'nan' else 1.0
                     except: pack_mult = 1.0
                     
-                    # Is it a multipack?
+                    # Is multipack?
                     is_multipack = pack_mult > 1.0
-                    pack_int = int(pack_mult)
-                    
+                    pack_int = int(pack_mult) # For display "12" instead of "12.0"
+
                     total_weight = unit_weight * pack_mult
 
                     # 2. Keg Connector Logic
@@ -1514,22 +1513,19 @@ if st.session_state.header_data is not None:
                             new_row['Variant_Name'] = var_name_base
                         
                         # --- VARIANT SKU GENERATION ---
-                        # Start with family SKU base
-                        variant_sku_final = new_row['Family_SKU']
+                        # FamilySKU - SizeCode
+                        sku_suffix = f"-{size_code}"
                         
                         if is_multipack:
-                             # Format: FAMILY-SKU-12X44CL
-                             variant_sku_final += f"-{pack_int}X{size_code}"
-                        else:
-                             # Format: FAMILY-SKU-44CL (or Keg Code)
-                             variant_sku_final += f"-{size_code}"
+                             sku_suffix += f"-{pack_int}X"
                              
-                        # If Keg, append Connector Code (only if not multipack logic, though multipack kegs are rare)
                         if conn:
                             conn_code = keg_map.get(conn.lower(), "XX")
-                            variant_sku_final += f"-{conn_code}"
+                            sku_suffix += f"-{conn_code}"
                             
-                        new_row['Variant_SKU'] = variant_sku_final
+                        new_row['Variant_SKU'] = f"{new_row['Family_SKU']}{sku_suffix}"
+                            
+                        processed_rows.append(new_row)
 
                 # Create Final DF
                 final_df = pd.DataFrame(processed_rows)
@@ -1626,4 +1622,3 @@ if st.session_state.header_data is not None:
                             for log in logs: st.write(log)
             else:
                 st.error("Cin7 Secrets missing.")
-
