@@ -469,6 +469,7 @@ def sync_product_to_cin7(upload_df):
                 
     return log
 
+
 def create_cin7_purchase_order(header_df, lines_df, location_choice):
     headers = get_cin7_headers()
     if not headers: return False, "Cin7 Secrets missing.", []
@@ -1470,7 +1471,7 @@ if st.session_state.header_data is not None:
                     
                     # Is multipack?
                     is_multipack = pack_mult > 1.0
-                    pack_int = int(pack_mult) # For display "12" instead of "12.0"
+                    pack_int = int(pack_mult)
 
                     total_weight = unit_weight * pack_mult
 
@@ -1513,7 +1514,6 @@ if st.session_state.header_data is not None:
                             new_row['Variant_Name'] = var_name_base
                         
                         # --- VARIANT SKU GENERATION ---
-                        # FamilySKU - SizeCode
                         sku_suffix = f"-{size_code}"
                         
                         if is_multipack:
