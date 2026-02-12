@@ -367,8 +367,6 @@ def create_cin7_variant(row_data, family_id, family_base_sku, family_base_name, 
     prefix = "L-" if location_prefix == "L" else "G-"
     location_name = "London" if location_prefix == "L" else "Gloucester"
     
-    # Construct Full Variant SKU & Name
-    # Base Variant SKU from table doesn't have prefix yet
     var_sku_raw = row_data['Variant_SKU']
     var_name_raw = row_data['Variant_Name']
     
@@ -378,17 +376,14 @@ def create_cin7_variant(row_data, family_id, family_base_sku, family_base_name, 
     existing_id = check_cin7_exists("product", full_var_sku, is_sku=True)
     if existing_id: return f"Exists ({full_var_sku})"
 
-    # Construct Payload
     brand_name = row_data['untappd_brewery']
     price = float(row_data['item_price']) if row_data['item_price'] else 0.0
     weight = float(row_data['Weight'])
     
-    # Note Formatting
     internal_note = f"{full_var_sku} *** {full_var_name} *** {var_name_raw} *** {family_id}"
     
     tags = f"{location_name},Wholesale,{brand_name}"
     
-    # Extract attributes for searchability
     fmt = row_data['format']
     style = row_data['untappd_style']
     abv = row_data['untappd_abv']
@@ -425,7 +420,7 @@ def create_cin7_variant(row_data, family_id, family_base_sku, family_base_name, 
         "RevenueAccount": "4000",
         "InventoryAccount": "1001",
         "Sellable": True,
-        "Option1": var_name_raw, # Updates the Family Option list
+        "Option1": var_name_raw, 
         "ProductFamilyID": family_id
     }
     
@@ -453,14 +448,11 @@ def sync_product_to_cin7(upload_df):
         fam_name = first_row['Family_Name']
         brand = first_row['untappd_brewery']
         
-        # 2. Process Locations (L & G)
         for loc in ["L", "G"]:
-            # A. Ensure Family Exists
             fam_id, fam_msg = create_cin7_family_node(fam_sku, fam_name, brand, loc)
             log.append(f"📦 Family ({loc}): {fam_msg}")
             
             if fam_id:
-                # B. Ensure Variants Exist
                 for _, row in group.iterrows():
                     var_msg = create_cin7_variant(row, fam_id, fam_sku, fam_name, loc)
                     log.append(f"   ↳ Variant: {var_msg}")
@@ -908,8 +900,6 @@ def create_product_matrix(df):
             matrix_df[col] = ""
             
     # --- FIX: DATA CLEANING TO PREVENT EDIT REVERTS ---
-    # Ensure all object columns are actually strings, replacing NaNs with ""
-    # This matches what st.data_editor expects for text columns
     for col in final_cols:
         if matrix_df[col].dtype == 'object':
             matrix_df[col] = matrix_df[col].fillna("").astype(str)
@@ -1359,6 +1349,7 @@ if st.session_state.header_data is not None:
                         df_found,
                         num_rows="fixed",
                         width='stretch',
+                        # Use session key for stability
                         key=f"editor_found_{st.session_state.matrix_key}",
                         column_config=col_conf_found,
                         disabled=["Untappd_Status", "Label_Thumb"] 
@@ -1373,26 +1364,22 @@ if st.session_state.header_data is not None:
                     col_conf_missing = {
                         "Label_Thumb": st.column_config.ImageColumn("Label", width="small"), 
                         "Untappd_Status": st.column_config.TextColumn("Status", disabled=True),
-                        # DROPDOWN CONFIG
-                        "Untappd_Style": st.column_config.SelectboxColumn(
-                            "Style",
-                            options=style_opts,
-                            width="medium",
-                            required=False
-                        ),
+                        "Untappd_Style": st.column_config.SelectboxColumn("Style", options=style_opts, width="medium", required=False),
                         "Untappd_Desc": st.column_config.TextColumn("Description", width="medium"),
                     }
                     edited_missing = st.data_editor(
                         df_missing,
                         num_rows="fixed",
                         width='stretch',
+                        # Use session key for stability
                         key=f"editor_missing_{st.session_state.matrix_key}",
                         column_config=col_conf_missing
                     )
                 else:
                     edited_missing = pd.DataFrame(columns=valid_cols)
 
-                # MERGE BACK
+                # MERGE BACK IMMEDIATELY
+                # This ensures manual edits persist across reruns
                 frames_to_concat = []
                 if not edited_found.empty: frames_to_concat.append(edited_found)
                 if not edited_missing.empty: frames_to_concat.append(edited_missing)
@@ -1527,11 +1514,15 @@ if st.session_state.header_data is not None:
                             new_row['Variant_Name'] = var_name_base
                         
                         # --- VARIANT SKU GENERATION ---
-                        sku_suffix = f"-{size_code}"
-                        
+                        # Base Suffix Logic
                         if is_multipack:
-                             sku_suffix += f"-{pack_int}X"
+                             # Format: -12X44CL
+                             sku_suffix = f"-{pack_int}X{size_code}"
+                        else:
+                             # Format: -44CL (or Keg Code)
+                             sku_suffix = f"-{size_code}"
                              
+                        # If Keg, append Connector Code (e.g. -SK)
                         if conn:
                             conn_code = keg_map.get(conn.lower(), "XX")
                             sku_suffix += f"-{conn_code}"
