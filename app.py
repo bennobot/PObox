@@ -146,6 +146,7 @@ def batch_untappd_lookup(matrix_df):
     cols = ['Untappd_Status', 'Untappd_ID', 'Untappd_Brewery', 'Untappd_Product', 
             'Untappd_ABV', 'Untappd_Style', 'Untappd_Desc', 'Label_Thumb', 'Brewery_Loc']
     
+    # Ensure columns exist
     for c in cols:
         if c not in matrix_df.columns: matrix_df[c] = ""
             
@@ -158,6 +159,7 @@ def batch_untappd_lookup(matrix_df):
         
         current_id = str(row.get('Untappd_ID', '')).strip()
         
+        # Only search if ID is missing or marked as MANUAL/Empty
         if not current_id or current_id in ['nan', 'MANUAL', '']:
             res = search_untappd_item(row['Supplier_Name'], row['Product_Name'])
             if res:
@@ -173,19 +175,12 @@ def batch_untappd_lookup(matrix_df):
                 row['Brewery_Loc'] = res['brewery_location']
             else:
                 logs.append(f"❌ No match: {row['Product_Name']}")
-                # FALLBACK LOGIC
+                # --- CHANGE: Set Status only. Do NOT auto-fill other fields with Invoice Data ---
                 row['Untappd_Status'] = "❌ Not Found"
-                row['Untappd_ID'] = "MANUAL"
-                row['Untappd_Brewery'] = row['Supplier_Name']
-                row['Untappd_Product'] = row['Product_Name']
-                
-                raw_abv = str(row.get('ABV', '')).replace('%', '').strip()
-                row['Untappd_ABV'] = raw_abv
-                
-                row['Untappd_Style'] = ""
-                row['Untappd_Desc'] = ""
-                row['Label_Thumb'] = ""
-                row['Brewery_Loc'] = ""
+                row['Untappd_ID'] = "" 
+                # row['Untappd_Brewery'] is left blank (was previously row['Supplier_Name'])
+                # row['Untappd_Product'] is left blank (was previously row['Product_Name'])
+                # row['Untappd_ABV'] is left blank
         
         updated_rows.append(row)
         
@@ -1619,3 +1614,4 @@ if st.session_state.header_data is not None:
                             for log in logs: st.write(log)
             else:
                 st.error("Cin7 Secrets missing.")
+
