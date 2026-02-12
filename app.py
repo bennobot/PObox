@@ -907,6 +907,13 @@ def create_product_matrix(df):
         if col not in matrix_df.columns:
             matrix_df[col] = ""
             
+    # --- FIX: DATA CLEANING TO PREVENT EDIT REVERTS ---
+    # Ensure all object columns are actually strings, replacing NaNs with ""
+    # This matches what st.data_editor expects for text columns
+    for col in final_cols:
+        if matrix_df[col].dtype == 'object':
+            matrix_df[col] = matrix_df[col].fillna("").astype(str)
+
     return matrix_df[final_cols]
 
 # --- SKU GENERATION LOGIC ---
@@ -1366,7 +1373,13 @@ if st.session_state.header_data is not None:
                     col_conf_missing = {
                         "Label_Thumb": st.column_config.ImageColumn("Label", width="small"), 
                         "Untappd_Status": st.column_config.TextColumn("Status", disabled=True),
-                        "Untappd_Style": st.column_config.SelectboxColumn("Style", options=style_opts, width="medium", required=False),
+                        # DROPDOWN CONFIG
+                        "Untappd_Style": st.column_config.SelectboxColumn(
+                            "Style",
+                            options=style_opts,
+                            width="medium",
+                            required=False
+                        ),
                         "Untappd_Desc": st.column_config.TextColumn("Description", width="medium"),
                     }
                     edited_missing = st.data_editor(
@@ -1513,16 +1526,12 @@ if st.session_state.header_data is not None:
                         else:
                             new_row['Variant_Name'] = var_name_base
                         
-                      # --- VARIANT SKU GENERATION ---
-                        # Base Suffix Logic
+                        # --- VARIANT SKU GENERATION ---
+                        sku_suffix = f"-{size_code}"
+                        
                         if is_multipack:
-                             # Format: -12X44CL
-                             sku_suffix = f"-{pack_int}X{size_code}"
-                        else:
-                             # Format: -44CL (or Keg Code)
-                             sku_suffix = f"-{size_code}"
+                             sku_suffix += f"-{pack_int}X"
                              
-                        # If Keg, append Connector Code (e.g. -SK)
                         if conn:
                             conn_code = keg_map.get(conn.lower(), "XX")
                             sku_suffix += f"-{conn_code}"
@@ -1626,4 +1635,3 @@ if st.session_state.header_data is not None:
                             for log in logs: st.write(log)
             else:
                 st.error("Cin7 Secrets missing.")
-
