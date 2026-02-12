@@ -141,12 +141,17 @@ def search_untappd_item(supplier, product):
     return None
 
 def batch_untappd_lookup(matrix_df):
+    """
+    Looks up items in Untappd. 
+    If found -> Populates Untappd_ fields.
+    If NOT found -> Sets Status to 'Not Found' but leaves fields BLANK (no invoice fallback).
+    """
     if matrix_df.empty: return matrix_df, ["Matrix Empty"]
     
+    # Ensure Untappd columns exist before we start filling them
     cols = ['Untappd_Status', 'Untappd_ID', 'Untappd_Brewery', 'Untappd_Product', 
             'Untappd_ABV', 'Untappd_Style', 'Untappd_Desc', 'Label_Thumb', 'Brewery_Loc']
     
-    # Ensure columns exist
     for c in cols:
         if c not in matrix_df.columns: matrix_df[c] = ""
             
@@ -157,10 +162,10 @@ def batch_untappd_lookup(matrix_df):
     for idx, row in matrix_df.iterrows():
         prog_bar.progress((idx + 1) / len(matrix_df))
         
-        current_id = str(row.get('Untappd_ID', '')).strip()
+        current_status = str(row.get('Untappd_Status', ''))
         
-        # Only search if ID is missing or marked as MANUAL/Empty
-        if not current_id or current_id in ['nan', 'MANUAL', '']:
+        # Only search if not already found
+        if current_status != "✅ Found":
             res = search_untappd_item(row['Supplier_Name'], row['Product_Name'])
             if res:
                 logs.append(f"✅ Found: {res['name']}")
@@ -175,12 +180,16 @@ def batch_untappd_lookup(matrix_df):
                 row['Brewery_Loc'] = res['brewery_location']
             else:
                 logs.append(f"❌ No match: {row['Product_Name']}")
-                # --- CHANGE: Set Status only. Do NOT auto-fill other fields with Invoice Data ---
+                # NO FALLBACK LOGIC. Leave fields blank for manual entry.
                 row['Untappd_Status'] = "❌ Not Found"
-                row['Untappd_ID'] = "" 
-                # row['Untappd_Brewery'] is left blank (was previously row['Supplier_Name'])
-                # row['Untappd_Product'] is left blank (was previously row['Product_Name'])
-                # row['Untappd_ABV'] is left blank
+                row['Untappd_ID'] = ""
+                row['Untappd_Brewery'] = ""
+                row['Untappd_Product'] = ""
+                row['Untappd_ABV'] = ""
+                row['Untappd_Style'] = ""
+                row['Untappd_Desc'] = ""
+                row['Label_Thumb'] = ""
+                row['Brewery_Loc'] = ""
         
         updated_rows.append(row)
         
@@ -874,24 +883,22 @@ def create_product_matrix(df):
         
     matrix_df = pd.DataFrame(matrix_rows)
     
-    # --- FIX: INITIALIZE UNTAPPD COLUMNS HERE ---
-    u_cols = ['Untappd_Status', 'Untappd_ID', 'Untappd_Brewery', 'Untappd_Product', 
-              'Untappd_ABV', 'Untappd_Style', 'Untappd_Desc', 'Label_Thumb', 'Brewery_Loc']
-    for c in u_cols:
-        matrix_df[c] = "" 
+    # --- ONLY INIT STATUS. DO NOT INIT UNTAPPD COLUMNS YET ---
+    if 'Untappd_Status' not in matrix_df.columns:
+        matrix_df['Untappd_Status'] = "" 
 
     base_cols = ['Supplier_Name', 'Collaborator', 'Product_Name', 'ABV']
     format_cols = []
     for i in range(1, 4):
         format_cols.extend([f'Format{i}', f'Pack_Size{i}', f'Volume{i}', f'Item_Price{i}', f'Create{i}'])
     
-    final_cols = u_cols + base_cols + [c for c in format_cols if c in matrix_df.columns]
+    existing_format_cols = [c for c in format_cols if c in matrix_df.columns]
+    final_cols = ['Untappd_Status'] + base_cols + existing_format_cols
     
     for col in final_cols:
         if col not in matrix_df.columns:
             matrix_df[col] = ""
             
-    # --- FIX: DATA CLEANING TO PREVENT EDIT REVERTS ---
     for col in final_cols:
         if matrix_df[col].dtype == 'object':
             matrix_df[col] = matrix_df[col].fillna("").astype(str)
@@ -922,12 +929,19 @@ def stage_products_for_upload(matrix_df):
     
     new_rows = []
     errors = []
+    # Untappd columns are required here
     required = ['Untappd_Brewery', 'Untappd_Product', 'Untappd_ABV', 'Untappd_Style', 'Untappd_Desc']
     
     for idx, row in matrix_df.iterrows():
-        missing = [field for field in required if not str(row.get(field, '')).strip()]
-        if missing:
-            errors.append(f"Row {idx+1} ({row.get('Untappd_Product', 'Unknown')}): Missing {', '.join(missing)}")
+        # Check if columns exist (sanity check)
+        missing_cols = [c for c in required if c not in row.index]
+        if missing_cols:
+             errors.append(f"Row {idx+1}: Missing columns {', '.join(missing_cols)}. Please run Search in Tab 2 first.")
+             continue
+             
+        missing_vals = [field for field in required if not str(row.get(field, '')).strip()]
+        if missing_vals:
+            errors.append(f"Row {idx+1} ({row.get('Supplier_Name', '')} {row.get('Product_Name', '')}): Empty fields for {', '.join(missing_vals)}. Please edit manually in Tab 3.")
             continue
 
         for i in range(1, 4):
@@ -1216,8 +1230,14 @@ if st.session_state.header_data is not None:
 
     all_matched = (unmatched_count == 0) and ('Shopify_Status' in df.columns)
 
-    # 4 TABS NOW
-    tabs = ["📝 1. Line Items", "⚠️ 2. Resolve Missing", "☁️ 3. Product Upload", "🚀 4. Finalize PO"]
+    # 5 TABS NOW (Updated Workflow)
+    tabs = [
+        "📝 1. Line Items", 
+        "🔍 2. Prepare Search", 
+        "🍺 3. Untappd Matches", 
+        "☁️ 4. Product Upload", 
+        "🚀 5. Finalize PO"
+    ]
     current_tabs = st.tabs(tabs)
     
     # --- TAB 1: LINE ITEMS ---
@@ -1282,116 +1302,116 @@ if st.session_state.header_data is not None:
             with st.expander("🕵️ Debug Logs", expanded=False):
                 st.markdown("\n".join(st.session_state.shopify_logs))
 
-    # --- TAB 2: MISSING PRODUCTS (SPLIT VIEW) ---
+    # --- TAB 2: PREPARE MISSING ITEMS ---
     with current_tabs[1]:
-        st.subheader("2. Products to Create in Shopify")
+        st.subheader("2. Prepare Missing Items for Search")
         
         if all_matched:
-            st.success("🎉 All products matched! No action needed here.")
-        else:
-            col_u1, col_u2 = st.columns([3, 1])
-            with col_u1:
-                st.warning(f"⚠️ {unmatched_count} unmatched items found. Please create them in Shopify.")
+            st.success("🎉 All products matched to Shopify! No action needed here.")
+        elif st.session_state.matrix_data is not None and not st.session_state.matrix_data.empty:
             
-            with col_u2:
-                if st.button("🍺 Search Untappd Details"):
+            st.info("👇 Review these items from the Invoice. Fix any typos before searching Untappd.")
+            
+            # Show only invoice-derived columns for editing
+            base_cols = ['Supplier_Name', 'Collaborator', 'Product_Name', 'ABV']
+            # Add dynamic format columns if they exist
+            fmt_cols = [c for c in st.session_state.matrix_data.columns if "Format" in c or "Pack" in c or "Volume" in c]
+            
+            display_cols = base_cols + fmt_cols
+            # Filter to ensure we only show columns that actually exist
+            display_cols = [c for c in display_cols if c in st.session_state.matrix_data.columns]
+
+            edited_prep = st.data_editor(
+                st.session_state.matrix_data[display_cols],
+                num_rows="fixed",
+                width='stretch',
+                key=f"prep_editor_{st.session_state.matrix_key}"
+            )
+            
+            # Update the main state with these edits (preserving other columns if any)
+            if edited_prep is not None:
+                # We merge the edits back into the main matrix
+                st.session_state.matrix_data.update(edited_prep)
+
+            st.divider()
+
+            col_search, col_help = st.columns([1, 2])
+            with col_search:
+                if st.button("🔎 Search Untappd Details", type="primary"):
                     if "untappd" in st.secrets:
-                        with st.spinner("Searching Untappd..."):
+                        with st.spinner("Searching Untappd API..."):
+                             # This adds the Untappd columns and populates matches
                              updated_matrix, u_logs = batch_untappd_lookup(st.session_state.matrix_data)
                              st.session_state.matrix_data = updated_matrix
                              st.session_state.untappd_logs = u_logs
-                             st.session_state.matrix_key += 1 # Force Refresh
-                             st.success("Search Complete!")
+                             st.session_state.matrix_key += 1 
+                             st.success("Search Complete! Go to Tab 3.")
                              st.rerun()
                     else:
                         st.error("Untappd Secrets Missing")
-            
-            if st.session_state.untappd_logs:
-                with st.expander("Untappd Debug Logs", expanded=False):
-                    st.write(st.session_state.untappd_logs)
+            with col_help:
+                if st.session_state.untappd_logs:
+                    with st.expander("View Search Logs"):
+                        st.write(st.session_state.untappd_logs)
+        else:
+            st.info("Run 'Check Inventory' in Tab 1 first.")
 
-            if st.session_state.matrix_data is not None and not st.session_state.matrix_data.empty:
-                
-                disp_matrix = st.session_state.matrix_data.copy()
-                
-                # Split logic based on Untappd Status
-                match_mask = disp_matrix['Untappd_Status'] == "✅ Found"
-                df_found = disp_matrix[match_mask]
-                df_missing = disp_matrix[~match_mask]
-
-                u_cols = ['Untappd_Status', 'Label_Thumb', 'Untappd_Brewery', 'Untappd_Product', 'Untappd_ABV', 'Untappd_Style', 'Untappd_Desc']
-                base_cols = ['Supplier_Name', 'Product_Name', 'ABV']
-                rest = [c for c in disp_matrix.columns if c not in u_cols and c not in base_cols]
-                
-                final_order = u_cols + base_cols + rest
-                valid_cols = [c for c in final_order if c in disp_matrix.columns]
-                
-                df_found = df_found[valid_cols]
-                df_missing = df_missing[valid_cols]
-
-                # TABLE 1: MATCHED
-                if not df_found.empty:
-                    st.success("✅ Verified Untappd Matches")
-                    col_conf_found = {
-                        "Label_Thumb": st.column_config.ImageColumn("Label", width="small"),
-                        "Untappd_Status": st.column_config.TextColumn("Found?"),
-                        "Untappd_Desc": st.column_config.TextColumn("Description", width="medium"),
-                    }
-                    edited_found = st.data_editor(
-                        df_found,
-                        num_rows="fixed",
-                        width='stretch',
-                        key=f"editor_found_{st.session_state.matrix_key}",
-                        column_config=col_conf_found,
-                        disabled=["Untappd_Status", "Label_Thumb"] 
-                    )
-                else:
-                    edited_found = pd.DataFrame(columns=valid_cols)
-
-                # TABLE 2: UNMATCHED
-                if not df_missing.empty:
-                    st.warning("📝 Manual Entry (Pre-filled from Invoice)")
-                    style_opts = get_beer_style_list()
-                    col_conf_missing = {
-                        "Label_Thumb": st.column_config.ImageColumn("Label", width="small"), 
-                        "Untappd_Status": st.column_config.TextColumn("Status", disabled=True),
-                        "Untappd_Style": st.column_config.SelectboxColumn("Style", options=style_opts, width="medium", required=False),
-                        "Untappd_Desc": st.column_config.TextColumn("Description", width="medium"),
-                    }
-                    edited_missing = st.data_editor(
-                        df_missing,
-                        num_rows="fixed",
-                        width='stretch',
-                        key=f"editor_missing_{st.session_state.matrix_key}",
-                        column_config=col_conf_missing
-                    )
-                else:
-                    edited_missing = pd.DataFrame(columns=valid_cols)
-
-                # MERGE BACK IMMEDIATELY
-                # This ensures manual edits persist across reruns
-                frames_to_concat = []
-                if not edited_found.empty: frames_to_concat.append(edited_found)
-                if not edited_missing.empty: frames_to_concat.append(edited_missing)
-
-                if frames_to_concat:
-                    combined = pd.concat(frames_to_concat, ignore_index=True)
-                    st.session_state.matrix_data = combined
-                
-                # --- VALIDATE & STAGE BUTTON ---
-                if st.button("✨ Validate & Stage for Upload", type="primary"):
-                    staged_df, errors = stage_products_for_upload(st.session_state.matrix_data)
-                    if errors:
-                        for e in errors: st.error(e)
-                    else:
-                        st.session_state.upload_data = staged_df
-                        st.success("Products staged successfully! Go to Tab 3.")
-                        
-                st.download_button("📥 Download To-Do List", st.session_state.matrix_data.to_csv(index=False), "missing_products.csv")
-
-    # --- TAB 3: PRODUCT UPLOAD (NEW) ---
+    # --- TAB 3: REVIEW UNTAPPD MATCHES ---
     with current_tabs[2]:
-        st.subheader("3. Product Upload Stage")
+        st.subheader("3. Review & Edit Untappd Matches")
+        
+        # Check if we have run the search (i.e., do Untappd columns exist?)
+        has_untappd_cols = 'Untappd_Status' in st.session_state.matrix_data.columns if st.session_state.matrix_data is not None else False
+        
+        if not has_untappd_cols:
+             st.warning("⚠️ Please run the search in 'Tab 2. Prepare Search' first.")
+        
+        elif st.session_state.matrix_data is not None and not st.session_state.matrix_data.empty:
+            
+            st.info("👇 These details will be used to create products in Cin7. Edit manually if the match is wrong or missing.")
+
+            # Define the column order for the results view
+            u_cols = ['Untappd_Status', 'Label_Thumb', 'Untappd_Brewery', 'Untappd_Product', 'Untappd_ABV', 'Untappd_Style', 'Untappd_Desc']
+            invoice_cols = ['Supplier_Name', 'Product_Name', 'Format1'] # Reference cols
+            
+            # Combine and filter for existence
+            full_view = u_cols + [c for c in invoice_cols if c in st.session_state.matrix_data.columns]
+            
+            column_config = {
+                "Label_Thumb": st.column_config.ImageColumn("Label", width="small"),
+                "Untappd_Status": st.column_config.TextColumn("Status", disabled=True),
+                "Untappd_Style": st.column_config.SelectboxColumn("Style", options=get_beer_style_list(), width="medium"),
+                "Untappd_Desc": st.column_config.TextColumn("Description", width="large"),
+                "Untappd_Brewery": st.column_config.TextColumn("Brand (Cin7)", width="medium"),
+                "Untappd_Product": st.column_config.TextColumn("Product Name (Cin7)", width="medium"),
+            }
+
+            edited_matches = st.data_editor(
+                st.session_state.matrix_data,
+                column_order=full_view,
+                num_rows="fixed",
+                width='stretch',
+                key=f"match_editor_{st.session_state.matrix_key}",
+                column_config=column_config
+            )
+            
+            # Save edits immediately
+            if edited_matches is not None:
+                st.session_state.matrix_data = edited_matches
+
+            st.divider()
+            
+            if st.button("✨ Validate & Stage for Upload", type="primary"):
+                staged_df, errors = stage_products_for_upload(st.session_state.matrix_data)
+                if errors:
+                    for e in errors: st.error(e)
+                else:
+                    st.session_state.upload_data = staged_df
+                    st.success("Products staged successfully! Go to Tab 4.")
+
+    # --- TAB 4: PRODUCT UPLOAD (NEW) ---
+    with current_tabs[3]:
+        st.subheader("4. Product Upload Stage")
         
         if st.session_state.upload_data is not None and not st.session_state.upload_data.empty:
             
@@ -1405,8 +1425,8 @@ if st.session_state.header_data is not None:
                         prog_bar.progress((i + 1) / len(unique_families))
                         l_name = f"L-{fam}"
                         g_name = f"G-{fam}"
-                        l_exists = check_cin7_family_exists(l_name)
-                        g_exists = check_cin7_family_exists(g_name)
+                        l_exists = check_cin7_exists("productFamily", l_name)
+                        g_exists = check_cin7_exists("productFamily", g_name)
                         results.append({
                             "Family Name": fam,
                             "L- Version": "✅ Exists" if l_exists else "❌ Missing",
@@ -1537,11 +1557,11 @@ if st.session_state.header_data is not None:
             st.dataframe(st.session_state.upload_data, width=2000)
             
         else:
-            st.info("No data staged yet. Go to Tab 2 and click 'Validate & Stage'.")
+            st.info("No data staged yet. Go to Tab 3 and click 'Validate & Stage'.")
 
-    # --- TAB 4: HEADER / EXPORT ---
-    with current_tabs[3]:
-        st.subheader("4. Finalize & Export")
+    # --- TAB 5: HEADER / EXPORT ---
+    with current_tabs[4]:
+        st.subheader("5. Finalize & Export")
         
         current_payee = "Unknown"
         if not st.session_state.header_data.empty:
@@ -1614,4 +1634,3 @@ if st.session_state.header_data is not None:
                             for log in logs: st.write(log)
             else:
                 st.error("Cin7 Secrets missing.")
-
