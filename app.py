@@ -367,8 +367,6 @@ def create_cin7_variant(row_data, family_id, family_base_sku, family_base_name, 
     prefix = "L-" if location_prefix == "L" else "G-"
     location_name = "London" if location_prefix == "L" else "Gloucester"
     
-    # Construct Full Variant SKU & Name
-    # Base Variant SKU from table doesn't have prefix yet
     var_sku_raw = row_data['Variant_SKU']
     var_name_raw = row_data['Variant_Name']
     
@@ -450,14 +448,11 @@ def sync_product_to_cin7(upload_df):
         fam_name = first_row['Family_Name']
         brand = first_row['untappd_brewery']
         
-        # 2. Process Locations (L & G)
         for loc in ["L", "G"]:
-            # A. Ensure Family Exists
             fam_id, fam_msg = create_cin7_family_node(fam_sku, fam_name, brand, loc)
             log.append(f"📦 Family ({loc}): {fam_msg}")
             
             if fam_id:
-                # B. Ensure Variants Exist
                 for _, row in group.iterrows():
                     var_msg = create_cin7_variant(row, fam_id, fam_sku, fam_name, loc)
                     log.append(f"   ↳ Variant: {var_msg}")
@@ -937,9 +932,6 @@ def stage_products_for_upload(matrix_df):
     errors = []
     required = ['Untappd_Brewery', 'Untappd_Product', 'Untappd_ABV', 'Untappd_Style', 'Untappd_Desc']
     
-    # Initialize all potential target columns immediately to avoid schema issues
-    matrix_df['Untappd_Style'] = matrix_df.get('Untappd_Style', '')
-    
     for idx, row in matrix_df.iterrows():
         missing = [field for field in required if not str(row.get(field, '')).strip()]
         if missing:
@@ -1357,6 +1349,7 @@ if st.session_state.header_data is not None:
                         df_found,
                         num_rows="fixed",
                         width='stretch',
+                        # Use session key for stability
                         key=f"editor_found_{st.session_state.matrix_key}",
                         column_config=col_conf_found,
                         disabled=["Untappd_Status", "Label_Thumb"] 
@@ -1378,6 +1371,7 @@ if st.session_state.header_data is not None:
                         df_missing,
                         num_rows="fixed",
                         width='stretch',
+                        # Use session key for stability
                         key=f"editor_missing_{st.session_state.matrix_key}",
                         column_config=col_conf_missing
                     )
@@ -1520,11 +1514,15 @@ if st.session_state.header_data is not None:
                             new_row['Variant_Name'] = var_name_base
                         
                         # --- VARIANT SKU GENERATION ---
-                        sku_suffix = f"-{size_code}"
-                        
+                        # Base Suffix Logic
                         if is_multipack:
-                             sku_suffix += f"-{pack_int}X"
+                             # Format: -12X44CL
+                             sku_suffix = f"-{pack_int}X{size_code}"
+                        else:
+                             # Format: -44CL (or Keg Code)
+                             sku_suffix = f"-{size_code}"
                              
+                        # If Keg, append Connector Code (e.g. -SK)
                         if conn:
                             conn_code = keg_map.get(conn.lower(), "XX")
                             sku_suffix += f"-{conn_code}"
