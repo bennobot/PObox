@@ -439,8 +439,6 @@ def create_cin7_variant(row_data, family_id, family_base_sku, family_base_name, 
 def sync_product_to_cin7(upload_df):
     """Iterates through staged data and syncs Families + Variants."""
     log = []
-    
-    # 1. Group by Family
     families = upload_df.groupby('Family_SKU')
     
     for fam_sku, group in families:
@@ -460,7 +458,6 @@ def sync_product_to_cin7(upload_df):
                 log.append(f"   ❌ Skipping variants for {fam_sku} due to family error.")
                 
     return log
-
 
 def create_cin7_purchase_order(header_df, lines_df, location_choice):
     headers = get_cin7_headers()
@@ -1349,7 +1346,6 @@ if st.session_state.header_data is not None:
                         df_found,
                         num_rows="fixed",
                         width='stretch',
-                        # Use session key for stability
                         key=f"editor_found_{st.session_state.matrix_key}",
                         column_config=col_conf_found,
                         disabled=["Untappd_Status", "Label_Thumb"] 
@@ -1371,7 +1367,6 @@ if st.session_state.header_data is not None:
                         df_missing,
                         num_rows="fixed",
                         width='stretch',
-                        # Use session key for stability
                         key=f"editor_missing_{st.session_state.matrix_key}",
                         column_config=col_conf_missing
                     )
@@ -1514,15 +1509,13 @@ if st.session_state.header_data is not None:
                             new_row['Variant_Name'] = var_name_base
                         
                         # --- VARIANT SKU GENERATION ---
-                        # Base Suffix Logic
                         if is_multipack:
                              # Format: -12X44CL
                              sku_suffix = f"-{pack_int}X{size_code}"
                         else:
-                             # Format: -44CL (or Keg Code)
+                             # Format: -44CL
                              sku_suffix = f"-{size_code}"
                              
-                        # If Keg, append Connector Code (e.g. -SK)
                         if conn:
                             conn_code = keg_map.get(conn.lower(), "XX")
                             sku_suffix += f"-{conn_code}"
