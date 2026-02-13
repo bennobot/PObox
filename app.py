@@ -472,30 +472,6 @@ def sync_product_to_cin7(upload_df):
                 
     return log
         
-# --- MASTER SYNC FUNCTION ---
-def sync_product_to_cin7(upload_df):
-    """Iterates through staged data and syncs Families + Variants."""
-    log = []
-    families = upload_df.groupby('Family_SKU')
-    
-    for fam_sku, group in families:
-        first_row = group.iloc[0]
-        fam_name = first_row['Family_Name']
-        brand = first_row['untappd_brewery']
-        
-        for loc in ["L", "G"]:
-            fam_id, fam_msg = create_cin7_family_node(fam_sku, fam_name, brand, loc)
-            log.append(f"📦 Family ({loc}): {fam_msg}")
-            
-            if fam_id:
-                for _, row in group.iterrows():
-                    var_msg = create_cin7_variant(row, fam_id, fam_sku, fam_name, loc)
-                    log.append(f"   ↳ Variant: {var_msg}")
-            else:
-                log.append(f"   ❌ Skipping variants for {fam_sku} due to family error.")
-                
-    return log
-
 def create_cin7_purchase_order(header_df, lines_df, location_choice):
     headers = get_cin7_headers()
     if not headers: return False, "Cin7 Secrets missing.", []
@@ -1667,6 +1643,7 @@ if st.session_state.header_data is not None:
                             for log in logs: st.write(log)
             else:
                 st.error("Cin7 Secrets missing.")
+
 
 
 
