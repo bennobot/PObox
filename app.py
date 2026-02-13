@@ -96,7 +96,6 @@ def calculate_sell_price(cost_price, product_type, fmt):
         return round(cost + 20, 2)
 
     # --- RULE 3: STANDARD MULTIPLIERS ---
-    # Applies to all Small Pack, and Mid-Range Draft (63-140)
     if product_type == "Core Product":
         return round(cost * 1.265, 2)
     else: 
@@ -188,13 +187,9 @@ def search_untappd_item(supplier, product):
                 }
     except: pass
     
-    # Return query used for debugging in the log
     return {"query_used": query_str}
 
 def batch_untappd_lookup(matrix_df):
-    """
-    Looks up items in Untappd using the improved search logic.
-    """
     if matrix_df.empty: return matrix_df, ["Matrix Empty"]
     
     cols = ['Untappd_Status', 'Untappd_ID', 'Untappd_Brewery', 'Untappd_Product', 
@@ -212,11 +207,9 @@ def batch_untappd_lookup(matrix_df):
         
         current_status = str(row.get('Untappd_Status', ''))
         
-        # Only search if not already found
         if current_status != "✅ Found":
             res = search_untappd_item(row['Supplier_Name'], row['Product_Name'])
             
-            # Check if we got a valid ID back
             if res and "untappd_id" in res:
                 logs.append(f"✅ Found: {res['name']}")
                 row['Untappd_Status'] = "✅ Found"
@@ -229,13 +222,10 @@ def batch_untappd_lookup(matrix_df):
                 row['Label_Thumb'] = res['label_image_thumb']
                 row['Brewery_Loc'] = res['brewery_location']
             else:
-                # Log the ACTUAL query sent to help debug missing suppliers
                 used_q = res.get('query_used', 'Unknown') if res else 'Error'
                 logs.append(f"❌ No match: {row['Product_Name']} | Query Sent: [{used_q}]")
-                
                 row['Untappd_Status'] = "❌ Not Found"
                 row['Untappd_ID'] = ""
-                # Leave other fields blank for manual entry
         
         updated_rows.append(row)
         
@@ -255,9 +245,36 @@ def get_cin7_base_url():
     if "cin7" not in st.secrets: return None
     return st.secrets["cin7"].get("base_url", "https://inventory.dearsystems.com/ExternalApi/v2")
 
+# --- RATE LIMIT WRAPPER (NEW) ---
+def make_cin7_request(method, url, headers=None, **kwargs):
+    """Wraps requests to handle Cin7 Rate Limits (60 calls/60s)."""
+    if not headers:
+        headers = get_cin7_headers()
+    
+    max_retries = 6
+    backoff = 1.0 # Start with 1s wait
+    
+    for attempt in range(max_retries):
+        try:
+            response = requests.request(method, url, headers=headers, **kwargs)
+            
+            # Rate Limit Hit (429)
+            if response.status_code == 429:
+                time.sleep(backoff)
+                backoff *= 2 # Exponential backoff
+                continue
+                
+            return response
+            
+        except Exception as e:
+            if attempt == max_retries - 1: raise e
+            time.sleep(backoff)
+            backoff *= 2
+            
+    return response
+
 @st.cache_data(ttl=3600)
 def fetch_cin7_brands():
-    """Fetches list of Brands from Cin7 to use as Master Supplier List."""
     if "cin7" not in st.secrets: return []
     creds = st.secrets["cin7"]
     headers = {
@@ -321,7 +338,8 @@ def get_cin7_product_id(sku):
     url = f"{get_cin7_base_url()}/product"
     params = {"Sku": sku}
     try:
-        response = requests.get(url, headers=headers, params=params)
+        # Rate Limit Safe Call
+        response = make_cin7_request("GET", url, headers=headers, params=params)
         if response.status_code == 200:
             data = response.json()
             if "Products" in data and len(data["Products"]) > 0:
@@ -335,7 +353,8 @@ def get_cin7_supplier(name):
     safe_name = quote(name)
     url = f"{get_cin7_base_url()}/supplier?Name={safe_name}"
     try:
-        response = requests.get(url, headers=headers)
+        # Rate Limit Safe Call
+        response = make_cin7_request("GET", url, headers=headers)
         if response.status_code == 200:
             data = response.json()
             if "Suppliers" in data and len(data["Suppliers"]) > 0:
@@ -346,22 +365,19 @@ def get_cin7_supplier(name):
 
 # --- CIN7 FAMILY & PRODUCT CREATION ---
 def check_cin7_exists(endpoint, name_or_sku, is_sku=False):
-    """Generic check for Family or Product existence."""
     headers = get_cin7_headers()
     if not headers: return None
-    
     param = "Sku" if is_sku else "Name"
     safe_val = quote(name_or_sku)
     url = f"{get_cin7_base_url()}/{endpoint}?{param}={safe_val}"
-    
     try:
-        response = requests.get(url, headers=headers)
+        # Rate Limit Safe Call
+        response = make_cin7_request("GET", url, headers=headers)
         if response.status_code == 200:
             data = response.json()
             key = "Products" if endpoint == "product" else "ProductFamilies"
             items = data.get(key, [])
             for i in items:
-                # Exact Match
                 target_val = i["SKU"] if is_sku else i["Name"]
                 if target_val.lower() == name_or_sku.lower():
                     return i["ID"]
@@ -369,18 +385,16 @@ def check_cin7_exists(endpoint, name_or_sku, is_sku=False):
     return None
 
 def create_cin7_family_node(family_base_sku, family_base_name, brand_name, location_prefix):
-    """Creates a Product Family if missing. Returns (ID, Message)."""
     prefix = "L-" if location_prefix == "L" else "G-"
     location_name = "London" if location_prefix == "L" else "Gloucester"
-    
     full_sku = f"{prefix}{family_base_sku}"
     full_name = f"{prefix}{family_base_name}"
     
-    # 1. CHECK BY SKU FIRST (More reliable)
+    # 1. CHECK BY SKU FIRST
     existing_id = check_cin7_exists("productFamily", full_sku, is_sku=True)
     if existing_id: return existing_id, f"✅ Family Exists (SKU Match) [ID: {existing_id}]"
 
-    # 2. CHECK BY NAME (Fallback)
+    # 2. CHECK BY NAME
     existing_id = check_cin7_exists("productFamily", full_name, is_sku=False)
     if existing_id: return existing_id, f"✅ Family Exists (Name Match) [ID: {existing_id}]"
 
@@ -410,12 +424,11 @@ def create_cin7_family_node(family_base_sku, family_base_name, brand_name, locat
     url = f"{get_cin7_base_url()}/productFamily"
     headers = get_cin7_headers()
     try:
-        response = requests.post(url, headers=headers, json=payload)
+        # Rate Limit Safe Call
+        response = make_cin7_request("POST", url, headers=headers, json=payload)
         
         if response.status_code == 200:
             resp_data = response.json()
-            
-            # --- Parsing Update: Handle Nested IDs ---
             new_id = resp_data.get('ID')
             if not new_id and "ProductFamilies" in resp_data and len(resp_data["ProductFamilies"]) > 0:
                 new_id = resp_data["ProductFamilies"][0].get("ID")
@@ -426,21 +439,15 @@ def create_cin7_family_node(family_base_sku, family_base_name, brand_name, locat
                 return None, f"⚠️ HTTP 200 but No ID. Response: {json.dumps(resp_data)}"
         else:
             return None, f"❌ Failed Family {full_sku} [HTTP {response.status_code}]: {response.text}"
-            
     except Exception as e:
         return None, f"💥 Exception Family: {str(e)}"
 
 def create_cin7_variant(row_data, family_id, family_base_sku, family_base_name, location_prefix):
-    """
-    1. Ensures Product exists (Creates or Finds).
-    2. Links Product to Family by updating the Family's 'Products' list.
-    """
     prefix = "L-" if location_prefix == "L" else "G-"
     location_name = "London" if location_prefix == "L" else "Gloucester"
     
     var_sku_raw = row_data['Variant_SKU']
     var_name_raw = row_data['Variant_Name']
-    
     full_var_sku = f"{prefix}{var_sku_raw}"
     full_var_name = f"{prefix}{family_base_name} / {var_name_raw}"
     
@@ -450,37 +457,31 @@ def create_cin7_variant(row_data, family_id, family_base_sku, family_base_name, 
     product_id = None
     product_created = False
 
-    # ====================================================
-    # STEP 1: GET OR CREATE PRODUCT (TO GET ID)
-    # ====================================================
-    
-    # A. Check if exists
+    # 1. GET OR CREATE PRODUCT
     check_url = f"{base_url}/product?Sku={quote(full_var_sku)}"
     try:
-        r_check = requests.get(check_url, headers=headers)
+        # Rate Limit Safe Call
+        r_check = make_cin7_request("GET", check_url, headers=headers)
         if r_check.status_code == 200:
             data = r_check.json()
             if data.get("Products"):
                 product_id = data["Products"][0]["ID"]
     except Exception: pass
 
-    # B. If not exists, Create it
     if not product_id:
         brand_name = row_data['untappd_brewery']
         weight = float(row_data['Weight'])
         internal_note = f"{full_var_sku} *** {full_var_name} *** {var_name_raw} *** {family_id}"
         tags = f"{location_name},Wholesale,{brand_name}"
         
-        # Attribute Mapping
         fmt = row_data.get('format', '')
         style = row_data.get('untappd_style', '')
         abv = row_data.get('untappd_abv', '')
         keg_connector = row_data.get('Keg_Connector', '')
         prod_name_only = row_data.get('untappd_product', '')
-        attr_5 = row_data.get('Attribute_5', 'Rotational Product') # <--- UPDATED CASING
+        attr_5 = row_data.get('Attribute_5', 'Rotational Product')
         prod_type = row_data.get('Type', 'Beer')
         
-        # --- RE-CALCULATE SALES PRICE (Ensure Integrity) ---
         cost_price = float(row_data.get('item_price', 0))
         sales_price = calculate_sell_price(cost_price, attr_5, fmt)
         
@@ -520,7 +521,8 @@ def create_cin7_variant(row_data, family_id, family_base_sku, family_base_name, 
         }
         
         try:
-            r_create = requests.post(f"{base_url}/product", headers=headers, json=payload_prod)
+            # Rate Limit Safe Call
+            r_create = make_cin7_request("POST", f"{base_url}/product", headers=headers, json=payload_prod)
             if r_create.status_code == 200:
                 resp_data = r_create.json()
                 if "Products" in resp_data and resp_data["Products"]:
@@ -536,20 +538,15 @@ def create_cin7_variant(row_data, family_id, family_base_sku, family_base_name, 
     if not product_id:
         return f"❌ Could not retrieve Product ID for {full_var_sku}"
 
-    # ====================================================
-    # STEP 2: LINK TO FAMILY (PUT FAMILY PAYLOAD)
-    # ====================================================
-    
-    # A. Fetch the FAMILY object
+    # 2. LINK TO FAMILY
     fam_url = f"{base_url}/productFamily?ID={family_id}"
-    
     try:
-        r_fam = requests.get(fam_url, headers=headers)
+        # Rate Limit Safe Call
+        r_fam = make_cin7_request("GET", fam_url, headers=headers)
         if r_fam.status_code != 200:
             return f"⚠️ Fetch Family Failed: {r_fam.text}"
         
         fam_data_response = r_fam.json()
-        
         family_obj = None
         if "ProductFamilies" in fam_data_response and fam_data_response["ProductFamilies"]:
             family_obj = fam_data_response["ProductFamilies"][0]
@@ -562,7 +559,6 @@ def create_cin7_variant(row_data, family_id, family_base_sku, family_base_name, 
     except Exception as e:
         return f"💥 Fetch Family Ex: {e}"
 
-    # B. Modify the Products List
     current_products = family_obj.get("Products", [])
     if current_products is None: current_products = []
     
@@ -580,16 +576,14 @@ def create_cin7_variant(row_data, family_id, family_base_sku, family_base_name, 
         })
 
     family_obj["Products"] = current_products
-
-    # C. Clean Read-Only Fields
     read_only_fields = ['CreatedDate', 'LastModifiedOn']
     for field in read_only_fields:
         family_obj.pop(field, None)
 
-    # D. Send PUT Request
     put_fam_url = f"{base_url}/productFamily"
     try:
-        r_put = requests.put(put_fam_url, headers=headers, json=family_obj)
+        # Rate Limit Safe Call
+        r_put = make_cin7_request("PUT", put_fam_url, headers=headers, json=family_obj)
         if r_put.status_code == 200:
             action = "Created & Linked" if product_created else "Linked Existing"
             return f"✅ {action} ({full_var_sku})"
@@ -600,31 +594,22 @@ def create_cin7_variant(row_data, family_id, family_base_sku, family_base_name, 
 
 # --- MASTER SYNC FUNCTION ---
 def sync_product_to_cin7(upload_df):
-    """Iterates through staged data and syncs Families + Variants."""
     log = []
     families = upload_df.groupby('Family_SKU')
-    
     for fam_sku, group in families:
         first_row = group.iloc[0]
         fam_name = first_row['Family_Name']
         brand = first_row['untappd_brewery']
-        
         for loc in ["L", "G"]:
             log.append(f"🔄 Processing Family: {fam_sku} ({loc})")
-            
-            # Create/Check Family (Logic handles existing families automatically)
             fam_id, fam_msg = create_cin7_family_node(fam_sku, fam_name, brand, loc)
             log.append(f"   -> {fam_msg}")
-            
             if fam_id:
-                # Proceed to Variants
                 for _, row in group.iterrows():
                     var_msg = create_cin7_variant(row, fam_id, fam_sku, fam_name, loc)
                     log.append(f"      -> Variant: {var_msg}")
             else:
-                # Log specifically why we stopped
                 log.append(f"   🛑 HALT: Could not acquire Family ID. Skipping variants for {fam_sku} ({loc}).")
-                
     return log
 
 def create_cin7_purchase_order(header_df, lines_df, location_choice):
@@ -651,7 +636,6 @@ def create_cin7_purchase_order(header_df, lines_df, location_choice):
             qty = float(row.get('Quantity', 0))
             price = float(row.get('Item_Price', 0))
             total = round(qty * price, 2)
-            
             order_lines.append({
                 "ProductID": prod_id, 
                 "Quantity": qty, 
@@ -679,7 +663,8 @@ def create_cin7_purchase_order(header_df, lines_df, location_choice):
     
     task_id = None
     try:
-        r1 = requests.post(url_create, headers=headers, json=payload_header)
+        # Rate Limit Safe Call
+        r1 = make_cin7_request("POST", url_create, headers=headers, json=payload_header)
         if r1.status_code == 200:
             task_id = r1.json().get('ID')
         else: return False, f"Header Error: {r1.text}", logs
@@ -696,7 +681,8 @@ def create_cin7_purchase_order(header_df, lines_df, location_choice):
             "AdditionalCharges": []
         }
         try:
-            r2 = requests.post(url_lines, headers=headers, json=payload_lines)
+            # Rate Limit Safe Call
+            r2 = make_cin7_request("POST", url_lines, headers=headers, json=payload_lines)
             if r2.status_code == 200:
                 return True, f"✅ PO Created! ID: {task_id}", logs
             else: return False, f"Line Error: {r2.text}", logs
@@ -707,7 +693,6 @@ def create_cin7_purchase_order(header_df, lines_df, location_choice):
 def fetch_shopify_products_by_vendor(vendor):
     if "shopify" not in st.secrets: return []
     if not vendor or not isinstance(vendor, str): return []
-    
     creds = st.secrets["shopify"]
     shop_url = creds.get("shop_url")
     token = creds.get("access_token")
@@ -717,11 +702,9 @@ def fetch_shopify_products_by_vendor(vendor):
     query = """query ($query: String!, $cursor: String) { products(first: 50, query: $query, after: $cursor) { pageInfo { hasNextPage endCursor } edges { node { id title status format_meta: metafield(namespace: "custom", key: "Format") { value } abv_meta: metafield(namespace: "custom", key: "ABV") { value } variants(first: 20) { edges { node { id title sku inventoryQuantity } } } } } } }"""
     search_vendor = vendor.replace("'", "\\'") 
     variables = {"query": f"vendor:'{search_vendor}'"} 
-    
     all_products = []
     cursor = None
     has_next = True
-    
     while has_next:
         vars_curr = variables.copy()
         if cursor: vars_curr['cursor'] = cursor
@@ -737,7 +720,6 @@ def fetch_shopify_products_by_vendor(vendor):
                 else: has_next = False
             else: has_next = False
         except: has_next = False
-            
     return all_products
 
 def normalize_vol_string(v_str):
@@ -810,7 +792,6 @@ def run_reconciliation_check(lines_df):
             
             for score, prod, clean_name in scored_candidates:
                 if score < 75: continue 
-                
                 shop_fmt_meta = prod.get('format_meta', {}).get('value', '') or ""
                 shop_title_lower = prod['title'].lower()
                 shop_format_str = f"{shop_fmt_meta} {shop_title_lower}".lower()
@@ -819,7 +800,6 @@ def run_reconciliation_check(lines_df):
                 shop_keg_val = str(shop_keg_type_meta.get('value', '')).lower()
 
                 is_compatible = True
-                
                 if "keg" in inv_fmt:
                     is_poly_inv = "poly" in inv_fmt or "dolium" in inv_fmt or "pet" in inv_fmt
                     is_key_inv = "keykeg" in inv_fmt
@@ -869,9 +849,7 @@ def run_reconciliation_check(lines_df):
                             glou_sku = f"G-{base_sku}"
                         break
                 if match_found: break
-            
-            if not match_found: 
-                status = "🟥 Check and Upload"
+            if not match_found: status = "🟥 Check and Upload"
         
         if london_sku: cin7_l_id = get_cin7_product_id(london_sku)
         if glou_sku: cin7_g_id = get_cin7_product_id(glou_sku)
@@ -895,96 +873,58 @@ def get_master_supplier_list():
         return df['Supplier_Master'].dropna().astype(str).tolist()
     except: return []
 
-# --- FETCH SUPPLIER CODES (4-CHAR) FOR SKU GEN ---
 @st.cache_data(ttl=3600)
 def fetch_supplier_codes():
-    """Fetches dictionary {SupplierName: 4CharCode} from MasterData sheet."""
     try:
         conn = st.connection("gsheets", type=GSheetsConnection)
         sheet_url = "https://docs.google.com/spreadsheets/d/1Skd85vSu3e16z9iAVG8bZjhwqIWRnUxZXiVv1QbmPHA"
-        
-        df = conn.read(
-            spreadsheet=sheet_url,
-            worksheet="MasterData",
-            usecols=[0, 1] 
-        )
+        df = conn.read(spreadsheet=sheet_url, worksheet="MasterData", usecols=[0, 1])
         if not df.empty:
             df = df.dropna()
             return pd.Series(df.iloc[:, 1].values, index=df.iloc[:, 0]).to_dict()
     except Exception: pass
     return {}
 
-# --- FETCH FORMAT CODES FOR SKU GEN ---
 @st.cache_data(ttl=3600)
 def fetch_format_codes():
-    """Fetches dictionary {FormatName: Code} from SKU sheet (Case Insensitive)."""
     try:
         conn = st.connection("gsheets", type=GSheetsConnection)
         sheet_url = "https://docs.google.com/spreadsheets/d/1Skd85vSu3e16z9iAVG8bZjhwqIWRnUxZXiVv1QbmPHA"
-        
-        df = conn.read(
-            spreadsheet=sheet_url,
-            worksheet="SKU",
-            usecols=[0, 1]
-        )
+        df = conn.read(spreadsheet=sheet_url, worksheet="SKU", usecols=[0, 1])
         if not df.empty:
             df = df.dropna()
-            # Convert keys to lowercase for matching
             return dict(zip(df.iloc[:, 0].astype(str).str.lower(), df.iloc[:, 1].astype(str)))
     except Exception: pass
     return {}
 
-# --- FETCH WEIGHT MAP (Includes Size Code) ---
 @st.cache_data(ttl=3600)
 def fetch_weight_map():
-    """Fetches dict of Weight AND dict of Size Codes."""
     try:
         conn = st.connection("gsheets", type=GSheetsConnection)
         sheet_url = "https://docs.google.com/spreadsheets/d/1Skd85vSu3e16z9iAVG8bZjhwqIWRnUxZXiVv1QbmPHA"
-        
-        # Cols A=Format, B=Volume, D=Weight, E=SizeCode
-        df = conn.read(
-            spreadsheet=sheet_url,
-            worksheet="Weight",
-            usecols=[0, 1, 3, 4] 
-        )
+        df = conn.read(spreadsheet=sheet_url, worksheet="Weight", usecols=[0, 1, 3, 4])
         if not df.empty:
             df = df.dropna(how='all')
             weight_dict = {}
             size_code_dict = {}
-            
             for _, row in df.iterrows():
                 key = (str(row.iloc[0]).strip().lower(), str(row.iloc[1]).strip().lower())
-                
-                # Weight (Col 3 -> Index 2 in partial df)
                 val_weight = float(row.iloc[2]) if pd.notna(row.iloc[2]) else 0.0
-                
-                # Size Code (Col 4 -> Index 3 in partial df)
                 val_code = str(row.iloc[3]).strip() if pd.notna(row.iloc[3]) else ""
-                
                 weight_dict[key] = val_weight
                 size_code_dict[key] = val_code
-                
             return weight_dict, size_code_dict
     except Exception: pass
     return {}, {}
 
-# --- FETCH KEG CODES (Connector -> Code) ---
 @st.cache_data(ttl=3600)
 def fetch_keg_codes():
-    """Fetches dictionary {ConnectorName: Code} from Keg sheet."""
     try:
         conn = st.connection("gsheets", type=GSheetsConnection)
         sheet_url = "https://docs.google.com/spreadsheets/d/1Skd85vSu3e16z9iAVG8bZjhwqIWRnUxZXiVv1QbmPHA"
-        
-        df = conn.read(
-            spreadsheet=sheet_url,
-            worksheet="Keg",
-            usecols=[0, 1] 
-        )
+        df = conn.read(spreadsheet=sheet_url, worksheet="Keg", usecols=[0, 1])
         if not df.empty:
             df = df.dropna()
-            # Key = Connector Name (Col A), Value = Code (Col B)
             return dict(zip(df.iloc[:, 0].astype(str).str.lower(), df.iloc[:, 1].astype(str)))
     except Exception: pass
     return {}
@@ -1075,12 +1015,9 @@ def create_product_matrix(df):
     return matrix_df[final_cols]
 
 def generate_sku_parts(product_name):
-    """Generates the 4-char Product string for SKU."""
     clean_name = re.sub(r'[^a-zA-Z0-9\s]', '', str(product_name)).upper()
     words = clean_name.split()
-    
     if not words: return "XXXX"
-    
     if len(words) >= 4:
         return "".join([w[0] for w in words[:4]])
     elif len(words) >= 2:
@@ -1091,30 +1028,24 @@ def generate_sku_parts(product_name):
         w1 = words[0][:2]
         return (w1 + "XX").ljust(4, 'X')[:4]
 
-# --- STAGE UPLOAD DATA ---
 def stage_products_for_upload(matrix_df):
     if matrix_df.empty: return pd.DataFrame(), []
-    
     new_rows = []
     errors = []
-    # Untappd columns are required here
     required = ['Untappd_Brewery', 'Untappd_Product', 'Untappd_ABV', 'Untappd_Style', 'Untappd_Desc']
     
     for idx, row in matrix_df.iterrows():
-        # Check if columns exist (sanity check)
         missing_cols = [c for c in required if c not in row.index]
         if missing_cols:
-             errors.append(f"Row {idx+1}: Missing columns {', '.join(missing_cols)}. Please run Search in Tab 2 first.")
+             errors.append(f"Row {idx+1}: Missing columns. Please run Search in Tab 2 first.")
              continue
-             
         missing_vals = [field for field in required if not str(row.get(field, '')).strip()]
         if missing_vals:
-            errors.append(f"Row {idx+1} ({row.get('Supplier_Name', '')} {row.get('Product_Name', '')}): Empty fields for {', '.join(missing_vals)}. Please edit manually in Tab 3.")
+            errors.append(f"Row {idx+1}: Empty fields for {', '.join(missing_vals)}. Please edit manually in Tab 3.")
             continue
 
         for i in range(1, 4):
             fmt_val = str(row.get(f'Format{i}', '')).strip()
-            
             if fmt_val and fmt_val.lower() not in ['nan', 'none']:
                 new_row = {
                     'untappd_brewery': row['Untappd_Brewery'],
@@ -1133,25 +1064,20 @@ def stage_products_for_upload(matrix_df):
                     'Variant_Name': '', 
                     'Weight': 0.0,
                     'Keg_Connector': '',
-                    'Attribute_5': 'Rotational Product', # <--- UPDATED CASING
-                    'Type': row.get('Type', 'Beer') # <--- PASS TYPE
+                    'Attribute_5': 'Rotational Product',
+                    'Type': row.get('Type', 'Beer')
                 }
                 new_rows.append(new_row)
-                
     return pd.DataFrame(new_rows), errors
-
 
 # ==========================================
 # 2. SESSION & SIDEBAR
 # ==========================================
 
-# Initialize Session State
 if 'header_data' not in st.session_state: st.session_state.header_data = None
 if 'line_items' not in st.session_state: st.session_state.line_items = None
 if 'matrix_data' not in st.session_state: st.session_state.matrix_data = None
 if 'upload_data' not in st.session_state: st.session_state.upload_data = None 
-if 'checker_data' not in st.session_state: st.session_state.checker_data = None
-# Master suppliers now loaded via cache from Cin7 API
 if 'master_suppliers' not in st.session_state: st.session_state.master_suppliers = fetch_cin7_brands()
 if 'drive_files' not in st.session_state: st.session_state.drive_files = []
 if 'selected_drive_id' not in st.session_state: st.session_state.selected_drive_id = None
@@ -1159,12 +1085,10 @@ if 'selected_drive_name' not in st.session_state: st.session_state.selected_driv
 if 'shopify_logs' not in st.session_state: st.session_state.shopify_logs = []
 if 'untappd_logs' not in st.session_state: st.session_state.untappd_logs = []
 if 'cin7_all_suppliers' not in st.session_state: st.session_state.cin7_all_suppliers = fetch_all_cin7_suppliers_cached()
-
-# INIT KEYS FOR REFRESH
 if 'line_items_key' not in st.session_state: st.session_state.line_items_key = 0
 if 'matrix_key' not in st.session_state: st.session_state.matrix_key = 0
+if 'upload_generated' not in st.session_state: st.session_state.upload_generated = False # STATE FLAG
 
-# --- SIDEBAR ---
 with st.sidebar:
     st.header("Settings")
     if "GOOGLE_API_KEY" in st.secrets:
@@ -1173,27 +1097,17 @@ with st.sidebar:
     else:
         api_key = st.text_input("Enter API Key", type="password")
 
-    # --- DEBUGGING TOOL ---
     if st.button("🛠️ List Available Models"):
         if api_key:
             try:
                 client = genai.Client(api_key=api_key)
                 models = client.models.list()
                 st.write("### Gemini Models Found:")
-                found = False
                 for m in models:
-                    if "gemini" in m.name.lower():
-                        st.code(f"{m.name}")
-                        found = True
-                if not found:
-                    st.warning("No Gemini models found.")
-            except Exception as e:
-                st.error(f"Error listing models: {e}")
-        else:
-            st.warning("Enter API Key first.")
+                    if "gemini" in m.name.lower(): st.code(f"{m.name}")
+            except Exception as e: st.error(f"Error: {e}")
 
     st.divider()
-    # --- CONNECTION STATUS DISPLAY ---
     with st.expander("🔌 Connection Status", expanded=False):
         st.write(f"**Gemini AI:** {'✅ Ready' if api_key else '❌ Missing'}")
         if "shopify" in st.secrets: st.write(f"**Shopify:** ✅ `{st.secrets['shopify'].get('shop_url', 'Unknown')}`")
@@ -1204,12 +1118,9 @@ with st.sidebar:
         else: st.write("**Untappd:** ❌ Missing")
         if "connections" in st.secrets and "gsheets" in st.secrets["connections"]:
             st.write("**GSheets Auth:** ✅ Connected")
-            st.markdown("[🔗 Style Sheet](https://docs.google.com/spreadsheets/d/1Skd85vSu3e16z9iAVG8bZjhwqIWRnUxZXiVv1QbmPHA)")
         else: st.write("**GSheets Auth:** ❌ Missing")
 
     st.divider()
-    
-    st.subheader("🧪 The Lab")
     with st.form("teaching_form"):
         st.caption("Test a new rule here. Press Ctrl+Enter to apply.")
         custom_rule = st.text_area("Inject Temporary Rule:", height=100)
@@ -1236,13 +1147,12 @@ with tab_upload:
         target_stream = uploaded_file
         source_name = uploaded_file.name
 
-# --- GOOGLE DRIVE IN MAIN BODY ---
 with tab_drive:
     col_d1, col_d2 = st.columns([3, 1])
     with col_d1:
         folder_id = st.text_input("Drive Folder ID", help="Copy the ID string from the URL")
     with col_d2:
-        st.write("") # Spacer
+        st.write("")
         st.write("")
         if st.button("🔍 Scan Folder"):
             if folder_id:
@@ -1250,12 +1160,9 @@ with tab_drive:
                     with st.spinner("Scanning..."):
                         files = list_files_in_folder(folder_id)
                         st.session_state.drive_files = files
-                    if files:
-                        st.success(f"Found {len(files)} PDFs!")
-                    else:
-                        st.warning("No PDFs found or Access Denied.")
-                except Exception as e:
-                    st.error(f"Error: {e}")
+                    if files: st.success(f"Found {len(files)} PDFs!")
+                    else: st.warning("No PDFs found.")
+                except Exception as e: st.error(f"Error: {e}")
 
     if st.session_state.drive_files:
         file_names = [f['name'] for f in st.session_state.drive_files]
@@ -1264,12 +1171,9 @@ with tab_drive:
             file_data = next(f for f in st.session_state.drive_files if f['name'] == selected_name)
             st.session_state.selected_drive_id = file_data['id']
             st.session_state.selected_drive_name = file_data['name']
-            if not uploaded_file:
-                source_name = selected_name
+            if not uploaded_file: source_name = selected_name
 
-# --- PROCESS BUTTON ---
 if st.button("🚀 Process Invoice", type="primary"):
-    
     if not uploaded_file and st.session_state.selected_drive_id:
         try:
             with st.status(f"Downloading {source_name}...", expanded=False) as status:
@@ -1282,10 +1186,7 @@ if st.button("🚀 Process Invoice", type="primary"):
     if target_stream and api_key:
         try:
             with st.status("Processing Document...", expanded=True) as status:
-                
-                # --- NEW CLIENT INIT ---
                 client = genai.Client(api_key=api_key)
-                
                 st.write("1. Converting PDF to Images (OCR Prep)...")
                 target_stream.seek(0)
                 images = convert_from_bytes(target_stream.read(), dpi=300)
@@ -1322,21 +1223,16 @@ if st.button("🚀 Process Invoice", type="primary"):
                 {full_text}
                 """
 
-                # --- GENERATION CALL (USING 2.5-flash) ---
                 max_retries = 3
                 for attempt in range(max_retries):
                     try:
-                        response = client.models.generate_content(
-                            model='gemini-2.5-flash', 
-                            contents=prompt
-                        )
-                        break # Success
+                        response = client.models.generate_content(model='gemini-2.5-flash', contents=prompt)
+                        break 
                     except Exception as e:
                         if "503" in str(e) and attempt < max_retries - 1:
                             time.sleep(2 ** (attempt + 1))
                             continue
-                        else:
-                            raise e
+                        else: raise e
                 
                 st.write("4. Parsing Response...")
                 try:
@@ -1347,31 +1243,25 @@ if st.button("🚀 Process Invoice", type="primary"):
                     st.stop()
                 
                 st.write("5. Finalizing Data...")
-                
                 st.session_state.header_data = pd.DataFrame([data['header']])
-                
-                # Init Cin7 columns
                 st.session_state.header_data['Cin7_Supplier_ID'] = ""
                 st.session_state.header_data['Cin7_Supplier_Name'] = ""
                 
                 df_lines = pd.DataFrame(data['line_items'])
-                
                 df_lines = clean_product_names(df_lines)
                 if st.session_state.master_suppliers:
                     df_lines = normalize_supplier_names(df_lines, st.session_state.master_suppliers)
 
-                # Initialize columns so Matrix generation doesn't fail on first run
                 df_lines['Shopify_Status'] = "Pending"
                 cols = ["Supplier_Name", "Collaborator", "Product_Name", "ABV", "Format", "Pack_Size", "Volume", "Item_Price", "Quantity"]
                 existing = [c for c in cols if c in df_lines.columns]
                 st.session_state.line_items = df_lines[existing]
                 
-                # Clear Logs
                 st.session_state.shopify_logs = []
                 st.session_state.untappd_logs = []
                 st.session_state.matrix_data = None
-                st.session_state.upload_data = None # Clear previous upload data
-                
+                st.session_state.upload_data = None
+                st.session_state.upload_generated = False # RESET
                 st.session_state.line_items_key += 1
                 
                 status.update(label="Processing Complete!", state="complete", expanded=False)
@@ -1386,49 +1276,29 @@ if st.button("🚀 Process Invoice", type="primary"):
 # ==========================================
 
 if st.session_state.header_data is not None:
-    if custom_rule:
-        st.success("✅ Used Custom Rules")
-
+    if custom_rule: st.success("✅ Used Custom Rules")
     st.divider()
     
-    # 1. CALCULATE STATUS
     df = st.session_state.line_items
     if 'Shopify_Status' in df.columns:
         unmatched_count = len(df[df['Shopify_Status'] != "✅ Match"])
-    else:
-        unmatched_count = len(df) 
-
+    else: unmatched_count = len(df) 
     all_matched = (unmatched_count == 0) and ('Shopify_Status' in df.columns)
 
-    # 5 TABS NOW
-    tabs = [
-        "📝 1. Line Items", 
-        "🔍 2. Prepare Search", 
-        "🍺 3. Untappd Matches", 
-        "☁️ 4. Product Upload", 
-        "🚀 5. Finalize PO"
-    ]
+    tabs = ["📝 1. Line Items", "🔍 2. Prepare Search", "🍺 3. Untappd Matches", "☁️ 4. Product Upload", "🚀 5. Finalize PO"]
     current_tabs = st.tabs(tabs)
     
     # --- TAB 1: LINE ITEMS ---
     with current_tabs[0]:
         st.subheader("1. Review & Edit Lines")
-        
         display_df = st.session_state.line_items.copy()
         if 'Shopify_Status' in display_df.columns:
             display_df.rename(columns={'Shopify_Status': 'Product_Status'}, inplace=True)
 
-        ideal_order = [
-            'Product_Status', 'Matched_Product', 'Matched_Variant', 'Image', 
-            'Supplier_Name', 'Product_Name', 'ABV', 'Format', 'Pack_Size', 
-            'Volume', 'Quantity', 'Item_Price', 'Collaborator', 
-            'Shopify_Variant_ID', 'London_SKU', 'Gloucester_SKU'
-        ]
-        
+        ideal_order = ['Product_Status', 'Matched_Product', 'Matched_Variant', 'Image', 'Supplier_Name', 'Product_Name', 'ABV', 'Format', 'Pack_Size', 'Volume', 'Quantity', 'Item_Price', 'Collaborator', 'Shopify_Variant_ID', 'London_SKU', 'Gloucester_SKU']
         final_cols = [c for c in ideal_order if c in display_df.columns]
         rem = [c for c in display_df.columns if c not in final_cols]
-        final_cols.extend(rem)
-        display_df = display_df[final_cols]
+        display_df = display_df[final_cols + rem]
         
         column_config = {
             "Image": st.column_config.ImageColumn("Img"),
@@ -1464,7 +1334,6 @@ if st.session_state.header_data is not None:
                         st.session_state.matrix_key += 1
                         st.success("Check Complete!")
                         st.rerun()
-        
         with col2:
              st.download_button("📥 Download Lines CSV", st.session_state.line_items.to_csv(index=False), "lines.csv")
         
@@ -1482,28 +1351,14 @@ if st.session_state.header_data is not None:
             
             st.info("👇 Review items. Select the correct **Type** for each product before searching.")
             
-            # Define Dropdown Options
-            type_options = [
-                "Beer", "Cider", "Spirits", "Softs", "Wine", 
-                "Merch", "Dispense", "Snacks", "PoS", "Other", "Free Of Charge PoS"
-            ]
-
-            # Configure Columns
+            type_options = ["Beer", "Cider", "Spirits", "Softs", "Wine", "Merch", "Dispense", "Snacks", "PoS", "Other", "Free Of Charge PoS"]
             prep_config = {
-                "Type": st.column_config.SelectboxColumn(
-                    "Product Type",
-                    options=type_options,
-                    required=True,
-                    width="medium"
-                )
+                "Type": st.column_config.SelectboxColumn("Product Type", options=type_options, required=True, width="medium")
             }
             
-            # Show only invoice-derived columns for editing
             base_cols = ['Supplier_Name', 'Type', 'Collaborator', 'Product_Name', 'ABV']
             fmt_cols = [c for c in st.session_state.matrix_data.columns if "Format" in c or "Pack" in c or "Volume" in c]
-            
-            display_cols = base_cols + fmt_cols
-            display_cols = [c for c in display_cols if c in st.session_state.matrix_data.columns]
+            display_cols = [c for c in (base_cols + fmt_cols) if c in st.session_state.matrix_data.columns]
 
             edited_prep = st.data_editor(
                 st.session_state.matrix_data[display_cols],
@@ -1517,12 +1372,9 @@ if st.session_state.header_data is not None:
                 st.session_state.matrix_data.update(edited_prep)
 
             st.divider()
-
             col_search, col_help = st.columns([1, 2])
             with col_search:
-                # --- VALIDATION CHECK ---
                 missing_types = st.session_state.matrix_data['Type'].replace('', pd.NA).isna().sum()
-                
                 if st.button("🔎 Search Untappd Details", type="primary", disabled=(missing_types > 0)):
                     if missing_types > 0:
                         st.error(f"Please select a Type for all {missing_types} rows above.")
@@ -1534,34 +1386,24 @@ if st.session_state.header_data is not None:
                              st.session_state.matrix_key += 1 
                              st.success("Search Complete! Go to Tab 3.")
                              st.rerun()
-                    else:
-                        st.error("Untappd Secrets Missing")
+                    else: st.error("Untappd Secrets Missing")
             with col_help:
                 if st.session_state.untappd_logs:
-                    with st.expander("View Search Logs"):
-                        st.write(st.session_state.untappd_logs)
-        else:
-            st.info("Run 'Check Inventory' in Tab 1 first.")
+                    with st.expander("View Search Logs"): st.write(st.session_state.untappd_logs)
+        else: st.info("Run 'Check Inventory' in Tab 1 first.")
 
     # --- TAB 3: REVIEW UNTAPPD MATCHES ---
     with current_tabs[2]:
         st.subheader("3. Review & Edit Untappd Matches")
-        
-        # Check if we have run the search (i.e., do Untappd columns exist?)
         has_untappd_cols = 'Untappd_Status' in st.session_state.matrix_data.columns if st.session_state.matrix_data is not None else False
         
         if not has_untappd_cols:
              st.warning("⚠️ Please run the search in 'Tab 2. Prepare Search' first.")
         
         elif st.session_state.matrix_data is not None and not st.session_state.matrix_data.empty:
-            
             st.info("👇 These details will be used to create products in Cin7. Edit manually if the match is wrong or missing.")
-
-            # Define the column order for the results view
             u_cols = ['Untappd_Status', 'Label_Thumb', 'Untappd_Brewery', 'Untappd_Product', 'Untappd_ABV', 'Untappd_Style', 'Untappd_Desc']
-            invoice_cols = ['Supplier_Name', 'Product_Name', 'Format1'] # Reference cols
-            
-            # Combine and filter for existence
+            invoice_cols = ['Supplier_Name', 'Product_Name', 'Format1'] 
             full_view = u_cols + [c for c in invoice_cols if c in st.session_state.matrix_data.columns]
             
             column_config = {
@@ -1582,18 +1424,16 @@ if st.session_state.header_data is not None:
                 column_config=column_config
             )
             
-            # Save edits immediately
-            if edited_matches is not None:
-                st.session_state.matrix_data = edited_matches
+            if edited_matches is not None: st.session_state.matrix_data = edited_matches
 
             st.divider()
-            
             if st.button("✨ Validate & Stage for Upload", type="primary"):
                 staged_df, errors = stage_products_for_upload(st.session_state.matrix_data)
                 if errors:
                     for e in errors: st.error(e)
                 else:
                     st.session_state.upload_data = staged_df
+                    st.session_state.upload_generated = False # RESET FLAG
                     st.success("Products staged successfully! Go to Tab 4.")
 
     # --- TAB 4: PRODUCT UPLOAD (NEW) ---
@@ -1602,15 +1442,12 @@ if st.session_state.header_data is not None:
         
         if st.session_state.upload_data is not None and not st.session_state.upload_data.empty:
 
-            # 1. GENERATE DATA BUTTON (Moved to Top)
             if st.button("🛠️ Generate Upload Data"):
                 supplier_map = fetch_supplier_codes()
                 format_map = fetch_format_codes()
                 weight_map, size_code_map = fetch_weight_map() 
                 keg_map = fetch_keg_codes() 
-                
                 today_str = datetime.now().strftime('%d%m%Y')
-                
                 processed_rows = []
                 
                 for idx, row in st.session_state.upload_data.iterrows():
@@ -1622,36 +1459,22 @@ if st.session_state.header_data is not None:
                     abv_val = str(row.get('untappd_abv', '')).strip()
                     attr_5 = row.get('Attribute_5', 'Rotational Product')
                     
-                    # 1. Base Weight & Size Code Lookup
                     lookup_key = (fmt_name.lower(), vol_name.lower())
                     unit_weight = weight_map.get(lookup_key, 0.0)
                     size_code = size_code_map.get(lookup_key, "00") 
-                    
-                    try:
-                        pack_mult = float(pack_val) if pack_val and str(pack_val).lower() != 'nan' else 1.0
+                    try: pack_mult = float(pack_val) if pack_val and str(pack_val).lower() != 'nan' else 1.0
                     except: pack_mult = 1.0
-                    
-                    # Is multipack?
                     is_multipack = pack_mult > 1.0
                     pack_int = int(pack_mult)
-
                     total_weight = unit_weight * pack_mult
 
-                    # 2. Keg Connector Logic
                     connectors = [""]
                     fmt_lower = fmt_name.lower()
-                    
-                    if "dolium" in fmt_lower and "us" in fmt_lower:
-                        connectors = ["US Sankey D-Type Coupler"]
-                    elif "poly" in fmt_lower:
-                        # THE SPLIT: Creates 2 rows for PolyKeg
-                        connectors = ["Sankey Coupler", "Keykeg Coupler"]
-                    elif "key" in fmt_lower:
-                        connectors = ["Keykeg Coupler"]
-                    elif "steel" in fmt_lower:
-                        connectors = ["Sankey Coupler"]
+                    if "dolium" in fmt_lower and "us" in fmt_lower: connectors = ["US Sankey D-Type Coupler"]
+                    elif "poly" in fmt_lower: connectors = ["Sankey Coupler", "Keykeg Coupler"]
+                    elif "key" in fmt_lower: connectors = ["Keykeg Coupler"]
+                    elif "steel" in fmt_lower: connectors = ["Sankey Coupler"]
                         
-                    # 3. Generate Rows (Loop handles split)
                     s_code = supplier_map.get(supp_name, "XXXX")
                     p_code = generate_sku_parts(prod_name)
                     f_code = format_map.get(fmt_name.lower(), "UN")
@@ -1659,45 +1482,28 @@ if st.session_state.header_data is not None:
                     for conn in connectors:
                         new_row = row.to_dict()
                         new_row['Family_SKU'] = f"{s_code}{p_code}-{today_str}-{idx}-{f_code}"
-                        
                         new_row['Family_Name'] = f"{supp_name} / {prod_name} / {abv_val}% / {fmt_name}"
-
                         new_row['Weight'] = total_weight
                         new_row['Keg_Connector'] = conn
                         new_row['Attribute_5'] = attr_5
                         
-                        # --- CALC SALES PRICE (For Display) ---
                         cost = float(new_row.get('item_price', 0))
                         new_row['Sales_Price'] = calculate_sell_price(cost, attr_5, fmt_name)
                         
-                        # --- VARIANT NAME GENERATION ---
                         var_name_base = vol_name
-                        if is_multipack:
-                            var_name_base = f"{pack_int} x {vol_name}"
+                        if is_multipack: var_name_base = f"{pack_int} x {vol_name}"
+                        if conn: new_row['Variant_Name'] = f"{var_name_base} - {conn}"
+                        else: new_row['Variant_Name'] = var_name_base
                         
-                        if conn:
-                            new_row['Variant_Name'] = f"{var_name_base} - {conn}"
-                        else:
-                            new_row['Variant_Name'] = var_name_base
-                        
-                        # --- VARIANT SKU GENERATION ---
-                        if is_multipack:
-                             sku_suffix = f"-{pack_int}X{size_code}"
-                        else:
-                             sku_suffix = f"-{size_code}"
-                             
+                        if is_multipack: sku_suffix = f"-{pack_int}X{size_code}"
+                        else: sku_suffix = f"-{size_code}"
                         if conn:
                             conn_code = keg_map.get(conn.lower(), "XX")
                             sku_suffix += f"-{conn_code}"
-                            
                         new_row['Variant_SKU'] = f"{new_row['Family_SKU']}{sku_suffix}"
-                            
                         processed_rows.append(new_row)
 
-                # Create Final DF
                 final_df = pd.DataFrame(processed_rows)
-                
-                # --- REORDER COLUMNS (Attribute_5 First) ---
                 all_cols = final_df.columns.tolist()
                 desired_order = ['Attribute_5', 'Sales_Price', 'item_price', 'Variant_Name', 'Variant_SKU', 'Family_Name']
                 final_order = []
@@ -1706,40 +1512,23 @@ if st.session_state.header_data is not None:
                 for c in all_cols:
                     if c not in final_order: final_order.append(c)
                 
-                final_df = final_df[final_order]
-                
-                st.session_state.upload_data = final_df
+                st.session_state.upload_data = final_df[final_order]
+                st.session_state.upload_generated = True # SET FLAG
                 st.success("Upload Data Generated (SKUs, Names, Weights, Connectors)!")
                 st.rerun()
 
-            # 2. UPLOAD BUTTON (Renamed & Moved Below)
-            if st.button("🚀 Upload To Cin7 (Families & Variants)"):
+            if st.button("🚀 Upload To Cin7 (Families & Variants)", disabled=not st.session_state.upload_generated):
                 if "cin7" in st.secrets:
                     unique_rows = st.session_state.upload_data.copy()
                     log_box = st.expander("Sync Log", expanded=True)
-                    
                     full_log = sync_product_to_cin7(unique_rows)
-                    
-                    for line in full_log:
-                        log_box.write(line)
-                        
+                    for line in full_log: log_box.write(line)
                     st.success("Sync Process Complete!")
-                else:
-                    st.error("Cin7 Secrets Missing")
+                else: st.error("Cin7 Secrets Missing")
 
-            # 3. DATA EDITOR
             upload_col_config = {
-                "Attribute_5": st.column_config.SelectboxColumn(
-                    "Core/Rotation",
-                    options=["Rotational Product", "Core Product"], 
-                    required=True,
-                    width="medium"
-                ),
-                "Sales_Price": st.column_config.NumberColumn(
-                    "Sales Price",
-                    format="£%.2f",
-                    disabled=True 
-                )
+                "Attribute_5": st.column_config.SelectboxColumn("Core/Rotation", options=["Rotational Product", "Core Product"], required=True, width="medium"),
+                "Sales_Price": st.column_config.NumberColumn("Sales Price", format="£%.2f", disabled=True)
             }
             
             current_cols = st.session_state.upload_data.columns.tolist()
@@ -1757,12 +1546,8 @@ if st.session_state.header_data is not None:
                 column_order=final_disp, 
                 key="upload_editor_final"
             )
-            
-            if edited_upload is not None:
-                st.session_state.upload_data = edited_upload
-            
-        else:
-            st.info("No data staged yet. Go to Tab 3 and click 'Validate & Stage'.")
+            if edited_upload is not None: st.session_state.upload_data = edited_upload
+        else: st.info("No data staged yet. Go to Tab 3 and click 'Validate & Stage'.")
 
     # --- TAB 5: HEADER / EXPORT ---
     with current_tabs[4]:
@@ -1782,61 +1567,36 @@ if st.session_state.header_data is not None:
 
         col_h1, col_h2 = st.columns([1, 2])
         with col_h1:
-            selected_supplier = st.selectbox(
-                "Cin7 Supplier Link:", 
-                options=cin7_list_names,
-                index=default_index,
-                key="header_supplier_select",
-                help="Click 'Fetch Cin7 Suppliers' in sidebar if empty."
-            )
-            
+            selected_supplier = st.selectbox("Cin7 Supplier Link:", options=cin7_list_names, index=default_index, key="header_supplier_select")
             if selected_supplier and not st.session_state.header_data.empty:
                 supp_data = next((s for s in st.session_state.cin7_all_suppliers if s['Name'] == selected_supplier), None)
                 if supp_data:
                     st.session_state.header_data.at[0, 'Cin7_Supplier_ID'] = supp_data['ID']
                     st.session_state.header_data.at[0, 'Cin7_Supplier_Name'] = supp_data['Name']
-        
         with col_h2:
             st.write("") 
             if not st.session_state.header_data.empty:
                 st.caption(f"ID: {st.session_state.header_data.iloc[0].get('Cin7_Supplier_ID', 'N/A')}")
 
-        edited_header = st.data_editor(
-            st.session_state.header_data, 
-            num_rows="fixed", 
-            width='stretch'
-        )
+        edited_header = st.data_editor(st.session_state.header_data, num_rows="fixed", width='stretch')
         st.download_button("📥 Download Header CSV", edited_header.to_csv(index=False), "header.csv")
-        
         st.divider()
-        
         po_location = st.selectbox("Select Delivery Location:", ["London", "Gloucester"], key="final_po_loc")
-        
         if st.button(f"📤 Export PO to Cin7 ({po_location})", type="primary", disabled=not all_matched):
-            if not all_matched:
-                st.error("Please resolve all missing products in Tab 2 before exporting.")
+            if not all_matched: st.error("Please resolve all missing products in Tab 2 before exporting.")
             elif "cin7" in st.secrets:
                 with st.spinner("Creating Purchase Order..."):
-                    success, msg, logs = create_cin7_purchase_order(
-                        st.session_state.header_data, 
-                        st.session_state.line_items, 
-                        po_location
-                    )
+                    success, msg, logs = create_cin7_purchase_order(st.session_state.header_data, st.session_state.line_items, po_location)
                     st.session_state.cin7_logs = logs
-                    
                     if success:
                         task_id = None
                         match = re.search(r'ID: ([a-f0-9\-]+)', msg)
                         if match: task_id = match.group(1)
-                        
                         st.success(msg)
-                        if task_id:
-                            st.link_button("🔗 Open PO in Cin7", f"https://inventory.dearsystems.com/PurchaseAdvanced#{task_id}")
+                        if task_id: st.link_button("🔗 Open PO in Cin7", f"https://inventory.dearsystems.com/PurchaseAdvanced#{task_id}")
                         st.balloons()
                     else:
                         st.error(msg)
                         with st.expander("Error Details"):
                             for log in logs: st.write(log)
-            else:
-                st.error("Cin7 Secrets missing.")
-
+            else: st.error("Cin7 Secrets missing.")
