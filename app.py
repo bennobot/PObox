@@ -311,30 +311,6 @@ def get_cin7_supplier(name):
     if "&" in name: return get_cin7_supplier(name.replace("&", "and"))
     return None
 
-# --- CIN7 FAMILY & PRODUCT CREATION (Debug Enhanced) ---
-def check_cin7_exists(endpoint, name_or_sku, is_sku=False):
-    """Generic check for Family or Product existence."""
-    headers = get_cin7_headers()
-    if not headers: return None
-    
-    param = "Sku" if is_sku else "Name"
-    safe_val = quote(name_or_sku)
-    url = f"{get_cin7_base_url()}/{endpoint}?{param}={safe_val}"
-    
-    try:
-        response = requests.get(url, headers=headers)
-        if response.status_code == 200:
-            data = response.json()
-            key = "Products" if endpoint == "product" else "ProductFamilies"
-            items = data.get(key, [])
-            for i in items:
-                # Exact Match
-                target_val = i["SKU"] if is_sku else i["Name"]
-                if target_val.lower() == name_or_sku.lower():
-                    return i["ID"]
-    except Exception: pass
-    return None
-
 def create_cin7_family_node(family_base_sku, family_base_name, brand_name, location_prefix):
     """Creates a Product Family if missing. Returns (ID, Message)."""
     prefix = "L-" if location_prefix == "L" else "G-"
@@ -396,82 +372,6 @@ def create_cin7_family_node(family_base_sku, family_base_name, brand_name, locat
             
     except Exception as e:
         return None, f"💥 Exception Family: {str(e)}"
-
-def create_cin7_variant(row_data, family_id, family_base_sku, family_base_name, location_prefix):
-    """Creates a Product Variant inside an existing family. Returns Message String."""
-    prefix = "L-" if location_prefix == "L" else "G-"
-    location_name = "London" if location_prefix == "L" else "Gloucester"
-    
-    var_sku_raw = row_data['Variant_SKU']
-    var_name_raw = row_data['Variant_Name']
-    
-    full_var_sku = f"{prefix}{var_sku_raw}"
-    full_var_name = f"{prefix}{family_base_name} / {var_name_raw}"
-    
-    # Check existence
-    existing_id = check_cin7_exists("product", full_var_sku, is_sku=True)
-    if existing_id: return f"✅ Exists ({full_var_sku})"
-
-    brand_name = row_data['untappd_brewery']
-    price = float(row_data['item_price']) if row_data['item_price'] else 0.0
-    weight = float(row_data['Weight'])
-    
-    internal_note = f"{full_var_sku} *** {full_var_name} *** {var_name_raw} *** {family_id}"
-    
-    tags = f"{location_name},Wholesale,{brand_name}"
-    
-    fmt = row_data['format']
-    style = row_data['untappd_style']
-    abv = row_data['untappd_abv']
-    
-    payload = {
-        "SKU": full_var_sku,
-        "Name": full_var_name,
-        "Category": location_name,
-        "Brand": brand_name,
-        "Type": "Stock",
-        "CostingMethod": "FIFO - Batch",
-        "DropShipMode": "No Drop Ship",
-        "DefaultLocation": location_name,
-        "Weight": weight,
-        "UOM": "Each",
-        "WeightUnits": "kg",
-        "PriceTier1": price,
-        "PriceTiers": {"Tier 1": price},
-        "ShortDescription": None,
-        "InternalNote": internal_note,
-        "Description": row_data['description'],
-        "AdditionalAttribute1": fmt,
-        "AdditionalAttribute2": style, 
-        "AdditionalAttribute3": fmt,
-        "AdditionalAttribute4": "Beer",
-        "AdditionalAttribute6": var_sku_raw, 
-        "AdditionalAttribute7": var_name_raw, 
-        "AdditionalAttribute9": style,
-        "AdditionalAttribute10": abv,
-        "AttributeSet": "Products",
-        "Tags": tags,
-        "Status": "Active",
-        "COGSAccount": "5101",
-        "RevenueAccount": "4000",
-        "InventoryAccount": "1001",
-        "Sellable": True,
-        "Option1": var_name_raw, 
-        "ProductFamilyID": family_id
-    }
-    
-    url = f"{get_cin7_base_url()}/product"
-    headers = get_cin7_headers()
-    
-    try:
-        response = requests.post(url, headers=headers, json=payload)
-        if response.status_code == 200:
-            return f"✅ Created Product {full_var_sku}"
-        else:
-            # DEBUG: Log raw error
-            return f"❌ Failed Product {full_var_sku} [HTTP {response.status_code}]: {response.text}"
-    except Exception as e:
-        return f"💥 Exception Product: {str(e)}"
         
 # --- MASTER SYNC FUNCTION ---
 def sync_product_to_cin7(upload_df):
@@ -1673,4 +1573,5 @@ if st.session_state.header_data is not None:
                             for log in logs: st.write(log)
             else:
                 st.error("Cin7 Secrets missing.")
+
 
