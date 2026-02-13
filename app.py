@@ -1120,11 +1120,27 @@ with st.sidebar:
             st.write("**GSheets Auth:** ✅ Connected")
         else: st.write("**GSheets Auth:** ❌ Missing")
 
-    st.divider()
+   st.subheader("🧪 The Lab")
     with st.form("teaching_form"):
         st.caption("Test a new rule here. Press Ctrl+Enter to apply.")
         custom_rule = st.text_area("Inject Temporary Rule:", height=100)
         st.form_submit_button("Set Rule")
+
+    # --- NEW: Rule Formatter ---
+    if custom_rule:
+        st.markdown("---")
+        st.caption("💾 **Save to Knowledge Base**")
+        st.caption("Copy this snippet into `SUPPLIER_RULEBOOK`:")
+        
+        # Try to guess the supplier name from the current processed invoice
+        current_supplier = "Unknown Supplier"
+        if st.session_state.header_data is not None and not st.session_state.header_data.empty:
+            current_supplier = st.session_state.header_data.iloc[0].get('Payable_To', 'Unknown Supplier')
+            
+        # Format correctly for Python dictionary
+        formatted_rule = f'   "{current_supplier}": """\n   {custom_rule.strip()}\n   """,\n'
+        
+        st.code(formatted_rule, language="python")
 
     st.divider()
     if st.button("Log Out"):
@@ -1600,3 +1616,4 @@ if st.session_state.header_data is not None:
                         with st.expander("Error Details"):
                             for log in logs: st.write(log)
             else: st.error("Cin7 Secrets missing.")
+
