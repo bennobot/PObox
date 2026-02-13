@@ -29,11 +29,13 @@ st.set_page_config(layout="wide", page_title="Brewery Invoice Parser")
 # ==========================================
 # CUSTOM STYLING
 # ==========================================
+# CUSTOM STYLING
+# ==========================================
 st.markdown("""
     <style>
         .block-container {
             padding-top: 1rem;
-            padding-bottom: 1rem;
+            padding-bottom: 15rem; /* <--- INCREASED PADDING HERE */
             padding-left: 1rem;
             padding-right: 1rem;
             max_width: 98%;
@@ -1836,3 +1838,4 @@ if st.session_state.header_data is not None:
                             for log in logs: st.write(log)
             else:
                 st.error("Cin7 Secrets missing.")
+
