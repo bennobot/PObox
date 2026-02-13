@@ -107,21 +107,24 @@ def download_file_from_drive(file_id):
         st.error(f"Download Error: {e}")
         return None
 
-# --- 1B. UNTAPPD LOGIC (Updated) ---
+# --- 1B. UNTAPPD LOGIC (Updated with & -> and conversion) ---
 def search_untappd_item(supplier, product):
     if "untappd" not in st.secrets: return None
     creds = st.secrets["untappd"]
     base_url = creds.get("base_url", "https://business.untappd.com/api/v1")
     token = creds.get("api_token")
     
-    # 1. Clean Supplier: Remove "Brewing", "Ltd", "LLP" etc to increase match rate
-    # e.g. "Anspach & Hobday Ltd" -> "Anspach & Hobday"
-    clean_supp = re.sub(r'(?i)\b(ltd|limited|llp|plc|brewing|brewery|co\.?)\b', '', str(supplier)).strip()
-    clean_prod = str(product).strip()
+    # 1. Convert & to 'and' FIRST (Handle "Salt & Steel" -> "Salt and Steel")
+    # We add spaces around 'and' to ensure we don't accidentally merge words (e.g. Salt&Steel -> SaltandSteel)
+    raw_supp = str(supplier).replace("&", " and ")
+    raw_prod = str(product).replace("&", " and ")
 
-    # 2. Combine and Hyphenate (User Preference)
-    # We split by whitespace and rejoin with single hyphens. 
-    # This prevents "Cloudwater   Pale" turning into "Cloudwater---Pale"
+    # 2. Clean Supplier: Remove "Brewing", "Ltd", "LLP" etc
+    clean_supp = re.sub(r'(?i)\b(ltd|limited|llp|plc|brewing|brewery|co\.?)\b', '', raw_supp).strip()
+    clean_prod = raw_prod.strip()
+
+    # 3. Combine, Split by whitespace, and Rejoin with Hyphens
+    # .split() automatically handles multiple spaces created by step 1
     parts = f"{clean_supp} {clean_prod}".split()
     query_str = "-".join(parts)
     
@@ -137,7 +140,6 @@ def search_untappd_item(supplier, product):
             items = data.get('items', [])
             if items:
                 best = items[0] 
-                # Success: Return data + the query used (for logging)
                 return {
                     "untappd_id": best.get("untappd_id"),
                     "name": best.get("name"),
@@ -151,7 +153,7 @@ def search_untappd_item(supplier, product):
                 }
     except: pass
     
-    # Failure: Return just the query used so we can see what went wrong in the logs
+    # Return query used for debugging in the log
     return {"query_used": query_str}
 
 def batch_untappd_lookup(matrix_df):
@@ -1643,4 +1645,5 @@ if st.session_state.header_data is not None:
                             for log in logs: st.write(log)
             else:
                 st.error("Cin7 Secrets missing.")
+
 
