@@ -392,7 +392,7 @@ def create_cin7_family_node(family_base_sku, family_base_name, brand_name, locat
         return None, f"💥 Exception Family: {str(e)}"
 
 def create_cin7_variant(row_data, family_id, family_base_sku, family_base_name, location_prefix):
-    """Creates a Product Variant inside an existing family. Returns Message String."""
+    """Creates a Product Variant inside an existing family. OR Links existing product to family."""
     prefix = "L-" if location_prefix == "L" else "G-"
     location_name = "London" if location_prefix == "L" else "Gloucester"
     
@@ -402,10 +402,44 @@ def create_cin7_variant(row_data, family_id, family_base_sku, family_base_name, 
     full_var_sku = f"{prefix}{var_sku_raw}"
     full_var_name = f"{prefix}{family_base_name} / {var_name_raw}"
     
-    # Check existence
-    existing_id = check_cin7_exists("product", full_var_sku, is_sku=True)
-    if existing_id: return f"✅ Exists ({full_var_sku})"
+    headers = get_cin7_headers()
+    base_url = get_cin7_base_url()
 
+    # --- 1. CHECK EXISTENCE & LINK STATUS ---
+    # We fetch the full product data to check the 'ProductFamilyID'
+    check_url = f"{base_url}/product?Sku={quote(full_var_sku)}"
+    existing_product = None
+    
+    try:
+        r_check = requests.get(check_url, headers=headers)
+        if r_check.status_code == 200:
+            data = r_check.json()
+            if data.get("Products"):
+                existing_product = data["Products"][0]
+    except Exception: pass
+
+    if existing_product:
+        current_fam = existing_product.get('ProductFamilyID')
+        
+        # Case A: Already linked correctly
+        if current_fam == family_id:
+            return f"✅ Exists & Linked ({full_var_sku})"
+        
+        # Case B: Exists but orphaned or wrong family -> UPDATE IT
+        # We update the ProductFamilyID and send the object back via PUT
+        existing_product['ProductFamilyID'] = family_id
+        
+        put_url = f"{base_url}/product"
+        try:
+            r_put = requests.put(put_url, headers=headers, json=existing_product)
+            if r_put.status_code == 200:
+                return f"🔗 Existed -> Re-Linked to Family ({full_var_sku})"
+            else:
+                return f"⚠️ Exists but Link Failed [HTTP {r_put.status_code}]: {r_put.text}"
+        except Exception as e:
+            return f"💥 Update Exception: {e}"
+
+    # --- 2. CREATE NEW PRODUCT (If not exists) ---
     brand_name = row_data['untappd_brewery']
     price = float(row_data['item_price']) if row_data['item_price'] else 0.0
     weight = float(row_data['Weight'])
@@ -454,8 +488,7 @@ def create_cin7_variant(row_data, family_id, family_base_sku, family_base_name, 
         "ProductFamilyID": family_id
     }
     
-    url = f"{get_cin7_base_url()}/product"
-    headers = get_cin7_headers()
+    url = f"{base_url}/product"
     
     try:
         response = requests.post(url, headers=headers, json=payload)
@@ -1666,3 +1699,4 @@ if st.session_state.header_data is not None:
                             for log in logs: st.write(log)
             else:
                 st.error("Cin7 Secrets missing.")
+
