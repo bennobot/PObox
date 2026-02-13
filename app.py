@@ -442,7 +442,7 @@ def create_cin7_variant(row_data, family_id, family_base_sku, family_base_name, 
             return f"❌ Failed Product {full_var_sku} [HTTP {response.status_code}]: {response.text}"
     except Exception as e:
         return f"💥 Exception Product: {str(e)}"
-        
+
 # --- MASTER SYNC FUNCTION ---
 def sync_product_to_cin7(upload_df):
     """Iterates through staged data and syncs Families + Variants."""
@@ -1643,6 +1643,7 @@ if st.session_state.header_data is not None:
                             for log in logs: st.write(log)
             else:
                 st.error("Cin7 Secrets missing.")
+
 
 
 
