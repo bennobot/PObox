@@ -1120,7 +1120,7 @@ with st.sidebar:
             st.write("**GSheets Auth:** ✅ Connected")
         else: st.write("**GSheets Auth:** ❌ Missing")
 
-   st.subheader("🧪 The Lab")
+    st.subheader("🧪 The Lab")
     with st.form("teaching_form"):
         st.caption("Test a new rule here. Press Ctrl+Enter to apply.")
         custom_rule = st.text_area("Inject Temporary Rule:", height=100)
@@ -1616,4 +1616,5 @@ if st.session_state.header_data is not None:
                         with st.expander("Error Details"):
                             for log in logs: st.write(log)
             else: st.error("Cin7 Secrets missing.")
+
 
