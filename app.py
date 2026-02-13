@@ -468,15 +468,16 @@ def create_cin7_variant(row_data, family_id, family_base_sku, family_base_name, 
         weight = float(row_data['Weight'])
         internal_note = f"{full_var_sku} *** {full_var_name} *** {var_name_raw} *** {family_id}"
         tags = f"{location_name},Wholesale,{brand_name}"
-        
+                
         # Attribute Mapping
         fmt = row_data.get('format', '')
         style = row_data.get('untappd_style', '')
         abv = row_data.get('untappd_abv', '')
         keg_connector = row_data.get('Keg_Connector', '')
         prod_name_only = row_data.get('untappd_product', '')
-        attr_5 = row_data.get('Attribute_5', 'Rotational Product') # <--- UPDATED CASING
-        
+        attr_5 = row_data.get('Attribute_5', 'Rotational Product')
+        prod_type = row_data.get('Type', 'Beer') # <--- GET TYPE
+      
         # --- RE-CALCULATE SALES PRICE (Ensure Integrity) ---
         # We re-calculate here to ensure if User changed Attr 5 in table, price matches.
         cost_price = float(row_data.get('item_price', 0))
@@ -1032,7 +1033,13 @@ def create_product_matrix(df):
     matrix_rows = []
     
     for name, group in grouped:
-        row = {'Supplier_Name': name[0], 'Collaborator': name[1], 'Product_Name': name[2], 'ABV': name[3]}
+        row = {
+            'Supplier_Name': name[0], 
+            'Type': 'Beer',  # <--- NEW COLUMN (Default)
+            'Collaborator': name[1], 
+            'Product_Name': name[2], 
+            'ABV': name[3]
+        }
         for i, (_, item) in enumerate(group.iterrows()):
             if i >= 3: break
             suffix = str(i + 1)
@@ -1045,11 +1052,11 @@ def create_product_matrix(df):
         
     matrix_df = pd.DataFrame(matrix_rows)
     
-    # --- ONLY INIT STATUS. DO NOT INIT UNTAPPD COLUMNS YET ---
     if 'Untappd_Status' not in matrix_df.columns:
         matrix_df['Untappd_Status'] = "" 
 
-    base_cols = ['Supplier_Name', 'Collaborator', 'Product_Name', 'ABV']
+    # Update Base Cols to include Type in specific order
+    base_cols = ['Supplier_Name', 'Type', 'Collaborator', 'Product_Name', 'ABV']
     format_cols = []
     for i in range(1, 4):
         format_cols.extend([f'Format{i}', f'Pack_Size{i}', f'Volume{i}', f'Item_Price{i}', f'Create{i}'])
@@ -1091,11 +1098,9 @@ def stage_products_for_upload(matrix_df):
     
     new_rows = []
     errors = []
-    # Untappd columns are required here
     required = ['Untappd_Brewery', 'Untappd_Product', 'Untappd_ABV', 'Untappd_Style', 'Untappd_Desc']
     
     for idx, row in matrix_df.iterrows():
-        # Check if columns exist (sanity check)
         missing_cols = [c for c in required if c not in row.index]
         if missing_cols:
              errors.append(f"Row {idx+1}: Missing columns {', '.join(missing_cols)}. Please run Search in Tab 2 first.")
@@ -1127,7 +1132,8 @@ def stage_products_for_upload(matrix_df):
                     'Variant_Name': '', 
                     'Weight': 0.0,
                     'Keg_Connector': '',
-                    'Attribute_5': 'Rotational Product' # <--- UPDATED CASING
+                    'Attribute_5': 'Rotational Product',
+                    'Type': row.get('Type', 'Beer') # <--- PASS TYPE HERE
                 }
                 new_rows.append(new_row)
                 
@@ -1465,7 +1471,7 @@ if st.session_state.header_data is not None:
             with st.expander("🕵️ Debug Logs", expanded=False):
                 st.markdown("\n".join(st.session_state.shopify_logs))
 
-    # --- TAB 2: PREPARE MISSING ITEMS ---
+   # --- TAB 2: PREPARE MISSING ITEMS ---
     with current_tabs[1]:
         st.subheader("2. Prepare Missing Items for Search")
         
@@ -1473,37 +1479,54 @@ if st.session_state.header_data is not None:
             st.success("🎉 All products matched to Shopify! No action needed here.")
         elif st.session_state.matrix_data is not None and not st.session_state.matrix_data.empty:
             
-            st.info("👇 Review these items from the Invoice. Fix any typos before searching Untappd.")
+            st.info("👇 Review items. Select the correct **Type** for each product before searching.")
+            
+            # Define Dropdown Options
+            type_options = [
+                "Beer", "Cider", "Spirits", "Softs", "Wine", 
+                "Merch", "Dispense", "Snacks", "PoS", "Other", "Free Of Charge PoS"
+            ]
+
+            # Configure Columns
+            prep_config = {
+                "Type": st.column_config.SelectboxColumn(
+                    "Product Type",
+                    options=type_options,
+                    required=True,
+                    width="medium"
+                )
+            }
             
             # Show only invoice-derived columns for editing
-            base_cols = ['Supplier_Name', 'Collaborator', 'Product_Name', 'ABV']
-            # Add dynamic format columns if they exist
+            base_cols = ['Supplier_Name', 'Type', 'Collaborator', 'Product_Name', 'ABV']
             fmt_cols = [c for c in st.session_state.matrix_data.columns if "Format" in c or "Pack" in c or "Volume" in c]
             
             display_cols = base_cols + fmt_cols
-            # Filter to ensure we only show columns that actually exist
             display_cols = [c for c in display_cols if c in st.session_state.matrix_data.columns]
 
             edited_prep = st.data_editor(
                 st.session_state.matrix_data[display_cols],
                 num_rows="fixed",
                 width='stretch',
+                column_config=prep_config,
                 key=f"prep_editor_{st.session_state.matrix_key}"
             )
             
-            # Update the main state with these edits (preserving other columns if any)
             if edited_prep is not None:
-                # We merge the edits back into the main matrix
                 st.session_state.matrix_data.update(edited_prep)
 
             st.divider()
 
             col_search, col_help = st.columns([1, 2])
             with col_search:
-                if st.button("🔎 Search Untappd Details", type="primary"):
-                    if "untappd" in st.secrets:
+                # --- VALIDATION CHECK ---
+                missing_types = st.session_state.matrix_data['Type'].replace('', pd.NA).isna().sum()
+                
+                if st.button("🔎 Search Untappd Details", type="primary", disabled=(missing_types > 0)):
+                    if missing_types > 0:
+                        st.error(f"Please select a Type for all {missing_types} rows above.")
+                    elif "untappd" in st.secrets:
                         with st.spinner("Searching Untappd API..."):
-                             # This adds the Untappd columns and populates matches
                              updated_matrix, u_logs = batch_untappd_lookup(st.session_state.matrix_data)
                              st.session_state.matrix_data = updated_matrix
                              st.session_state.untappd_logs = u_logs
@@ -1838,4 +1861,5 @@ if st.session_state.header_data is not None:
                             for log in logs: st.write(log)
             else:
                 st.error("Cin7 Secrets missing.")
+
 
