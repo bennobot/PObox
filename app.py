@@ -1569,52 +1569,81 @@ if st.session_state.header_data is not None:
     with current_tabs[4]:
         st.subheader("5. Finalize & Export")
         
-        current_payee = "Unknown"
-        if not st.session_state.header_data.empty:
-             current_payee = st.session_state.header_data.iloc[0]['Payable_To']
-        
-        cin7_list_names = [s['Name'] for s in st.session_state.cin7_all_suppliers]
-        default_index = 0
-        if cin7_list_names and current_payee:
-            match, score = process.extractOne(current_payee, cin7_list_names)
-            if score > 60:
-                try: default_index = cin7_list_names.index(match)
-                except ValueError: default_index = 0
-
-        col_h1, col_h2 = st.columns([1, 2])
-        with col_h1:
-            selected_supplier = st.selectbox("Cin7 Supplier Link:", options=cin7_list_names, index=default_index, key="header_supplier_select")
-            if selected_supplier and not st.session_state.header_data.empty:
-                supp_data = next((s for s in st.session_state.cin7_all_suppliers if s['Name'] == selected_supplier), None)
-                if supp_data:
-                    st.session_state.header_data.at[0, 'Cin7_Supplier_ID'] = supp_data['ID']
-                    st.session_state.header_data.at[0, 'Cin7_Supplier_Name'] = supp_data['Name']
-        with col_h2:
-            st.write("") 
+        # --- LOCK LOGIC ---
+        if not all_matched:
+            st.error("🔒 **Tab Locked**")
+            st.warning(f"You have **{unmatched_count} unmatched items**. Please resolve them in **Tab 1** (Check Inventory) or **Tab 2** (Search Untappd) before finalizing the Purchase Order.")
+        else:
+            # --- UNLOCKED CONTENT ---
+            current_payee = "Unknown"
             if not st.session_state.header_data.empty:
-                st.caption(f"ID: {st.session_state.header_data.iloc[0].get('Cin7_Supplier_ID', 'N/A')}")
+                 current_payee = st.session_state.header_data.iloc[0]['Payable_To']
+            
+            cin7_list_names = [s['Name'] for s in st.session_state.cin7_all_suppliers]
+            default_index = 0
+            if cin7_list_names and current_payee:
+                match, score = process.extractOne(current_payee, cin7_list_names)
+                if score > 60:
+                    try: default_index = cin7_list_names.index(match)
+                    except ValueError: default_index = 0
 
-        edited_header = st.data_editor(st.session_state.header_data, num_rows="fixed", width='stretch')
-        st.download_button("📥 Download Header CSV", edited_header.to_csv(index=False), "header.csv")
-        st.divider()
-        po_location = st.selectbox("Select Delivery Location:", ["London", "Gloucester"], key="final_po_loc")
-        if st.button(f"📤 Export PO to Cin7 ({po_location})", type="primary", disabled=not all_matched):
-            if not all_matched: st.error("Please resolve all missing products in Tab 2 before exporting.")
-            elif "cin7" in st.secrets:
-                with st.spinner("Creating Purchase Order..."):
-                    success, msg, logs = create_cin7_purchase_order(st.session_state.header_data, st.session_state.line_items, po_location)
-                    st.session_state.cin7_logs = logs
-                    if success:
-                        task_id = None
-                        match = re.search(r'ID: ([a-f0-9\-]+)', msg)
-                        if match: task_id = match.group(1)
-                        st.success(msg)
-                        if task_id: st.link_button("🔗 Open PO in Cin7", f"https://inventory.dearsystems.com/PurchaseAdvanced#{task_id}")
-                        st.balloons()
-                    else:
-                        st.error(msg)
-                        with st.expander("Error Details"):
-                            for log in logs: st.write(log)
-            else: st.error("Cin7 Secrets missing.")
+            col_h1, col_h2 = st.columns([1, 2])
+            with col_h1:
+                selected_supplier = st.selectbox(
+                    "Cin7 Supplier Link:", 
+                    options=cin7_list_names,
+                    index=default_index,
+                    key="header_supplier_select",
+                    help="Click 'Fetch Cin7 Suppliers' in sidebar if empty."
+                )
+                
+                if selected_supplier and not st.session_state.header_data.empty:
+                    supp_data = next((s for s in st.session_state.cin7_all_suppliers if s['Name'] == selected_supplier), None)
+                    if supp_data:
+                        st.session_state.header_data.at[0, 'Cin7_Supplier_ID'] = supp_data['ID']
+                        st.session_state.header_data.at[0, 'Cin7_Supplier_Name'] = supp_data['Name']
+            
+            with col_h2:
+                st.write("") 
+                if not st.session_state.header_data.empty:
+                    st.caption(f"ID: {st.session_state.header_data.iloc[0].get('Cin7_Supplier_ID', 'N/A')}")
+
+            edited_header = st.data_editor(
+                st.session_state.header_data, 
+                num_rows="fixed", 
+                width='stretch'
+            )
+            st.download_button("📥 Download Header CSV", edited_header.to_csv(index=False), "header.csv")
+            
+            st.divider()
+            
+            po_location = st.selectbox("Select Delivery Location:", ["London", "Gloucester"], key="final_po_loc")
+            
+            if st.button(f"📤 Export PO to Cin7 ({po_location})", type="primary"):
+                if "cin7" in st.secrets:
+                    with st.spinner("Creating Purchase Order..."):
+                        success, msg, logs = create_cin7_purchase_order(
+                            st.session_state.header_data, 
+                            st.session_state.line_items, 
+                            po_location
+                        )
+                        st.session_state.cin7_logs = logs
+                        
+                        if success:
+                            task_id = None
+                            match = re.search(r'ID: ([a-f0-9\-]+)', msg)
+                            if match: task_id = match.group(1)
+                            
+                            st.success(msg)
+                            if task_id:
+                                st.link_button("🔗 Open PO in Cin7", f"https://inventory.dearsystems.com/PurchaseAdvanced#{task_id}")
+                            st.balloons()
+                        else:
+                            st.error(msg)
+                            with st.expander("Error Details"):
+                                for log in logs: st.write(log)
+                else:
+                    st.error("Cin7 Secrets missing.")
+
 
 
