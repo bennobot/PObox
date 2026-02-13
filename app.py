@@ -1601,44 +1601,8 @@ if st.session_state.header_data is not None:
         st.subheader("4. Product Upload Stage")
         
         if st.session_state.upload_data is not None and not st.session_state.upload_data.empty:
-            
-            # --- CHECK FAMILY BUTTON ---
-            if st.button("🔍 Check Family Existence (L- & G-)"):
-                if "cin7" in st.secrets:
-                    unique_families = st.session_state.upload_data['Family_Name'].unique()
-                    results = []
-                    prog_bar = st.progress(0)
-                    for i, fam in enumerate(unique_families):
-                        prog_bar.progress((i + 1) / len(unique_families))
-                        l_name = f"L-{fam}"
-                        g_name = f"G-{fam}"
-                        l_exists = check_cin7_exists("productFamily", l_name)
-                        g_exists = check_cin7_exists("productFamily", g_name)
-                        results.append({
-                            "Family Name": fam,
-                            "L- Version": "✅ Exists" if l_exists else "❌ Missing",
-                            "G- Version": "✅ Exists" if g_exists else "❌ Missing"
-                        })
-                    st.dataframe(pd.DataFrame(results), width=1000)
-                else:
-                    st.error("Cin7 Secrets Missing")
-            
-            # --- CREATE FAMILY & PRODUCTS BUTTON ---
-            if st.button("🚀 Sync with Cin7 (Families & Variants)"):
-                if "cin7" in st.secrets:
-                    unique_rows = st.session_state.upload_data.copy()
-                    log_box = st.expander("Sync Log", expanded=True)
-                    
-                    full_log = sync_product_to_cin7(unique_rows)
-                    
-                    for line in full_log:
-                        log_box.write(line)
-                        
-                    st.success("Sync Process Complete!")
-                else:
-                    st.error("Cin7 Secrets Missing")
 
-            # --- GENERATE UPLOAD DATA BUTTON ---
+            # 1. GENERATE DATA BUTTON (Moved to Top)
             if st.button("🛠️ Generate Upload Data"):
                 supplier_map = fetch_supplier_codes()
                 format_map = fetch_format_codes()
@@ -1734,24 +1698,13 @@ if st.session_state.header_data is not None:
                 final_df = pd.DataFrame(processed_rows)
                 
                 # --- REORDER COLUMNS (Attribute_5 First) ---
-                # 1. Get all columns
                 all_cols = final_df.columns.tolist()
-                
-                # 2. Define desired start
                 desired_order = ['Attribute_5', 'Sales_Price', 'item_price', 'Variant_Name', 'Variant_SKU', 'Family_Name']
-                
-                # 3. Construct final order list
                 final_order = []
-                
-                # Add desired columns if they exist
-                for col in desired_order:
-                    if col in all_cols:
-                        final_order.append(col)
-                
-                # Add remaining columns
-                for col in all_cols:
-                    if col not in final_order:
-                        final_order.append(col)
+                for c in desired_order:
+                    if c in all_cols: final_order.append(c)
+                for c in all_cols:
+                    if c not in final_order: final_order.append(c)
                 
                 final_df = final_df[final_order]
                 
@@ -1759,11 +1712,26 @@ if st.session_state.header_data is not None:
                 st.success("Upload Data Generated (SKUs, Names, Weights, Connectors)!")
                 st.rerun()
 
-            # --- CONFIGURE TAB 4 EDITOR ---
+            # 2. UPLOAD BUTTON (Renamed & Moved Below)
+            if st.button("🚀 Upload To Cin7 (Families & Variants)"):
+                if "cin7" in st.secrets:
+                    unique_rows = st.session_state.upload_data.copy()
+                    log_box = st.expander("Sync Log", expanded=True)
+                    
+                    full_log = sync_product_to_cin7(unique_rows)
+                    
+                    for line in full_log:
+                        log_box.write(line)
+                        
+                    st.success("Sync Process Complete!")
+                else:
+                    st.error("Cin7 Secrets Missing")
+
+            # 3. DATA EDITOR
             upload_col_config = {
                 "Attribute_5": st.column_config.SelectboxColumn(
                     "Core/Rotation",
-                    options=["Rotational Product", "Core Product"], # <--- UPDATED CASING
+                    options=["Rotational Product", "Core Product"], 
                     required=True,
                     width="medium"
                 ),
@@ -1774,12 +1742,8 @@ if st.session_state.header_data is not None:
                 )
             }
             
-            # --- FORCE COLUMN ORDER ---
-            # Even with df reordering, we must tell data_editor the order explicitly
             current_cols = st.session_state.upload_data.columns.tolist()
-            
             disp_order = ['Attribute_5', 'Sales_Price', 'item_price', 'Variant_Name', 'Variant_SKU']
-            
             final_disp = []
             for c in disp_order:
                 if c in current_cols: final_disp.append(c)
@@ -1790,11 +1754,10 @@ if st.session_state.header_data is not None:
                 st.session_state.upload_data,
                 width=2000,
                 column_config=upload_col_config,
-                column_order=final_disp, # <--- EXPLICIT ORDERING
+                column_order=final_disp, 
                 key="upload_editor_final"
             )
             
-            # Save edits immediately
             if edited_upload is not None:
                 st.session_state.upload_data = edited_upload
             
@@ -1876,3 +1839,4 @@ if st.session_state.header_data is not None:
                             for log in logs: st.write(log)
             else:
                 st.error("Cin7 Secrets missing.")
+
