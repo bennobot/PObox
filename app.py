@@ -377,12 +377,19 @@ def create_cin7_family_node(family_base_sku, family_base_name, brand_name, locat
         
         if response.status_code == 200:
             resp_data = response.json()
+            
+            # --- FIX: Parsing Logic Updated ---
+            # 1. Try direct ID (Standard behavior)
             new_id = resp_data.get('ID')
+            
+            # 2. If not found, look inside "ProductFamilies" list (Behavior seen in your logs)
+            if not new_id and "ProductFamilies" in resp_data and len(resp_data["ProductFamilies"]) > 0:
+                new_id = resp_data["ProductFamilies"][0].get("ID")
             
             if new_id:
                 return new_id, f"✅ Created Family {full_sku} (ID: {new_id})"
             else:
-                # DEBUG: API returned 200, but no ID found. Dump response to log.
+                # Still couldn't find it? Dump log.
                 return None, f"⚠️ HTTP 200 but No ID. Response: {json.dumps(resp_data)}"
         else:
             return None, f"❌ Failed Family {full_sku} [HTTP {response.status_code}]: {response.text}"
@@ -1666,3 +1673,4 @@ if st.session_state.header_data is not None:
                             for log in logs: st.write(log)
             else:
                 st.error("Cin7 Secrets missing.")
+
