@@ -392,7 +392,10 @@ def create_cin7_family_node(family_base_sku, family_base_name, brand_name, locat
         return None, f"💥 Exception Family: {str(e)}"
 
 def create_cin7_variant(row_data, family_id, family_base_sku, family_base_name, location_prefix):
-    """Creates a Product Variant inside an existing family. OR Links existing product to family."""
+    """
+    1. Ensures Product exists (Creates or Finds).
+    2. Links Product to Family by updating the Family's 'Products' list.
+    """
     prefix = "L-" if location_prefix == "L" else "G-"
     location_name = "London" if location_prefix == "L" else "Gloucester"
     
@@ -404,53 +407,144 @@ def create_cin7_variant(row_data, family_id, family_base_sku, family_base_name, 
     
     headers = get_cin7_headers()
     base_url = get_cin7_base_url()
+    
+    product_id = None
+    product_created = False
 
-    # --- 1. CHECK EXISTENCE & LINK STATUS ---
-    # We fetch the full product data to check the 'ProductFamilyID'
+    # ====================================================
+    # STEP 1: GET OR CREATE PRODUCT (TO GET ID)
+    # ====================================================
     
+    # A. Check if exists
     check_url = f"{base_url}/product?Sku={quote(full_var_sku)}"
-    existing_product = None
-    
     try:
         r_check = requests.get(check_url, headers=headers)
         if r_check.status_code == 200:
             data = r_check.json()
             if data.get("Products"):
-                existing_product = data["Products"][0]
+                product_id = data["Products"][0]["ID"]
     except Exception: pass
 
-    if existing_product:
-        current_fam = existing_product.get('ProductFamilyID')
+    # B. If not exists, Create it
+    if not product_id:
+        brand_name = row_data['untappd_brewery']
+        price = float(row_data['item_price']) if row_data['item_price'] else 0.0
+        weight = float(row_data['Weight'])
+        internal_note = f"{full_var_sku} *** {full_var_name} *** {var_name_raw} *** {family_id}"
+        tags = f"{location_name},Wholesale,{brand_name}"
+        fmt = row_data['format']
+        style = row_data['untappd_style']
+        abv = row_data['untappd_abv']
         
-        # Case A: Already linked correctly
-        if current_fam == family_id:
-            return f"✅ Exists & Linked ({full_var_sku})"
+        payload_prod = {
+            "SKU": full_var_sku,
+            "Name": full_var_name,
+            "Category": location_name,
+            "Brand": brand_name,
+            "Type": "Stock",
+            "CostingMethod": "FIFO - Batch",
+            "DropShipMode": "No Drop Ship",
+            "DefaultLocation": location_name,
+            "Weight": weight,
+            "UOM": "Each",
+            "WeightUnits": "kg",
+            "PriceTier1": price,
+            "PriceTiers": {"Tier 1": price},
+            "InternalNote": internal_note,
+            "Description": row_data['description'],
+            "AdditionalAttribute1": fmt,
+            "AdditionalAttribute2": style, 
+            "AdditionalAttribute3": fmt,
+            "AdditionalAttribute4": "Beer",
+            "AdditionalAttribute6": var_sku_raw, 
+            "AdditionalAttribute7": var_name_raw, 
+            "AdditionalAttribute9": style,
+            "AdditionalAttribute10": abv,
+            "AttributeSet": "Products",
+            "Tags": tags,
+            "Status": "Active",
+            "COGSAccount": "5101",
+            "RevenueAccount": "4000",
+            "InventoryAccount": "1001",
+            "Sellable": True,
+            # IMPORTANT: Do NOT set ProductFamilyID here. We link it via the Family PUT below.
+        }
         
-        # Case B: Exists but orphaned or wrong family -> UPDATE IT
-        existing_product['ProductFamilyID'] = family_id
-        
-        # --- KEY FIX: You MUST set Option1 for the link to work in the UI ---
-        # The Family expects Option1Name="Variant", so the Product must have Option1 set.
-        existing_product['Option1'] = var_name_raw
-        
-        # Ensure we don't send conflicting Options if the previous family had them
-        existing_product['Option2'] = None
-        existing_product['Option3'] = None
-        
-        # Remove Read-Only Fields that cause 400/409 Errors
-        read_only_fields = ['CreatedDate', 'LastModifiedOn']
-        for field in read_only_fields:
-            existing_product.pop(field, None)
-        
-        put_url = f"{base_url}/product"
         try:
-            r_put = requests.put(put_url, headers=headers, json=existing_product)
-            if r_put.status_code == 200:
-                return f"🔗 Existed -> Re-Linked to Family ({full_var_sku})"
+            r_create = requests.post(f"{base_url}/product", headers=headers, json=payload_prod)
+            if r_create.status_code == 200:
+                resp_data = r_create.json()
+                # Handle nested list return if applicable
+                if "Products" in resp_data and resp_data["Products"]:
+                    product_id = resp_data["Products"][0]["ID"]
+                elif "ID" in resp_data:
+                    product_id = resp_data["ID"]
+                product_created = True
             else:
-                return f"⚠️ Exists but Link Failed [HTTP {r_put.status_code}]: {r_put.text}"
+                return f"❌ Create Failed {full_var_sku}: {r_create.text}"
         except Exception as e:
-            return f"💥 Update Exception: {e}"
+            return f"💥 Create Ex: {e}"
+
+    if not product_id:
+        return f"❌ Could not retrieve Product ID for {full_var_sku}"
+
+    # ====================================================
+    # STEP 2: LINK TO FAMILY (PUT FAMILY PAYLOAD)
+    # ====================================================
+    
+    # A. Fetch the FAMILY object
+    fam_url = f"{base_url}/productFamily?ID={family_id}"
+    try:
+        r_fam = requests.get(fam_url, headers=headers)
+        if r_fam.status_code != 200:
+            return f"⚠️ Fetch Family Failed: {r_fam.text}"
+        
+        fam_data_response = r_fam.json()
+        if "ProductFamilies" in fam_data_response and fam_data_response["ProductFamilies"]:
+            family_obj = fam_data_response["ProductFamilies"][0]
+        else:
+            return "⚠️ Family object not found in API response"
+            
+    except Exception as e:
+        return f"💥 Fetch Family Ex: {e}"
+
+    # B. Modify the Products List
+    current_products = family_obj.get("Products", [])
+    
+    # Check if already linked
+    is_linked = False
+    for p in current_products:
+        if p["ID"] == product_id:
+            # Already there, just ensure Option1 is correct
+            p["Option1"] = var_name_raw
+            is_linked = True
+            break
+    
+    if not is_linked:
+        # Append new link object
+        current_products.append({
+            "ID": product_id,
+            "Option1": var_name_raw
+        })
+
+    family_obj["Products"] = current_products
+
+    # C. Clean Read-Only Fields (Prevent 400 Errors)
+    read_only_fields = ['CreatedDate', 'LastModifiedOn']
+    for field in read_only_fields:
+        family_obj.pop(field, None)
+
+    # D. Send PUT Request
+    put_fam_url = f"{base_url}/productFamily"
+    try:
+        r_put = requests.put(put_fam_url, headers=headers, json=family_obj)
+        if r_put.status_code == 200:
+            action = "Created & Linked" if product_created else "Linked Existing"
+            return f"✅ {action} ({full_var_sku})"
+        else:
+            return f"❌ Link Failed [HTTP {r_put.status_code}]: {r_put.text}"
+    except Exception as e:
+        return f"💥 Link Ex: {e}"
 
     # --- 2. CREATE NEW PRODUCT (If not exists) ---
     brand_name = row_data['untappd_brewery']
@@ -1832,6 +1926,7 @@ if st.session_state.header_data is not None:
                             for log in logs: st.write(log)
             else:
                 st.error("Cin7 Secrets missing.")
+
 
 
 
