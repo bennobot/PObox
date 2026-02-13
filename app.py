@@ -432,9 +432,13 @@ def create_cin7_variant(row_data, family_id, family_base_sku, family_base_name, 
         weight = float(row_data['Weight'])
         internal_note = f"{full_var_sku} *** {full_var_name} *** {var_name_raw} *** {family_id}"
         tags = f"{location_name},Wholesale,{brand_name}"
-        fmt = row_data['format']
-        style = row_data['untappd_style']
-        abv = row_data['untappd_abv']
+        
+        # Attribute Mapping
+        fmt = row_data.get('format', '')
+        style = row_data.get('untappd_style', '')
+        abv = row_data.get('untappd_abv', '')
+        keg_connector = row_data.get('Keg_Connector', '')
+        prod_name_only = row_data.get('untappd_product', '')
         
         payload_prod = {
             "SKU": full_var_sku,
@@ -457,8 +461,9 @@ def create_cin7_variant(row_data, family_id, family_base_sku, family_base_name, 
             "AdditionalAttribute3": fmt,
             "AdditionalAttribute4": "Beer",
             "AdditionalAttribute6": var_sku_raw, 
-            "AdditionalAttribute7": var_name_raw, 
-            "AdditionalAttribute9": style,
+            "AdditionalAttribute7": var_name_raw,
+            "AdditionalAttribute8": keg_connector, # --- UPDATED ---
+            "AdditionalAttribute9": prod_name_only, # --- UPDATED (Was Style) ---
             "AdditionalAttribute10": abv,
             "AttributeSet": "Products",
             "Tags": tags,
@@ -474,7 +479,6 @@ def create_cin7_variant(row_data, family_id, family_base_sku, family_base_name, 
             r_create = requests.post(f"{base_url}/product", headers=headers, json=payload_prod)
             if r_create.status_code == 200:
                 resp_data = r_create.json()
-                # Handle nested list return if applicable
                 if "Products" in resp_data and resp_data["Products"]:
                     product_id = resp_data["Products"][0]["ID"]
                 elif "ID" in resp_data:
@@ -492,30 +496,41 @@ def create_cin7_variant(row_data, family_id, family_base_sku, family_base_name, 
     # STEP 2: LINK TO FAMILY (PUT FAMILY PAYLOAD)
     # ====================================================
     
-    # A. Fetch the FAMILY object
+    # A. Fetch the FAMILY object (Need to find the specific one for this ID)
+    # Note: Cin7 API returns a list wrapper for ProductFamily
     fam_url = f"{base_url}/productFamily?ID={family_id}"
+    
     try:
         r_fam = requests.get(fam_url, headers=headers)
         if r_fam.status_code != 200:
             return f"⚠️ Fetch Family Failed: {r_fam.text}"
         
         fam_data_response = r_fam.json()
+        
+        # Handle the structure: {"ProductFamilies": [...]} or raw dict
+        family_obj = None
         if "ProductFamilies" in fam_data_response and fam_data_response["ProductFamilies"]:
             family_obj = fam_data_response["ProductFamilies"][0]
-        else:
+        elif "ID" in fam_data_response:
+            family_obj = fam_data_response
+            
+        if not family_obj:
             return "⚠️ Family object not found in API response"
             
     except Exception as e:
         return f"💥 Fetch Family Ex: {e}"
 
-    # B. Modify the Products List
+    # B. Modify the Products List in the Family Object
+    # We must preserve existing links and add the new one
     current_products = family_obj.get("Products", [])
+    if current_products is None: current_products = []
     
-    # Check if already linked
+    # Check if this product is already linked to avoid duplicates
     is_linked = False
     for p in current_products:
-        if p["ID"] == product_id:
-            # Already there, just ensure Option1 is correct
+        # Cin7 returns IDs in lowercase sometimes, safety check
+        if str(p.get("ID")).lower() == str(product_id).lower():
+            # Already linked, just update the Option1 name in case it changed
             p["Option1"] = var_name_raw
             is_linked = True
             break
@@ -529,12 +544,12 @@ def create_cin7_variant(row_data, family_id, family_base_sku, family_base_name, 
 
     family_obj["Products"] = current_products
 
-    # C. Clean Read-Only Fields (Prevent 400 Errors)
+    # C. Clean Read-Only Fields (Prevent 400 Errors on PUT)
     read_only_fields = ['CreatedDate', 'LastModifiedOn']
     for field in read_only_fields:
         family_obj.pop(field, None)
 
-    # D. Send PUT Request
+    # D. Send PUT Request to update the Family
     put_fam_url = f"{base_url}/productFamily"
     try:
         r_put = requests.put(put_fam_url, headers=headers, json=family_obj)
@@ -1926,6 +1941,7 @@ if st.session_state.header_data is not None:
                             for log in logs: st.write(log)
             else:
                 st.error("Cin7 Secrets missing.")
+
 
 
 
