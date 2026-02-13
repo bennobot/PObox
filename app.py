@@ -107,15 +107,14 @@ def download_file_from_drive(file_id):
         st.error(f"Download Error: {e}")
         return None
 
-# --- 1B. UNTAPPD LOGIC (Updated with & -> and conversion) ---
+# --- 1B. UNTAPPD LOGIC (Updated: Spaces instead of Hyphens) ---
 def search_untappd_item(supplier, product):
     if "untappd" not in st.secrets: return None
     creds = st.secrets["untappd"]
     base_url = creds.get("base_url", "https://business.untappd.com/api/v1")
     token = creds.get("api_token")
     
-    # 1. Convert & to 'and' FIRST (Handle "Salt & Steel" -> "Salt and Steel")
-    # We add spaces around 'and' to ensure we don't accidentally merge words (e.g. Salt&Steel -> SaltandSteel)
+    # 1. Convert & to 'and' 
     raw_supp = str(supplier).replace("&", " and ")
     raw_prod = str(product).replace("&", " and ")
 
@@ -123,11 +122,14 @@ def search_untappd_item(supplier, product):
     clean_supp = re.sub(r'(?i)\b(ltd|limited|llp|plc|brewing|brewery|co\.?)\b', '', raw_supp).strip()
     clean_prod = raw_prod.strip()
 
-    # 3. Combine, Split by whitespace, and Rejoin with Hyphens
-    # .split() automatically handles multiple spaces created by step 1
-    parts = f"{clean_supp} {clean_prod}".split()
-    query_str = "-".join(parts)
+    # 3. Combine, Split by whitespace, and Rejoin with SPACES
+    # .split() handles removing multiple spaces caused by replacements
+    # " ".join() ensures a clean, single-space separated string
+    full_string = f"{clean_supp} {clean_prod}"
+    parts = full_string.split() 
+    query_str = " ".join(parts)
     
+    # 4. URL Encode (Turns spaces into %20)
     safe_q = quote(query_str)
     url = f"{base_url}/items/search?q={safe_q}"
     
@@ -1645,5 +1647,6 @@ if st.session_state.header_data is not None:
                             for log in logs: st.write(log)
             else:
                 st.error("Cin7 Secrets missing.")
+
 
 
