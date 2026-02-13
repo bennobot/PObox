@@ -311,40 +311,18 @@ def get_cin7_supplier(name):
     if "&" in name: return get_cin7_supplier(name.replace("&", "and"))
     return None
 
-# --- CIN7 FAMILY & PRODUCT CREATION ---
-def check_cin7_exists(endpoint, name_or_sku, is_sku=False):
-    """Generic check for Family or Product existence."""
-    headers = get_cin7_headers()
-    if not headers: return None
-    
-    param = "Sku" if is_sku else "Name"
-    safe_val = quote(name_or_sku)
-    url = f"{get_cin7_base_url()}/{endpoint}?{param}={safe_val}"
-    
-    try:
-        response = requests.get(url, headers=headers)
-        if response.status_code == 200:
-            data = response.json()
-            key = "Products" if endpoint == "product" else "ProductFamilies"
-            items = data.get(key, [])
-            for i in items:
-                # Exact Match
-                target_val = i["SKU"] if is_sku else i["Name"]
-                if target_val.lower() == name_or_sku.lower():
-                    return i["ID"]
-    except Exception: pass
-    return None
-
+# --- CIN7 FAMILY & PRODUCT CREATION (Debug Enhanced) ---
 def create_cin7_family_node(family_base_sku, family_base_name, brand_name, location_prefix):
-    """Creates a Product Family if missing."""
+    """Creates a Product Family if missing. Returns (ID, Message)."""
     prefix = "L-" if location_prefix == "L" else "G-"
     location_name = "London" if location_prefix == "L" else "Gloucester"
     
     full_sku = f"{prefix}{family_base_sku}"
     full_name = f"{prefix}{family_base_name}"
     
+    # Check existence
     existing_id = check_cin7_exists("productFamily", full_name)
-    if existing_id: return existing_id, f"Exists ({full_name})"
+    if existing_id: return existing_id, f"✅ Exists ({full_name}) [ID: {existing_id}]"
 
     # Create New
     tags = f"{location_name},Wholesale,{brand_name}"
@@ -373,14 +351,24 @@ def create_cin7_family_node(family_base_sku, family_base_name, brand_name, locat
     headers = get_cin7_headers()
     try:
         response = requests.post(url, headers=headers, json=payload)
+        
         if response.status_code == 200:
-            return response.json().get('ID'), f"Created Family {full_sku}"
-        return None, f"Failed Family {full_sku}: {response.text}"
+            resp_data = response.json()
+            new_id = resp_data.get('ID')
+            
+            if new_id:
+                return new_id, f"✅ Created Family {full_sku} (ID: {new_id})"
+            else:
+                # DEBUG: API returned 200, but no ID found. Dump response to log.
+                return None, f"⚠️ HTTP 200 but No ID. Response: {json.dumps(resp_data)}"
+        else:
+            return None, f"❌ Failed Family {full_sku} [HTTP {response.status_code}]: {response.text}"
+            
     except Exception as e:
-        return None, f"Err Family: {e}"
+        return None, f"💥 Exception Family: {str(e)}"
 
 def create_cin7_variant(row_data, family_id, family_base_sku, family_base_name, location_prefix):
-    """Creates a Product Variant inside an existing family."""
+    """Creates a Product Variant inside an existing family. Returns Message String."""
     prefix = "L-" if location_prefix == "L" else "G-"
     location_name = "London" if location_prefix == "L" else "Gloucester"
     
@@ -390,8 +378,9 @@ def create_cin7_variant(row_data, family_id, family_base_sku, family_base_name, 
     full_var_sku = f"{prefix}{var_sku_raw}"
     full_var_name = f"{prefix}{family_base_name} / {var_name_raw}"
     
+    # Check existence
     existing_id = check_cin7_exists("product", full_var_sku, is_sku=True)
-    if existing_id: return f"Exists ({full_var_sku})"
+    if existing_id: return f"✅ Exists ({full_var_sku})"
 
     brand_name = row_data['untappd_brewery']
     price = float(row_data['item_price']) if row_data['item_price'] else 0.0
@@ -447,10 +436,41 @@ def create_cin7_variant(row_data, family_id, family_base_sku, family_base_name, 
     try:
         response = requests.post(url, headers=headers, json=payload)
         if response.status_code == 200:
-            return f"Created Product {full_var_sku}"
-        return f"Failed Product {full_var_sku}: {response.text}"
+            return f"✅ Created Product {full_var_sku}"
+        else:
+            # DEBUG: Log raw error
+            return f"❌ Failed Product {full_var_sku} [HTTP {response.status_code}]: {response.text}"
     except Exception as e:
-        return f"Err Product: {e}"
+        return f"💥 Exception Product: {str(e)}"
+        
+# --- MASTER SYNC FUNCTION ---
+def sync_product_to_cin7(upload_df):
+    """Iterates through staged data and syncs Families + Variants."""
+    log = []
+    families = upload_df.groupby('Family_SKU')
+    
+    for fam_sku, group in families:
+        first_row = group.iloc[0]
+        fam_name = first_row['Family_Name']
+        brand = first_row['untappd_brewery']
+        
+        for loc in ["L", "G"]:
+            log.append(f"🔄 Processing Family: {fam_sku} ({loc})")
+            
+            # Create/Check Family
+            fam_id, fam_msg = create_cin7_family_node(fam_sku, fam_name, brand, loc)
+            log.append(f"   -> {fam_msg}")
+            
+            if fam_id:
+                # Proceed to Variants
+                for _, row in group.iterrows():
+                    var_msg = create_cin7_variant(row, fam_id, fam_sku, fam_name, loc)
+                    log.append(f"      -> Variant: {var_msg}")
+            else:
+                # Log specifically why we stopped
+                log.append(f"   🛑 HALT: Could not acquire Family ID. Skipping variants for {fam_sku} ({loc}).")
+                
+    return log
         
 # --- MASTER SYNC FUNCTION ---
 def sync_product_to_cin7(upload_df):
@@ -1647,6 +1667,7 @@ if st.session_state.header_data is not None:
                             for log in logs: st.write(log)
             else:
                 st.error("Cin7 Secrets missing.")
+
 
 
 
