@@ -309,7 +309,7 @@ def get_cin7_supplier(name):
     if "&" in name: return get_cin7_supplier(name.replace("&", "and"))
     return None
 
-# --- CIN7 FAMILY & PRODUCT CREATION (Corrected Parsing) ---
+# --- CIN7 FAMILY & PRODUCT CREATION ---
 def check_cin7_exists(endpoint, name_or_sku, is_sku=False):
     """Generic check for Family or Product existence."""
     headers = get_cin7_headers()
@@ -439,6 +439,7 @@ def create_cin7_variant(row_data, family_id, family_base_sku, family_base_name, 
         abv = row_data.get('untappd_abv', '')
         keg_connector = row_data.get('Keg_Connector', '')
         prod_name_only = row_data.get('untappd_product', '')
+        attr_5 = row_data.get('Attribute_5', 'ROTATIONAL PRODUCT')
         
         payload_prod = {
             "SKU": full_var_sku,
@@ -460,10 +461,11 @@ def create_cin7_variant(row_data, family_id, family_base_sku, family_base_name, 
             "AdditionalAttribute2": style, 
             "AdditionalAttribute3": fmt,
             "AdditionalAttribute4": "Beer",
+            "AdditionalAttribute5": attr_5, 
             "AdditionalAttribute6": var_sku_raw, 
             "AdditionalAttribute7": var_name_raw,
-            "AdditionalAttribute8": keg_connector, # --- UPDATED ---
-            "AdditionalAttribute9": prod_name_only, # --- UPDATED (Was Style) ---
+            "AdditionalAttribute8": keg_connector, 
+            "AdditionalAttribute9": prod_name_only, 
             "AdditionalAttribute10": abv,
             "AttributeSet": "Products",
             "Tags": tags,
@@ -472,7 +474,6 @@ def create_cin7_variant(row_data, family_id, family_base_sku, family_base_name, 
             "RevenueAccount": "4000",
             "InventoryAccount": "1001",
             "Sellable": True,
-            # IMPORTANT: Do NOT set ProductFamilyID here. We link it via the Family PUT below.
         }
         
         try:
@@ -496,8 +497,7 @@ def create_cin7_variant(row_data, family_id, family_base_sku, family_base_name, 
     # STEP 2: LINK TO FAMILY (PUT FAMILY PAYLOAD)
     # ====================================================
     
-    # A. Fetch the FAMILY object (Need to find the specific one for this ID)
-    # Note: Cin7 API returns a list wrapper for ProductFamily
+    # A. Fetch the FAMILY object
     fam_url = f"{base_url}/productFamily?ID={family_id}"
     
     try:
@@ -507,7 +507,6 @@ def create_cin7_variant(row_data, family_id, family_base_sku, family_base_name, 
         
         fam_data_response = r_fam.json()
         
-        # Handle the structure: {"ProductFamilies": [...]} or raw dict
         family_obj = None
         if "ProductFamilies" in fam_data_response and fam_data_response["ProductFamilies"]:
             family_obj = fam_data_response["ProductFamilies"][0]
@@ -520,23 +519,18 @@ def create_cin7_variant(row_data, family_id, family_base_sku, family_base_name, 
     except Exception as e:
         return f"💥 Fetch Family Ex: {e}"
 
-    # B. Modify the Products List in the Family Object
-    # We must preserve existing links and add the new one
+    # B. Modify the Products List
     current_products = family_obj.get("Products", [])
     if current_products is None: current_products = []
     
-    # Check if this product is already linked to avoid duplicates
     is_linked = False
     for p in current_products:
-        # Cin7 returns IDs in lowercase sometimes, safety check
         if str(p.get("ID")).lower() == str(product_id).lower():
-            # Already linked, just update the Option1 name in case it changed
             p["Option1"] = var_name_raw
             is_linked = True
             break
     
     if not is_linked:
-        # Append new link object
         current_products.append({
             "ID": product_id,
             "Option1": var_name_raw
@@ -544,12 +538,12 @@ def create_cin7_variant(row_data, family_id, family_base_sku, family_base_name, 
 
     family_obj["Products"] = current_products
 
-    # C. Clean Read-Only Fields (Prevent 400 Errors on PUT)
+    # C. Clean Read-Only Fields
     read_only_fields = ['CreatedDate', 'LastModifiedOn']
     for field in read_only_fields:
         family_obj.pop(field, None)
 
-    # D. Send PUT Request to update the Family
+    # D. Send PUT Request
     put_fam_url = f"{base_url}/productFamily"
     try:
         r_put = requests.put(put_fam_url, headers=headers, json=family_obj)
@@ -560,186 +554,6 @@ def create_cin7_variant(row_data, family_id, family_base_sku, family_base_name, 
             return f"❌ Link Failed [HTTP {r_put.status_code}]: {r_put.text}"
     except Exception as e:
         return f"💥 Link Ex: {e}"
-
-    # --- 2. CREATE NEW PRODUCT (If not exists) ---
-    brand_name = row_data['untappd_brewery']
-    price = float(row_data['item_price']) if row_data['item_price'] else 0.0
-    weight = float(row_data['Weight'])
-    
-    internal_note = f"{full_var_sku} *** {full_var_name} *** {var_name_raw} *** {family_id}"
-    
-    tags = f"{location_name},Wholesale,{brand_name}"
-    
-    fmt = row_data['format']
-    style = row_data['untappd_style']
-    abv = row_data['untappd_abv']
-    
-    payload = {
-        "SKU": full_var_sku,
-        "Name": full_var_name,
-        "Category": location_name,
-        "Brand": brand_name,
-        "Type": "Stock",
-        "CostingMethod": "FIFO - Batch",
-        "DropShipMode": "No Drop Ship",
-        "DefaultLocation": location_name,
-        "Weight": weight,
-        "UOM": "Each",
-        "WeightUnits": "kg",
-        "PriceTier1": price,
-        "PriceTiers": {"Tier 1": price},
-        "ShortDescription": None,
-        "InternalNote": internal_note,
-        "Description": row_data['description'],
-        "AdditionalAttribute1": fmt,
-        "AdditionalAttribute2": style, 
-        "AdditionalAttribute3": fmt,
-        "AdditionalAttribute4": "Beer",
-        "AdditionalAttribute6": var_sku_raw, 
-        "AdditionalAttribute7": var_name_raw, 
-        "AdditionalAttribute9": style,
-        "AdditionalAttribute10": abv,
-        "AttributeSet": "Products",
-        "Tags": tags,
-        "Status": "Active",
-        "COGSAccount": "5101",
-        "RevenueAccount": "4000",
-        "InventoryAccount": "1001",
-        "Sellable": True,
-        "Option1": var_name_raw, 
-        "ProductFamilyID": family_id
-    }
-    
-    url = f"{base_url}/product"
-    
-    try:
-        response = requests.post(url, headers=headers, json=payload)
-        if response.status_code == 200:
-            return f"✅ Created Product {full_var_sku}"
-        else:
-            return f"❌ Failed Product {full_var_sku} [HTTP {response.status_code}]: {response.text}"
-    except Exception as e:
-        return f"💥 Exception Product: {str(e)}"
-
-    # --- 2. CREATE NEW PRODUCT (If not exists) ---
-    brand_name = row_data['untappd_brewery']
-    price = float(row_data['item_price']) if row_data['item_price'] else 0.0
-    weight = float(row_data['Weight'])
-    
-    internal_note = f"{full_var_sku} *** {full_var_name} *** {var_name_raw} *** {family_id}"
-    
-    tags = f"{location_name},Wholesale,{brand_name}"
-    
-    fmt = row_data['format']
-    style = row_data['untappd_style']
-    abv = row_data['untappd_abv']
-    
-    payload = {
-        "SKU": full_var_sku,
-        "Name": full_var_name,
-        "Category": location_name,
-        "Brand": brand_name,
-        "Type": "Stock",
-        "CostingMethod": "FIFO - Batch",
-        "DropShipMode": "No Drop Ship",
-        "DefaultLocation": location_name,
-        "Weight": weight,
-        "UOM": "Each",
-        "WeightUnits": "kg",
-        "PriceTier1": price,
-        "PriceTiers": {"Tier 1": price},
-        "ShortDescription": None,
-        "InternalNote": internal_note,
-        "Description": row_data['description'],
-        "AdditionalAttribute1": fmt,
-        "AdditionalAttribute2": style, 
-        "AdditionalAttribute3": fmt,
-        "AdditionalAttribute4": "Beer",
-        "AdditionalAttribute6": var_sku_raw, 
-        "AdditionalAttribute7": var_name_raw, 
-        "AdditionalAttribute9": style,
-        "AdditionalAttribute10": abv,
-        "AttributeSet": "Products",
-        "Tags": tags,
-        "Status": "Active",
-        "COGSAccount": "5101",
-        "RevenueAccount": "4000",
-        "InventoryAccount": "1001",
-        "Sellable": True,
-        "Option1": var_name_raw, 
-        "ProductFamilyID": family_id
-    }
-    
-    url = f"{base_url}/product"
-    
-    try:
-        response = requests.post(url, headers=headers, json=payload)
-        if response.status_code == 200:
-            return f"✅ Created Product {full_var_sku}"
-        else:
-            return f"❌ Failed Product {full_var_sku} [HTTP {response.status_code}]: {response.text}"
-    except Exception as e:
-        return f"💥 Exception Product: {str(e)}"
-
-    # --- 2. CREATE NEW PRODUCT (If not exists) ---
-    brand_name = row_data['untappd_brewery']
-    price = float(row_data['item_price']) if row_data['item_price'] else 0.0
-    weight = float(row_data['Weight'])
-    
-    internal_note = f"{full_var_sku} *** {full_var_name} *** {var_name_raw} *** {family_id}"
-    
-    tags = f"{location_name},Wholesale,{brand_name}"
-    
-    fmt = row_data['format']
-    style = row_data['untappd_style']
-    abv = row_data['untappd_abv']
-    
-    payload = {
-        "SKU": full_var_sku,
-        "Name": full_var_name,
-        "Category": location_name,
-        "Brand": brand_name,
-        "Type": "Stock",
-        "CostingMethod": "FIFO - Batch",
-        "DropShipMode": "No Drop Ship",
-        "DefaultLocation": location_name,
-        "Weight": weight,
-        "UOM": "Each",
-        "WeightUnits": "kg",
-        "PriceTier1": price,
-        "PriceTiers": {"Tier 1": price},
-        "ShortDescription": None,
-        "InternalNote": internal_note,
-        "Description": row_data['description'],
-        "AdditionalAttribute1": fmt,
-        "AdditionalAttribute2": style, 
-        "AdditionalAttribute3": fmt,
-        "AdditionalAttribute4": "Beer",
-        "AdditionalAttribute6": var_sku_raw, 
-        "AdditionalAttribute7": var_name_raw, 
-        "AdditionalAttribute9": style,
-        "AdditionalAttribute10": abv,
-        "AttributeSet": "Products",
-        "Tags": tags,
-        "Status": "Active",
-        "COGSAccount": "5101",
-        "RevenueAccount": "4000",
-        "InventoryAccount": "1001",
-        "Sellable": True,
-        "Option1": var_name_raw, 
-        "ProductFamilyID": family_id
-    }
-    
-    url = f"{base_url}/product"
-    
-    try:
-        response = requests.post(url, headers=headers, json=payload)
-        if response.status_code == 200:
-            return f"✅ Created Product {full_var_sku}"
-        else:
-            return f"❌ Failed Product {full_var_sku} [HTTP {response.status_code}]: {response.text}"
-    except Exception as e:
-        return f"💥 Exception Product: {str(e)}"
 
 # --- MASTER SYNC FUNCTION ---
 def sync_product_to_cin7(upload_df):
@@ -1271,7 +1085,8 @@ def stage_products_for_upload(matrix_df):
                     'Family_Name': '',
                     'Variant_Name': '', 
                     'Weight': 0.0,
-                    'Keg_Connector': ''
+                    'Keg_Connector': '',
+                    'Attribute_5': 'ROTATIONAL PRODUCT' 
                 }
                 new_rows.append(new_row)
                 
@@ -1758,7 +1573,7 @@ if st.session_state.header_data is not None:
                 else:
                     st.error("Cin7 Secrets Missing")
 
-            # --- GENERATE UPLOAD DATA BUTTON (RENAMED) ---
+            # --- GENERATE UPLOAD DATA BUTTON ---
             if st.button("🛠️ Generate Upload Data"):
                 supplier_map = fetch_supplier_codes()
                 format_map = fetch_format_codes()
@@ -1776,6 +1591,7 @@ if st.session_state.header_data is not None:
                     vol_name = str(row.get('volume', '')).strip()
                     pack_val = row.get('pack_size', '')
                     abv_val = str(row.get('untappd_abv', '')).strip()
+                    attr_5 = row.get('Attribute_5', 'ROTATIONAL PRODUCT')
                     
                     # 1. Base Weight & Size Code Lookup
                     lookup_key = (fmt_name.lower(), vol_name.lower())
@@ -1819,6 +1635,7 @@ if st.session_state.header_data is not None:
 
                         new_row['Weight'] = total_weight
                         new_row['Keg_Connector'] = conn
+                        new_row['Attribute_5'] = attr_5
                         
                         # --- VARIANT NAME GENERATION ---
                         var_name_base = vol_name
@@ -1832,10 +1649,8 @@ if st.session_state.header_data is not None:
                         
                         # --- VARIANT SKU GENERATION ---
                         if is_multipack:
-                             # Format: -12X44CL
                              sku_suffix = f"-{pack_int}X{size_code}"
                         else:
-                             # Format: -44CL
                              sku_suffix = f"-{size_code}"
                              
                         if conn:
@@ -1861,7 +1676,26 @@ if st.session_state.header_data is not None:
                 st.success("Upload Data Generated (SKUs, Names, Weights, Connectors)!")
                 st.rerun()
 
-            st.dataframe(st.session_state.upload_data, width=2000)
+            # --- CONFIGURE TAB 4 EDITOR ---
+            upload_col_config = {
+                "Attribute_5": st.column_config.SelectboxColumn(
+                    "Core/Rotation",
+                    options=["ROTATIONAL PRODUCT", "CORE PRODUCT"],
+                    required=True,
+                    width="medium"
+                )
+            }
+            
+            edited_upload = st.data_editor(
+                st.session_state.upload_data,
+                width=2000,
+                column_config=upload_col_config,
+                key="upload_editor_final"
+            )
+            
+            # Save edits immediately so they are used in sync
+            if edited_upload is not None:
+                st.session_state.upload_data = edited_upload
             
         else:
             st.info("No data staged yet. Go to Tab 3 and click 'Validate & Stage'.")
@@ -1941,8 +1775,3 @@ if st.session_state.header_data is not None:
                             for log in logs: st.write(log)
             else:
                 st.error("Cin7 Secrets missing.")
-
-
-
-
-
