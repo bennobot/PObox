@@ -68,7 +68,7 @@ st.title("Brewery Invoice Parser ⚡")
 # 1. HELPER FUNCTIONS
 # ==========================================
 
-# --- 1A. PRICING LOGIC (NEW) ---
+# --- 1A. PRICING LOGIC (UPDATED CASING) ---
 def calculate_sell_price(cost_price, product_type, fmt):
     """
     Calculates Sales Price (PriceTier1) based on Cost, Type (Core/Rotational), and Format.
@@ -97,7 +97,7 @@ def calculate_sell_price(cost_price, product_type, fmt):
 
     # --- RULE 3: STANDARD MULTIPLIERS ---
     # Applies to all Small Pack, and Mid-Range Draft (63-140)
-    if product_type == "CORE PRODUCT":
+    if product_type == "Core Product": # <--- UPDATED CASING
         return round(cost * 1.265, 2)
     else: 
         # Default to Rotational multiplier
@@ -473,7 +473,7 @@ def create_cin7_variant(row_data, family_id, family_base_sku, family_base_name, 
         abv = row_data.get('untappd_abv', '')
         keg_connector = row_data.get('Keg_Connector', '')
         prod_name_only = row_data.get('untappd_product', '')
-        attr_5 = row_data.get('Attribute_5', 'ROTATIONAL PRODUCT')
+        attr_5 = row_data.get('Attribute_5', 'Rotational Product') # <--- UPDATED CASING
         
         # --- RE-CALCULATE SALES PRICE (Ensure Integrity) ---
         # We re-calculate here to ensure if User changed Attr 5 in table, price matches.
@@ -492,7 +492,7 @@ def create_cin7_variant(row_data, family_id, family_base_sku, family_base_name, 
             "Weight": weight,
             "UOM": "Each",
             "WeightUnits": "kg",
-            "PriceTier1": sales_price, # <--- CALCULATED PRICE
+            "PriceTier1": sales_price, 
             "PriceTiers": {"Tier 1": sales_price},
             "InternalNote": internal_note,
             "Description": row_data['description'],
@@ -1125,7 +1125,7 @@ def stage_products_for_upload(matrix_df):
                     'Variant_Name': '', 
                     'Weight': 0.0,
                     'Keg_Connector': '',
-                    'Attribute_5': 'ROTATIONAL PRODUCT' 
+                    'Attribute_5': 'Rotational Product' # <--- UPDATED CASING
                 }
                 new_rows.append(new_row)
                 
@@ -1630,7 +1630,7 @@ if st.session_state.header_data is not None:
                     vol_name = str(row.get('volume', '')).strip()
                     pack_val = row.get('pack_size', '')
                     abv_val = str(row.get('untappd_abv', '')).strip()
-                    attr_5 = row.get('Attribute_5', 'ROTATIONAL PRODUCT')
+                    attr_5 = row.get('Attribute_5', 'Rotational Product') # <--- UPDATED CASING
                     
                     # 1. Base Weight & Size Code Lookup
                     lookup_key = (fmt_name.lower(), vol_name.lower())
@@ -1706,6 +1706,18 @@ if st.session_state.header_data is not None:
 
                 # Create Final DF
                 final_df = pd.DataFrame(processed_rows)
+                
+                # --- REORDER COLUMNS (Attribute_5 First) ---
+                all_cols = final_df.columns.tolist()
+                desired_order = ['Attribute_5', 'Sales_Price', 'item_price', 'Variant_Name', 'Variant_SKU', 'Family_Name']
+                final_order = []
+                for c in desired_order:
+                    if c in all_cols: final_order.append(c)
+                for c in all_cols:
+                    if c not in final_order: final_order.append(c)
+                
+                final_df = final_df[final_order]
+                
                 st.session_state.upload_data = final_df
                 st.success("Upload Data Generated (SKUs, Names, Weights, Connectors)!")
                 st.rerun()
@@ -1714,32 +1726,31 @@ if st.session_state.header_data is not None:
             upload_col_config = {
                 "Attribute_5": st.column_config.SelectboxColumn(
                     "Core/Rotation",
-                    options=["ROTATIONAL PRODUCT", "CORE PRODUCT"],
+                    options=["Rotational Product", "Core Product"], # <--- UPDATED CASING
                     required=True,
                     width="medium"
                 ),
                 "Sales_Price": st.column_config.NumberColumn(
                     "Sales Price",
                     format="£%.2f",
-                    disabled=True # Auto-calculated
+                    disabled=True 
                 )
             }
             
             # --- FORCE COLUMN ORDER ---
-            all_cols = st.session_state.upload_data.columns.tolist()
-            desired_order = ['Attribute_5', 'Sales_Price', 'item_price', 'Variant_Name', 'Variant_SKU']
-            final_order = []
-            
-            for col in desired_order:
-                if col in all_cols: final_order.append(col)
-            for col in all_cols:
-                if col not in final_order: final_order.append(col)
+            current_cols = st.session_state.upload_data.columns.tolist()
+            disp_order = ['Attribute_5', 'Sales_Price', 'item_price', 'Variant_Name', 'Variant_SKU']
+            final_disp = []
+            for c in disp_order:
+                if c in current_cols: final_disp.append(c)
+            for c in current_cols:
+                if c not in final_disp: final_disp.append(c)
 
             edited_upload = st.data_editor(
                 st.session_state.upload_data,
                 width=2000,
                 column_config=upload_col_config,
-                column_order=final_order, 
+                column_order=final_disp, 
                 key="upload_editor_final"
             )
             
