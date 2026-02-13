@@ -1531,7 +1531,7 @@ if st.session_state.header_data is not None:
                     st.session_state.upload_data = staged_df
                     st.success("Products staged successfully! Go to Tab 4.")
 
-    # --- TAB 4: PRODUCT UPLOAD (NEW) ---
+   # --- TAB 4: PRODUCT UPLOAD (NEW) ---
     with current_tabs[3]:
         st.subheader("4. Product Upload Stage")
         
@@ -1664,13 +1664,22 @@ if st.session_state.header_data is not None:
                 # Create Final DF
                 final_df = pd.DataFrame(processed_rows)
                 
-                # Reorder columns
-                cols = list(final_df.columns)
-                priority_cols = ['Variant_Name', 'Variant_SKU', 'Family_Name', 'Weight', 'Keg_Connector', 'Family_SKU']
-                for key in priority_cols:
-                    if key in cols:
-                        cols.insert(0, cols.pop(cols.index(key)))
-                final_df = final_df[cols]
+                # --- REORDER COLUMNS (Attribute_5 First) ---
+                # Define exact order for specific columns, others follow
+                priority_cols = [
+                    'Attribute_5', 
+                    'Variant_Name', 
+                    'Variant_SKU', 
+                    'Family_Name', 
+                    'Weight', 
+                    'Keg_Connector', 
+                    'Family_SKU'
+                ]
+                
+                existing_priority = [c for c in priority_cols if c in final_df.columns]
+                other_cols = [c for c in final_df.columns if c not in existing_priority]
+                
+                final_df = final_df[existing_priority + other_cols]
                 
                 st.session_state.upload_data = final_df
                 st.success("Upload Data Generated (SKUs, Names, Weights, Connectors)!")
@@ -1775,3 +1784,4 @@ if st.session_state.header_data is not None:
                             for log in logs: st.write(log)
             else:
                 st.error("Cin7 Secrets missing.")
+
