@@ -407,7 +407,6 @@ def create_cin7_variant(row_data, family_id, family_base_sku, family_base_name, 
 
     # --- 1. CHECK EXISTENCE & LINK STATUS ---
     # We fetch the full product data to check the 'ProductFamilyID'
-    # Note: Using check_cin7_exists only gives us ID, we need the whole object to update it.
     
     check_url = f"{base_url}/product?Sku={quote(full_var_sku)}"
     existing_product = None
@@ -430,8 +429,15 @@ def create_cin7_variant(row_data, family_id, family_base_sku, family_base_name, 
         # Case B: Exists but orphaned or wrong family -> UPDATE IT
         existing_product['ProductFamilyID'] = family_id
         
-        # --- FIX: Remove Read-Only Fields that cause 400/409 Errors ---
-        # Cin7 API forbids sending these fields back in a PUT request
+        # --- KEY FIX: You MUST set Option1 for the link to work in the UI ---
+        # The Family expects Option1Name="Variant", so the Product must have Option1 set.
+        existing_product['Option1'] = var_name_raw
+        
+        # Ensure we don't send conflicting Options if the previous family had them
+        existing_product['Option2'] = None
+        existing_product['Option3'] = None
+        
+        # Remove Read-Only Fields that cause 400/409 Errors
         read_only_fields = ['CreatedDate', 'LastModifiedOn']
         for field in read_only_fields:
             existing_product.pop(field, None)
@@ -445,6 +451,66 @@ def create_cin7_variant(row_data, family_id, family_base_sku, family_base_name, 
                 return f"⚠️ Exists but Link Failed [HTTP {r_put.status_code}]: {r_put.text}"
         except Exception as e:
             return f"💥 Update Exception: {e}"
+
+    # --- 2. CREATE NEW PRODUCT (If not exists) ---
+    brand_name = row_data['untappd_brewery']
+    price = float(row_data['item_price']) if row_data['item_price'] else 0.0
+    weight = float(row_data['Weight'])
+    
+    internal_note = f"{full_var_sku} *** {full_var_name} *** {var_name_raw} *** {family_id}"
+    
+    tags = f"{location_name},Wholesale,{brand_name}"
+    
+    fmt = row_data['format']
+    style = row_data['untappd_style']
+    abv = row_data['untappd_abv']
+    
+    payload = {
+        "SKU": full_var_sku,
+        "Name": full_var_name,
+        "Category": location_name,
+        "Brand": brand_name,
+        "Type": "Stock",
+        "CostingMethod": "FIFO - Batch",
+        "DropShipMode": "No Drop Ship",
+        "DefaultLocation": location_name,
+        "Weight": weight,
+        "UOM": "Each",
+        "WeightUnits": "kg",
+        "PriceTier1": price,
+        "PriceTiers": {"Tier 1": price},
+        "ShortDescription": None,
+        "InternalNote": internal_note,
+        "Description": row_data['description'],
+        "AdditionalAttribute1": fmt,
+        "AdditionalAttribute2": style, 
+        "AdditionalAttribute3": fmt,
+        "AdditionalAttribute4": "Beer",
+        "AdditionalAttribute6": var_sku_raw, 
+        "AdditionalAttribute7": var_name_raw, 
+        "AdditionalAttribute9": style,
+        "AdditionalAttribute10": abv,
+        "AttributeSet": "Products",
+        "Tags": tags,
+        "Status": "Active",
+        "COGSAccount": "5101",
+        "RevenueAccount": "4000",
+        "InventoryAccount": "1001",
+        "Sellable": True,
+        "Option1": var_name_raw, 
+        "ProductFamilyID": family_id
+    }
+    
+    url = f"{base_url}/product"
+    
+    try:
+        response = requests.post(url, headers=headers, json=payload)
+        if response.status_code == 200:
+            return f"✅ Created Product {full_var_sku}"
+        else:
+            return f"❌ Failed Product {full_var_sku} [HTTP {response.status_code}]: {response.text}"
+    except Exception as e:
+        return f"💥 Exception Product: {str(e)}"
 
     # --- 2. CREATE NEW PRODUCT (If not exists) ---
     brand_name = row_data['untappd_brewery']
@@ -1766,5 +1832,6 @@ if st.session_state.header_data is not None:
                             for log in logs: st.write(log)
             else:
                 st.error("Cin7 Secrets missing.")
+
 
 
