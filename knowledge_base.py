@@ -126,6 +126,10 @@ VALID FORMATS LIST:
 # ==========================================
 SUPPLIER_RULEBOOK = {
 
+   "Brass Castle Brewery": """
+   there is a discount after the line items which needs to be calculated as a percentage and then applied to the cost price of each item
+   """,
+   
    "Thornbridge Brewery": """
    when the product name includes ekeg it is a steel keg, when it includes keg it is a Keykeg
 
@@ -232,5 +236,6 @@ SUPPLIER_RULEBOOK = {
    - Payable To: "German Drinks Company Limited".
    """
 }
+
 
 
