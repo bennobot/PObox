@@ -68,7 +68,42 @@ st.title("Brewery Invoice Parser ⚡")
 # 1. HELPER FUNCTIONS
 # ==========================================
 
-# --- 1A. GOOGLE DRIVE ---
+# --- 1A. PRICING LOGIC (NEW) ---
+def calculate_sell_price(cost_price, product_type, fmt):
+    """
+    Calculates Sales Price (PriceTier1) based on Cost, Type (Core/Rotational), and Format.
+    """
+    try:
+        cost = float(cost_price)
+    except:
+        return 0.00
+
+    if cost == 0: return 0.00
+
+    # Normalize format for checking
+    fmt_lower = str(fmt).lower()
+    
+    # Define Draft Keywords
+    draft_triggers = ['keykeg', 'steel', 'poly', 'uni', 'cask', 'keg', 'firkin', 'pin']
+    is_draft = any(t in fmt_lower for t in draft_triggers)
+
+    # --- RULE 1: HIGH VALUE DRAFT (>140) ---
+    if is_draft and cost > 140:
+        return round(cost + 40, 2)
+
+    # --- RULE 2: LOW VALUE DRAFT (<63) ---
+    if is_draft and cost < 63:
+        return round(cost + 20, 2)
+
+    # --- RULE 3: STANDARD MULTIPLIERS ---
+    # Applies to all Small Pack, and Mid-Range Draft (63-140)
+    if product_type == "CORE PRODUCT":
+        return round(cost * 1.265, 2)
+    else: 
+        # Default to Rotational multiplier
+        return round(cost * 1.285, 2)
+
+# --- 1B. GOOGLE DRIVE ---
 def get_drive_service():
     if "connections" in st.secrets and "gsheets" in st.secrets["connections"]:
         creds_dict = st.secrets["connections"]["gsheets"]
@@ -107,7 +142,7 @@ def download_file_from_drive(file_id):
         st.error(f"Download Error: {e}")
         return None
 
-# --- 1B. UNTAPPD LOGIC ---
+# --- 1C. UNTAPPD LOGIC ---
 def search_untappd_item(supplier, product):
     if "untappd" not in st.secrets: return None
     creds = st.secrets["untappd"]
@@ -206,7 +241,7 @@ def batch_untappd_lookup(matrix_df):
         
     return pd.DataFrame(updated_rows), logs
 
-# --- 1C. SHOPIFY & CIN7 ---
+# --- 1D. SHOPIFY & CIN7 ---
 def get_cin7_headers():
     if "cin7" not in st.secrets: return None
     creds = st.secrets["cin7"]
@@ -428,7 +463,6 @@ def create_cin7_variant(row_data, family_id, family_base_sku, family_base_name, 
     # B. If not exists, Create it
     if not product_id:
         brand_name = row_data['untappd_brewery']
-        price = float(row_data['item_price']) if row_data['item_price'] else 0.0
         weight = float(row_data['Weight'])
         internal_note = f"{full_var_sku} *** {full_var_name} *** {var_name_raw} *** {family_id}"
         tags = f"{location_name},Wholesale,{brand_name}"
@@ -440,6 +474,11 @@ def create_cin7_variant(row_data, family_id, family_base_sku, family_base_name, 
         keg_connector = row_data.get('Keg_Connector', '')
         prod_name_only = row_data.get('untappd_product', '')
         attr_5 = row_data.get('Attribute_5', 'ROTATIONAL PRODUCT')
+        
+        # --- RE-CALCULATE SALES PRICE (Ensure Integrity) ---
+        # We re-calculate here to ensure if User changed Attr 5 in table, price matches.
+        cost_price = float(row_data.get('item_price', 0))
+        sales_price = calculate_sell_price(cost_price, attr_5, fmt)
         
         payload_prod = {
             "SKU": full_var_sku,
@@ -453,8 +492,8 @@ def create_cin7_variant(row_data, family_id, family_base_sku, family_base_name, 
             "Weight": weight,
             "UOM": "Each",
             "WeightUnits": "kg",
-            "PriceTier1": price,
-            "PriceTiers": {"Tier 1": price},
+            "PriceTier1": sales_price, # <--- CALCULATED PRICE
+            "PriceTiers": {"Tier 1": sales_price},
             "InternalNote": internal_note,
             "Description": row_data['description'],
             "AdditionalAttribute1": fmt,
@@ -1531,7 +1570,7 @@ if st.session_state.header_data is not None:
                     st.session_state.upload_data = staged_df
                     st.success("Products staged successfully! Go to Tab 4.")
 
-   # --- TAB 4: PRODUCT UPLOAD (NEW) ---
+    # --- TAB 4: PRODUCT UPLOAD (NEW) ---
     with current_tabs[3]:
         st.subheader("4. Product Upload Stage")
         
@@ -1637,6 +1676,10 @@ if st.session_state.header_data is not None:
                         new_row['Keg_Connector'] = conn
                         new_row['Attribute_5'] = attr_5
                         
+                        # --- CALC SALES PRICE (For Display) ---
+                        cost = float(new_row.get('item_price', 0))
+                        new_row['Sales_Price'] = calculate_sell_price(cost, attr_5, fmt_name)
+                        
                         # --- VARIANT NAME GENERATION ---
                         var_name_base = vol_name
                         if is_multipack:
@@ -1663,24 +1706,6 @@ if st.session_state.header_data is not None:
 
                 # Create Final DF
                 final_df = pd.DataFrame(processed_rows)
-                
-                # --- REORDER COLUMNS (Attribute_5 First) ---
-                # Define exact order for specific columns, others follow
-                priority_cols = [
-                    'Attribute_5', 
-                    'Variant_Name', 
-                    'Variant_SKU', 
-                    'Family_Name', 
-                    'Weight', 
-                    'Keg_Connector', 
-                    'Family_SKU'
-                ]
-                
-                existing_priority = [c for c in priority_cols if c in final_df.columns]
-                other_cols = [c for c in final_df.columns if c not in existing_priority]
-                
-                final_df = final_df[existing_priority + other_cols]
-                
                 st.session_state.upload_data = final_df
                 st.success("Upload Data Generated (SKUs, Names, Weights, Connectors)!")
                 st.rerun()
@@ -1692,17 +1717,33 @@ if st.session_state.header_data is not None:
                     options=["ROTATIONAL PRODUCT", "CORE PRODUCT"],
                     required=True,
                     width="medium"
+                ),
+                "Sales_Price": st.column_config.NumberColumn(
+                    "Sales Price",
+                    format="£%.2f",
+                    disabled=True # Auto-calculated
                 )
             }
             
+            # --- FORCE COLUMN ORDER ---
+            all_cols = st.session_state.upload_data.columns.tolist()
+            desired_order = ['Attribute_5', 'Sales_Price', 'item_price', 'Variant_Name', 'Variant_SKU']
+            final_order = []
+            
+            for col in desired_order:
+                if col in all_cols: final_order.append(col)
+            for col in all_cols:
+                if col not in final_order: final_order.append(col)
+
             edited_upload = st.data_editor(
                 st.session_state.upload_data,
                 width=2000,
                 column_config=upload_col_config,
+                column_order=final_order, 
                 key="upload_editor_final"
             )
             
-            # Save edits immediately so they are used in sync
+            # Save edits immediately
             if edited_upload is not None:
                 st.session_state.upload_data = edited_upload
             
@@ -1784,4 +1825,3 @@ if st.session_state.header_data is not None:
                             for log in logs: st.write(log)
             else:
                 st.error("Cin7 Secrets missing.")
-
