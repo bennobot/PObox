@@ -439,6 +439,151 @@ def check_shopify_title(title):
         
     return None, None
 
+# --- SHOPIFY PAYLOAD HELPERS ---
+
+def get_abv_category(abv_str):
+    """Generates the '0% - 3%' string based on float value."""
+    try:
+        val = float(abv_str)
+    except:
+        return ""
+    
+    if val <= 3.0: return "0% - 3%"
+    if val <= 5.0: return "3% - 5%"
+    if val <= 7.0: return "5% - 7%"
+    return "7%+"
+
+def split_untappd_style(full_style):
+    """Splits 'Stout - Milk / Sweet' into Primary='Stout', Secondary='Milk / Sweet'"""
+    if not full_style: return "", ""
+    parts = str(full_style).split("-", 1)
+    primary = parts[0].strip()
+    secondary = parts[1].strip() if len(parts) > 1 else ""
+    return primary, secondary
+
+def get_filter_group(pack_size, fmt):
+    """Generates '12 Packs' or 'Single Cans'"""
+    try:
+        pack = float(pack_size)
+    except:
+        pack = 1.0
+    
+    if pack > 1:
+        return f"{int(pack)} Packs"
+    return f"Single {fmt}"
+
+def create_shopify_variant_payload(row, location_prefix):
+    """Creates the JSON for a SINGLE variant."""
+    is_london = location_prefix == "L"
+    prefix = "L-" if is_london else "G-"
+    
+    # Data extraction
+    sku = f"{prefix}{row['Variant_SKU']}"
+    price = str(row['Sales_Price']) # Sales price calculated in Tab 4
+    title = row['Variant_Name']
+    weight = float(row.get('Weight', 0))
+    pack_size = row.get('pack_size', 1)
+    fmt = row.get('format', 'Unit')
+    
+    # Metafield: Filter Group
+    filter_val = get_filter_group(pack_size, fmt)
+    
+    return {
+        "sku": sku,
+        "price": price,
+        "title": title,
+        "weight": weight,
+        "weight_unit": "kg",
+        "option1": title, # Shopify requires Option1 to match if it's the only option
+        "inventory_management": "shopify", 
+        "fulfillment_service": "manual",
+        "inventory_policy": "deny",
+        "metafields": [
+            {"key": "filter_group", "value": filter_val, "type": "single_line_text_field", "namespace": "custom"},
+            {"key": "split_case", "value": "false", "type": "boolean", "namespace": "custom"} # Default to false/null
+        ]
+    }
+
+def create_shopify_product_payload(row, location_prefix, variants_list):
+    """Creates the FULL product JSON (Body, Tags, Metafields)."""
+    is_london = location_prefix == "L"
+    prefix = "L-" if is_london else "G-"
+    loc_name = "London" if is_london else "Gloucester"
+    
+    # Base Data
+    family_base = row['Family_Name']
+    full_title = f"{prefix}{family_base}"
+    vendor = row['untappd_brewery']
+    body_html = row.get('description', '')
+    prod_type = loc_name
+    
+    # Calculated Fields
+    abv_val = row.get('untappd_abv', '0')
+    abv_cat = get_abv_category(abv_val)
+    style_prim, style_sec = split_untappd_style(row.get('untappd_style', ''))
+    untappd_id = row.get('Untappd_ID', '') or row.get('untappd_id', '')
+    
+    # Tags Construction
+    # "Gloucester,Wholesale,Nirvana Brewery,,Beer,Cans,,Cans,Stout,English,0% - 3%,Rotational Product"
+    tags_list = [
+        loc_name, 
+        "Wholesale", 
+        vendor, 
+        row.get('Type', 'Beer'), 
+        row.get('format', ''), 
+        style_prim, 
+        style_sec, 
+        abv_cat, 
+        row.get('Attribute_5', 'Rotational Product')
+    ]
+    # Filter out empty strings and join
+    tags_str = ",".join([t for t in tags_list if t])
+
+    # Images
+    images = []
+    if row.get('Label_Thumb'):
+        # Try to hack the URL to get HD if possible, otherwise use thumb
+        img_url = row['Label_Thumb'].replace("Icon.png", "HD.png") # Heuristic, might not always work
+        images.append({"src": img_url})
+
+    # Metafields
+    metafields = [
+        {"key": "abv", "value": str(abv_val), "type": "number_decimal", "namespace": "custom"},
+        {"key": "depot", "value": loc_name, "type": "single_line_text_field", "namespace": "custom"},
+        {"key": "format", "value": row.get('format', ''), "type": "single_line_text_field", "namespace": "custom"},
+        {"key": "primary_style", "value": style_prim, "type": "single_line_text_field", "namespace": "custom"},
+        {"key": "secondary_style", "value": style_sec, "type": "single_line_text_field", "namespace": "custom"},
+        {"key": "collaboration", "value": row.get('collaborator', ''), "type": "single_line_text_field", "namespace": "custom"},
+        {"key": "keg_type", "value": row.get('format', ''), "type": "single_line_text_field", "namespace": "custom"},
+        {"key": "ut_ignore", "value": "false", "type": "boolean", "namespace": "custom"},
+        {"key": "ut_id", "value": str(untappd_id), "type": "number_integer", "namespace": "custom"},
+        {"key": "ut_description", "value": body_html, "type": "multi_line_text_field", "namespace": "custom"},
+        {"key": "brewery_location", "value": row.get('Brewery_Loc', ''), "type": "single_line_text_field", "namespace": "custom"},
+        {"key": "abv_category", "value": abv_cat, "type": "single_line_text_field", "namespace": "custom"}
+    ]
+
+    if row.get('Label_Thumb'):
+         metafields.append({"key": "ut_img_small", "value": row['Label_Thumb'], "type": "single_line_text_field", "namespace": "custom"})
+         metafields.append({"key": "ut_img_hd", "value": row['Label_Thumb'], "type": "single_line_text_field", "namespace": "custom"})
+
+    if untappd_id:
+         # Construct a rough link
+         metafields.append({"key": "ut_link", "value": f"https://untappd.com/beer/{untappd_id}", "type": "single_line_text_field", "namespace": "custom"})
+
+    return {
+        "product": {
+            "title": full_title,
+            "body_html": body_html,
+            "vendor": vendor,
+            "product_type": prod_type,
+            "status": "draft", # Safety first
+            "tags": tags_str,
+            "variants": variants_list,
+            "images": images,
+            "metafields": metafields
+        }
+    }
+
 # --- CIN7 FAMILY & PRODUCT CREATION ---
 def check_cin7_exists(endpoint, name_or_sku, is_sku=False):
     headers = get_cin7_headers()
@@ -1666,6 +1811,96 @@ if st.session_state.header_data is not None:
                 else:
                     st.error("Shopify secrets missing.")
 
+            # ... (Inside Tab 4, below the Check button) ...
+
+            if st.button("🚀 Upload to Shopify (L & G)", disabled=not st.session_state.upload_generated):
+                if "shopify" not in st.secrets:
+                    st.error("Shopify secrets missing.")
+                    st.stop()
+
+                # Setup API details
+                creds = st.secrets["shopify"]
+                shop_url = creds.get("shop_url")
+                token = creds.get("access_token")
+                version = creds.get("api_version", "2023-04") # Using your requested version
+                base_url = f"https://{shop_url}/admin/api/{version}"
+                headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
+                
+                log_box = st.expander("Shopify Upload Logs", expanded=True)
+                
+                # Group by Family to handle multiple variants per product
+                grouped = st.session_state.upload_data.groupby('Family_Name')
+                
+                prog_bar = st.progress(0)
+                total_groups = len(grouped)
+                
+                for i, (fam_name, group) in enumerate(grouped):
+                    prog_bar.progress((i)/total_groups)
+                    log_box.write(f"**Processing: {fam_name}**")
+                    
+                    # We process London (L) and Gloucester (G) separately
+                    for loc_prefix in ["L", "G"]:
+                        full_title = f"{loc_prefix}-{fam_name}"
+                        
+                        # 1. CHECK EXISTENCE
+                        pid, existing_vid = check_shopify_title(full_title)
+                        
+                        if pid:
+                            # --- PRODUCT EXISTS: ADD VARIANTS ---
+                            log_box.write(f"   🔹 {loc_prefix}: Found ID {pid}. Checking variants...")
+                            
+                            for _, row in group.iterrows():
+                                # Create Variant Payload
+                                var_payload = {"variant": create_shopify_variant_payload(row, loc_prefix)}
+                                
+                                # Check if variant SKU already exists in this product (Optional optimization, but good safety)
+                                # For now, we assume if we are running this, we want to add/overwrite.
+                                # To add a variant, we POST to /products/{id}/variants.json
+                                
+                                url = f"{base_url}/products/{pid}/variants.json"
+                                try:
+                                    r = requests.post(url, json=var_payload, headers=headers)
+                                    if r.status_code in [200, 201]:
+                                        log_box.write(f"      ✅ Added Variant: {row['Variant_Name']}")
+                                    elif r.status_code == 422 and "already exists" in r.text:
+                                         log_box.write(f"      ⚠️ Variant SKU Exists: {row['Variant_Name']}")
+                                    else:
+                                        log_box.write(f"      ❌ Variant Error: {r.text}")
+                                except Exception as e:
+                                    log_box.write(f"      💥 Variant Exception: {e}")
+                                    
+                        else:
+                            # --- PRODUCT MISSING: CREATE NEW ---
+                            log_box.write(f"   🆕 {loc_prefix}: Creating New Product...")
+                            
+                            # Prepare all variants for this family at once for the creation payload
+                            variants_list = []
+                            for _, row in group.iterrows():
+                                # For creation, we don't wrap in "variant": {} inside the list
+                                # We just need the dict
+                                v_data = create_shopify_variant_payload(row, loc_prefix)
+                                variants_list.append(v_data)
+                            
+                            # Use the first row for product-level data (Tags, Body, etc)
+                            first_row = group.iloc[0]
+                            prod_payload = create_shopify_product_payload(first_row, loc_prefix, variants_list)
+                            
+                            url = f"{base_url}/products.json"
+                            try:
+                                r = requests.post(url, json=prod_payload, headers=headers)
+                                if r.status_code in [200, 201]:
+                                    new_id = r.json()['product']['id']
+                                    log_box.write(f"      ✅ Created Product! ID: {new_id}")
+                                else:
+                                    log_box.write(f"      ❌ Create Error: {r.text}")
+                            except Exception as e:
+                                log_box.write(f"      💥 Create Exception: {e}")
+                                
+                        time.sleep(0.5) # Rate limit kindness
+
+                prog_bar.progress(1.0)
+                st.success("Shopify Process Complete!")
+
             # ... (Existing "Upload To Cin7" button follows here) ...
 
             if st.button("🚀 Upload To Cin7 (Families & Variants)", disabled=not st.session_state.upload_generated):
@@ -1779,6 +2014,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
