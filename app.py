@@ -461,16 +461,31 @@ def split_untappd_style(full_style):
     secondary = parts[1].strip() if len(parts) > 1 else ""
     return primary, secondary
 
-def get_filter_group(pack_size, fmt):
-    """Generates '12 Packs' or 'Single Cans'"""
+def get_filter_group(row):
+    """
+    Generates the strict value for custom.filter_group.
+    Prioritizes Keg_Connector (Sankey/KeyKeg) then Pack Size (12 Packs).
+    """
+    # 1. Check if it's a Keg with a known connector
+    # In Tab 4, we generated 'Keg_Connector' with values like 'KeyKeg Coupler'
+    connector = str(row.get('Keg_Connector', '')).strip()
+    if connector and connector.lower() != 'nan' and connector.lower() != 'none':
+        return connector
+
+    # 2. If no connector, assume Small Pack logic
     try:
-        pack = float(pack_size)
+        pack = float(row.get('pack_size', 1))
     except:
         pack = 1.0
     
     if pack > 1:
         return f"{int(pack)} Packs"
-    return f"Single {fmt}"
+    
+    # If it's a Single can/bottle and not in the validated list, 
+    # we might need to skip this field or map it to "Single".
+    # Based on your error log, "Single" wasn't listed, but usually it exists.
+    # We will return "Single" for now, but if that fails, we might need to return None.
+    return "Single" 
 
 def create_shopify_variant_payload(row, location_prefix):
     """Creates the JSON for a SINGLE variant."""
@@ -479,14 +494,26 @@ def create_shopify_variant_payload(row, location_prefix):
     
     # Data extraction
     sku = f"{prefix}{row['Variant_SKU']}"
-    price = str(row['Sales_Price']) # Sales price calculated in Tab 4
+    price = str(row['Sales_Price']) 
     title = row['Variant_Name']
     weight = float(row.get('Weight', 0))
-    pack_size = row.get('pack_size', 1)
-    fmt = row.get('format', 'Unit')
     
-    # Metafield: Filter Group
-    filter_val = get_filter_group(pack_size, fmt)
+    # --- FIXED: Use the new logic that looks at Keg_Connector ---
+    filter_val = get_filter_group(row)
+    
+    # Metafields List
+    metafields = [
+        {"key": "split_case", "value": "false", "type": "boolean", "namespace": "custom"}
+    ]
+    
+    # Only add filter_group if we have a valid value
+    if filter_val:
+        metafields.append({
+            "key": "filter_group", 
+            "value": filter_val, 
+            "type": "single_line_text_field", 
+            "namespace": "custom"
+        })
     
     return {
         "sku": sku,
@@ -494,14 +521,11 @@ def create_shopify_variant_payload(row, location_prefix):
         "title": title,
         "weight": weight,
         "weight_unit": "kg",
-        "option1": title, # Shopify requires Option1 to match if it's the only option
+        "option1": title, 
         "inventory_management": "shopify", 
         "fulfillment_service": "manual",
         "inventory_policy": "deny",
-        "metafields": [
-            {"key": "filter_group", "value": filter_val, "type": "single_line_text_field", "namespace": "custom"},
-            {"key": "split_case", "value": "false", "type": "boolean", "namespace": "custom"} # Default to false/null
-        ]
+        "metafields": metafields
     }
 
 def create_shopify_product_payload(row, location_prefix, variants_list):
@@ -523,8 +547,10 @@ def create_shopify_product_payload(row, location_prefix, variants_list):
     style_prim, style_sec = split_untappd_style(row.get('untappd_style', ''))
     untappd_id = row.get('Untappd_ID', '') or row.get('untappd_id', '')
     
-    # Tags Construction
-    # "Gloucester,Wholesale,Nirvana Brewery,,Beer,Cans,,Cans,Stout,English,0% - 3%,Rotational Product"
+    # --- TAGS CONSTRUCTION ---
+    # We want to tag it with the Filter Group (e.g. KeyKeg Coupler) if applicable
+    filter_val = get_filter_group(row)
+    
     tags_list = [
         loc_name, 
         "Wholesale", 
@@ -534,16 +560,16 @@ def create_shopify_product_payload(row, location_prefix, variants_list):
         style_prim, 
         style_sec, 
         abv_cat, 
-        row.get('Attribute_5', 'Rotational Product')
+        row.get('Attribute_5', 'Rotational Product'),
+        filter_val # Add the strict connector/pack size as a tag too
     ]
-    # Filter out empty strings and join
-    tags_str = ",".join([t for t in tags_list if t])
+    # Filter out empty strings/None and join
+    tags_str = ",".join([str(t) for t in tags_list if t])
 
     # Images
     images = []
     if row.get('Label_Thumb'):
-        # Try to hack the URL to get HD if possible, otherwise use thumb
-        img_url = row['Label_Thumb'].replace("Icon.png", "HD.png") # Heuristic, might not always work
+        img_url = row['Label_Thumb'].replace("Icon.png", "HD.png")
         images.append({"src": img_url})
 
     # Metafields
@@ -554,6 +580,7 @@ def create_shopify_product_payload(row, location_prefix, variants_list):
         {"key": "primary_style", "value": style_prim, "type": "single_line_text_field", "namespace": "custom"},
         {"key": "secondary_style", "value": style_sec, "type": "single_line_text_field", "namespace": "custom"},
         {"key": "collaboration", "value": row.get('collaborator', ''), "type": "single_line_text_field", "namespace": "custom"},
+        # Map format to keg_type for now, or use connector if you prefer
         {"key": "keg_type", "value": row.get('format', ''), "type": "single_line_text_field", "namespace": "custom"},
         {"key": "ut_ignore", "value": "false", "type": "boolean", "namespace": "custom"},
         {"key": "ut_id", "value": str(untappd_id), "type": "number_integer", "namespace": "custom"},
@@ -567,7 +594,6 @@ def create_shopify_product_payload(row, location_prefix, variants_list):
          metafields.append({"key": "ut_img_hd", "value": row['Label_Thumb'], "type": "single_line_text_field", "namespace": "custom"})
 
     if untappd_id:
-         # Construct a rough link
          metafields.append({"key": "ut_link", "value": f"https://untappd.com/beer/{untappd_id}", "type": "single_line_text_field", "namespace": "custom"})
 
     return {
@@ -576,7 +602,7 @@ def create_shopify_product_payload(row, location_prefix, variants_list):
             "body_html": body_html,
             "vendor": vendor,
             "product_type": prod_type,
-            "status": "draft", # Safety first
+            "status": "draft",
             "tags": tags_str,
             "variants": variants_list,
             "images": images,
@@ -2014,6 +2040,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
