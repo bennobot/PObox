@@ -245,7 +245,7 @@ def get_cin7_base_url():
     if "cin7" not in st.secrets: return None
     return st.secrets["cin7"].get("base_url", "https://inventory.dearsystems.com/ExternalApi/v2")
 
-# --- RATE LIMIT WRAPPER (NEW) ---
+# --- RATE LIMIT WRAPPER ---
 def make_cin7_request(method, url, headers=None, **kwargs):
     """Wraps requests to handle Cin7 Rate Limits (60 calls/60s)."""
     if not headers:
@@ -363,12 +363,49 @@ def get_cin7_supplier(name):
     if "&" in name: return get_cin7_supplier(name.replace("&", "and"))
     return None
 
-# --- ADD THIS TO HELPER FUNCTIONS (SECTION 1D) ---
+# --- SHOPIFY SPECIFIC FUNCTIONS ---
 
-def check_shopify_product_exists(title):
+def fetch_shopify_products_by_vendor(vendor):
     """
-    Checks if a product exists in Shopify by Title.
-    Returns: (Product_ID, Variant_ID) if found, else (None, None).
+    Used in Tab 1 for Reconciliation. 
+    Uses GraphQL to get all products for a specific vendor.
+    """
+    if "shopify" not in st.secrets: return []
+    if not vendor or not isinstance(vendor, str): return []
+    creds = st.secrets["shopify"]
+    shop_url = creds.get("shop_url")
+    token = creds.get("access_token")
+    version = creds.get("api_version", "2024-04")
+    endpoint = f"https://{shop_url}/admin/api/{version}/graphql.json"
+    headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
+    query = """query ($query: String!, $cursor: String) { products(first: 50, query: $query, after: $cursor) { pageInfo { hasNextPage endCursor } edges { node { id title status format_meta: metafield(namespace: "custom", key: "Format") { value } abv_meta: metafield(namespace: "custom", key: "ABV") { value } keg_meta: metafield(namespace: "custom", key: "Keg_Type") { value } variants(first: 20) { edges { node { id title sku inventoryQuantity } } } } } } }"""
+    search_vendor = vendor.replace("'", "\\'") 
+    variables = {"query": f"vendor:'{search_vendor}'"} 
+    all_products = []
+    cursor = None
+    has_next = True
+    while has_next:
+        vars_curr = variables.copy()
+        if cursor: vars_curr['cursor'] = cursor
+        try:
+            response = requests.post(endpoint, json={"query": query, "variables": vars_curr}, headers=headers)
+            if response.status_code == 200:
+                data = response.json()
+                if "data" in data and "products" in data["data"]:
+                    p_data = data["data"]["products"]
+                    all_products.extend(p_data["edges"])
+                    has_next = p_data["pageInfo"]["hasNextPage"]
+                    cursor = p_data["pageInfo"]["endCursor"]
+                else: has_next = False
+            else: has_next = False
+        except: has_next = False
+    return all_products
+
+def check_shopify_title(title):
+    """
+    Used in Tab 4 for Product Upload.
+    Checks Shopify for a product with this EXACT title.
+    Returns: (Product_ID, First_Variant_ID) or (None, None)
     """
     if "shopify" not in st.secrets: return None, None
     
@@ -377,7 +414,7 @@ def check_shopify_product_exists(title):
     token = creds.get("access_token")
     version = creds.get("api_version", "2024-04")
     
-    # Construct URL exactly as requested
+    # Endpoint: /products.json?title=...
     url = f"https://{shop_url}/admin/api/{version}/products.json"
     
     headers = {
@@ -385,27 +422,22 @@ def check_shopify_product_exists(title):
         "Content-Type": "application/json"
     }
     
-    # Use params for safe encoding of the title
-    params = {"title": title}
-    
     try:
-        response = requests.get(url, headers=headers, params=params)
+        # Shopify API filters are case-insensitive usually, but we verify exact match below
+        response = requests.get(url, headers=headers, params={"title": title})
+        
         if response.status_code == 200:
-            data = response.json()
-            products = data.get("products", [])
-            
-            # Shopify title search is sometimes "fuzzy" or "contains". 
-            # We iterate to find an EXACT match to be safe.
+            products = response.json().get("products", [])
             for p in products:
+                # Double check exact string match to avoid partial matches
                 if p["title"] == title:
-                    # Return Product ID and the ID of the first variant (often needed for updates)
-                    first_variant_id = p["variants"][0]["id"] if p["variants"] else None
-                    return p["id"], first_variant_id
-                    
-        return None, None
-    except Exception as e:
-        # In a real app, you might want to log this error
-        return None, None
+                    # Return Product ID and the first Variant ID (useful for API writes later)
+                    v_id = p["variants"][0]["id"] if p["variants"] else None
+                    return p["id"], v_id
+    except Exception:
+        pass
+        
+    return None, None
 
 # --- CIN7 FAMILY & PRODUCT CREATION ---
 def check_cin7_exists(endpoint, name_or_sku, is_sku=False):
@@ -1729,6 +1761,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
