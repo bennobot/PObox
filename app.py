@@ -363,6 +363,50 @@ def get_cin7_supplier(name):
     if "&" in name: return get_cin7_supplier(name.replace("&", "and"))
     return None
 
+# --- ADD THIS TO HELPER FUNCTIONS (SECTION 1D) ---
+
+def check_shopify_product_exists(title):
+    """
+    Checks if a product exists in Shopify by Title.
+    Returns: (Product_ID, Variant_ID) if found, else (None, None).
+    """
+    if "shopify" not in st.secrets: return None, None
+    
+    creds = st.secrets["shopify"]
+    shop_url = creds.get("shop_url")
+    token = creds.get("access_token")
+    version = creds.get("api_version", "2024-04")
+    
+    # Construct URL exactly as requested
+    url = f"https://{shop_url}/admin/api/{version}/products.json"
+    
+    headers = {
+        "X-Shopify-Access-Token": token,
+        "Content-Type": "application/json"
+    }
+    
+    # Use params for safe encoding of the title
+    params = {"title": title}
+    
+    try:
+        response = requests.get(url, headers=headers, params=params)
+        if response.status_code == 200:
+            data = response.json()
+            products = data.get("products", [])
+            
+            # Shopify title search is sometimes "fuzzy" or "contains". 
+            # We iterate to find an EXACT match to be safe.
+            for p in products:
+                if p["title"] == title:
+                    # Return Product ID and the ID of the first variant (often needed for updates)
+                    first_variant_id = p["variants"][0]["id"] if p["variants"] else None
+                    return p["id"], first_variant_id
+                    
+        return None, None
+    except Exception as e:
+        # In a real app, you might want to log this error
+        return None, None
+
 # --- CIN7 FAMILY & PRODUCT CREATION ---
 def check_cin7_exists(endpoint, name_or_sku, is_sku=False):
     headers = get_cin7_headers()
@@ -1533,6 +1577,47 @@ if st.session_state.header_data is not None:
                 st.success("Upload Data Generated (SKUs, Names, Weights, Connectors)!")
                 st.rerun()
 
+            # ... (Inside Tab 4, after the "Generate Upload Data" logic) ...
+            
+            st.divider()
+            st.markdown("### 🛒 Shopify Integration (Beta)")
+
+            # TEMP BUTTON: Check Existence
+            if st.button("🕵️ Check Shopify Existence (Title Match)", disabled=not st.session_state.upload_generated):
+                if "shopify" in st.secrets:
+                    st.write("Checking Shopify for existing Families...")
+                    
+                    # 1. Get unique Family Names from the upload data to avoid duplicate checks
+                    unique_families = st.session_state.upload_data['Family_Name'].unique()
+                    
+                    results_log = []
+                    
+                    # 2. Create a progress bar
+                    prog_bar = st.progress(0)
+                    
+                    for i, family_name in enumerate(unique_families):
+                        # Update progress
+                        prog_bar.progress((i + 1) / len(unique_families))
+                        
+                        # 3. Call the helper function
+                        p_id, v_id = check_shopify_product_exists(family_name)
+                        
+                        if p_id:
+                            results_log.append(f"✅ FOUND: '{family_name}' | ID: {p_id}")
+                        else:
+                            results_log.append(f"❌ NOT FOUND: '{family_name}' (Will create new)")
+                            
+                    # 4. Display Results
+                    with st.expander("View Check Results", expanded=True):
+                        for log in results_log:
+                            st.write(log)
+                            
+                    st.success("Check Complete.")
+                else:
+                    st.error("Shopify secrets missing in .streamlit/secrets.toml")
+
+            # ... (Existing "Upload To Cin7" button follows here) ...
+
             if st.button("🚀 Upload To Cin7 (Families & Variants)", disabled=not st.session_state.upload_generated):
                 if "cin7" in st.secrets:
                     unique_rows = st.session_state.upload_data.copy()
@@ -1644,6 +1729,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
