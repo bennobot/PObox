@@ -1612,41 +1612,62 @@ if st.session_state.header_data is not None:
             # ... (Inside Tab 4, after the "Generate Upload Data" logic) ...
             
             st.divider()
-            st.markdown("### 🛒 Shopify Integration (Beta)")
+            st.markdown("### 🛒 Shopify Integration")
 
-            # TEMP BUTTON: Check Existence
-            if st.button("🕵️ Check Shopify Existence (Title Match)", disabled=not st.session_state.upload_generated):
+            if st.button("🕵️ Check Shopify Existence (L- & G-)", disabled=not st.session_state.upload_generated):
                 if "shopify" in st.secrets:
-                    st.write("Checking Shopify for existing Families...")
                     
-                    # 1. Get unique Family Names from the upload data to avoid duplicate checks
+                    # 1. Get unique base Family Names from the upload DataFrame
                     unique_families = st.session_state.upload_data['Family_Name'].unique()
                     
-                    results_log = []
+                    st.write(f"Scanning Shopify for {len(unique_families)} Families (x2 locations)...")
                     
-                    # 2. Create a progress bar
+                    results = []
                     prog_bar = st.progress(0)
                     
-                    for i, family_name in enumerate(unique_families):
-                        # Update progress
+                    # 2. Iterate and Check
+                    for i, base_name in enumerate(unique_families):
+                        # Update Progress
                         prog_bar.progress((i + 1) / len(unique_families))
                         
-                        # 3. Call the helper function
-                        p_id, v_id = check_shopify_product_exists(family_name)
+                        # Construct the specific Location Titles
+                        l_title = f"L-{base_name}"
+                        g_title = f"G-{base_name}"
                         
-                        if p_id:
-                            results_log.append(f"✅ FOUND: '{family_name}' | ID: {p_id}")
-                        else:
-                            results_log.append(f"❌ NOT FOUND: '{family_name}' (Will create new)")
-                            
-                    # 4. Display Results
-                    with st.expander("View Check Results", expanded=True):
-                        for log in results_log:
-                            st.write(log)
-                            
-                    st.success("Check Complete.")
+                        # --- CORRECTED FUNCTION CALL HERE ---
+                        l_pid, _ = check_shopify_title(l_title)
+                        g_pid, _ = check_shopify_title(g_title)
+                        
+                        # 3. Log Status
+                        # Status Icons: ✅ = Found, 🆕 = Missing (Will Create)
+                        l_status = f"✅ ({l_pid})" if l_pid else "🆕 Create"
+                        g_status = f"✅ ({g_pid})" if g_pid else "🆕 Create"
+                        
+                        results.append({
+                            "Family Base Name": base_name,
+                            "L- Prefix": l_status,
+                            "G- Prefix": g_status,
+                            "L_ID": l_pid, # Hidden col for logic later
+                            "G_ID": g_pid  # Hidden col for logic later
+                        })
+                        
+                        # Sleep briefly to be kind to Shopify API rate limits
+                        time.sleep(0.2)
+
+                    # 4. Display Results Table
+                    st.success("Scan Complete")
+                    results_df = pd.DataFrame(results)
+                    
+                    st.dataframe(
+                        results_df[["Family Base Name", "L- Prefix", "G- Prefix"]], 
+                        use_container_width=True
+                    )
+                    
+                    # Store results in session state for the next step
+                    st.session_state.shopify_check_results = results_df
+                    
                 else:
-                    st.error("Shopify secrets missing in .streamlit/secrets.toml")
+                    st.error("Shopify secrets missing.")
 
             # ... (Existing "Upload To Cin7" button follows here) ...
 
@@ -1761,6 +1782,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
