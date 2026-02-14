@@ -1611,13 +1611,15 @@ if st.session_state.header_data is not None:
 
             # ... (Inside Tab 4, after the "Generate Upload Data" logic) ...
             
+            # ... (Inside Tab 4, after "Generate Upload Data" button) ...
+
             st.divider()
             st.markdown("### 🛒 Shopify Integration")
 
             if st.button("🕵️ Check Shopify Existence (L- & G-)", disabled=not st.session_state.upload_generated):
                 if "shopify" in st.secrets:
                     
-                    # 1. Get unique base Family Names from the upload DataFrame
+                    # 1. Get unique base Family Names
                     unique_families = st.session_state.upload_data['Family_Name'].unique()
                     
                     st.write(f"Scanning Shopify for {len(unique_families)} Families (x2 locations)...")
@@ -1627,19 +1629,15 @@ if st.session_state.header_data is not None:
                     
                     # 2. Iterate and Check
                     for i, base_name in enumerate(unique_families):
-                        # Update Progress
                         prog_bar.progress((i + 1) / len(unique_families))
                         
-                        # Construct the specific Location Titles
                         l_title = f"L-{base_name}"
                         g_title = f"G-{base_name}"
                         
-                        # --- CORRECTED FUNCTION CALL HERE ---
+                        # Call the helper function
                         l_pid, _ = check_shopify_title(l_title)
                         g_pid, _ = check_shopify_title(g_title)
                         
-                        # 3. Log Status
-                        # Status Icons: ✅ = Found, 🆕 = Missing (Will Create)
                         l_status = f"✅ ({l_pid})" if l_pid else "🆕 Create"
                         g_status = f"✅ ({g_pid})" if g_pid else "🆕 Create"
                         
@@ -1647,23 +1645,22 @@ if st.session_state.header_data is not None:
                             "Family Base Name": base_name,
                             "L- Prefix": l_status,
                             "G- Prefix": g_status,
-                            "L_ID": l_pid, # Hidden col for logic later
-                            "G_ID": g_pid  # Hidden col for logic later
+                            "L_ID": l_pid, 
+                            "G_ID": g_pid  
                         })
                         
-                        # Sleep briefly to be kind to Shopify API rate limits
-                        time.sleep(0.2)
+                        time.sleep(0.2) # Rate limit safety
 
-                    # 4. Display Results Table
+                    # 3. Display Results
                     st.success("Scan Complete")
                     results_df = pd.DataFrame(results)
                     
+                    # --- FIXED LINE BELOW (width="stretch") ---
                     st.dataframe(
                         results_df[["Family Base Name", "L- Prefix", "G- Prefix"]], 
-                        use_container_width=True
+                        width="stretch"
                     )
                     
-                    # Store results in session state for the next step
                     st.session_state.shopify_check_results = results_df
                     
                 else:
@@ -1782,6 +1779,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
