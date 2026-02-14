@@ -70,37 +70,18 @@ st.title("Brewery Invoice Parser ⚡")
 
 # --- 1A. PRICING LOGIC ---
 def calculate_sell_price(cost_price, product_type, fmt):
-    """
-    Calculates Sales Price (PriceTier1) based on Cost, Type (Core/Rotational), and Format.
-    """
     try:
         cost = float(cost_price)
     except:
         return 0.00
-
     if cost == 0: return 0.00
-
-    # Normalize format for checking
     fmt_lower = str(fmt).lower()
-    
-    # Define Draft Keywords
     draft_triggers = ['keykeg', 'steel', 'poly', 'uni', 'cask', 'keg', 'firkin', 'pin']
     is_draft = any(t in fmt_lower for t in draft_triggers)
-
-    # --- RULE 1: HIGH VALUE DRAFT (>140) ---
-    if is_draft and cost > 140:
-        return round(cost + 40, 2)
-
-    # --- RULE 2: LOW VALUE DRAFT (<63) ---
-    if is_draft and cost < 63:
-        return round(cost + 20, 2)
-
-    # --- RULE 3: STANDARD MULTIPLIERS ---
-    if product_type == "Core Product":
-        return round(cost * 1.265, 2)
-    else: 
-        # Default to Rotational multiplier
-        return round(cost * 1.285, 2)
+    if is_draft and cost > 140: return round(cost + 40, 2)
+    if is_draft and cost < 63: return round(cost + 20, 2)
+    if product_type == "Core Product": return round(cost * 1.265, 2)
+    else: return round(cost * 1.285, 2)
 
 # --- 1B. GOOGLE DRIVE ---
 def get_drive_service():
@@ -147,26 +128,16 @@ def search_untappd_item(supplier, product):
     creds = st.secrets["untappd"]
     base_url = creds.get("base_url", "https://business.untappd.com/api/v1")
     token = creds.get("api_token")
-    
-    # 1. Convert & to 'and' 
     raw_supp = str(supplier).replace("&", " and ")
     raw_prod = str(product).replace("&", " and ")
-
-    # 2. Clean Supplier: Remove "Brewing", "Ltd", "LLP" etc
     clean_supp = re.sub(r'(?i)\b(ltd|limited|llp|plc|brewing|brewery|co\.?)\b', '', raw_supp).strip()
     clean_prod = raw_prod.strip()
-
-    # 3. Combine, Split by whitespace, and Rejoin with SPACES
     full_string = f"{clean_supp} {clean_prod}"
     parts = full_string.split() 
     query_str = " ".join(parts)
-    
-    # 4. URL Encode (Turns spaces into %20)
     safe_q = quote(query_str)
     url = f"{base_url}/items/search?q={safe_q}"
-    
     headers = {"Authorization": f"Basic {token}", "Content-Type": "application/json"}
-    
     try:
         response = requests.get(url, headers=headers)
         if response.status_code == 200:
@@ -186,30 +157,22 @@ def search_untappd_item(supplier, product):
                     "query_used": query_str 
                 }
     except: pass
-    
     return {"query_used": query_str}
 
 def batch_untappd_lookup(matrix_df):
     if matrix_df.empty: return matrix_df, ["Matrix Empty"]
-    
     cols = ['Untappd_Status', 'Untappd_ID', 'Untappd_Brewery', 'Untappd_Product', 
             'Untappd_ABV', 'Untappd_Style', 'Untappd_Desc', 'Label_Thumb', 'Brewery_Loc']
-    
     for c in cols:
         if c not in matrix_df.columns: matrix_df[c] = ""
-            
     updated_rows = []
     logs = []
     prog_bar = st.progress(0)
-    
     for idx, row in matrix_df.iterrows():
         prog_bar.progress((idx + 1) / len(matrix_df))
-        
         current_status = str(row.get('Untappd_Status', ''))
-        
         if current_status != "✅ Found":
             res = search_untappd_item(row['Supplier_Name'], row['Product_Name'])
-            
             if res and "untappd_id" in res:
                 logs.append(f"✅ Found: {res['name']}")
                 row['Untappd_Status'] = "✅ Found"
@@ -226,9 +189,7 @@ def batch_untappd_lookup(matrix_df):
                 logs.append(f"❌ No match: {row['Product_Name']} | Query Sent: [{used_q}]")
                 row['Untappd_Status'] = "❌ Not Found"
                 row['Untappd_ID'] = ""
-        
         updated_rows.append(row)
-        
     return pd.DataFrame(updated_rows), logs
 
 # --- 1D. SHOPIFY & CIN7 ---
@@ -245,32 +206,22 @@ def get_cin7_base_url():
     if "cin7" not in st.secrets: return None
     return st.secrets["cin7"].get("base_url", "https://inventory.dearsystems.com/ExternalApi/v2")
 
-# --- RATE LIMIT WRAPPER ---
 def make_cin7_request(method, url, headers=None, **kwargs):
-    """Wraps requests to handle Cin7 Rate Limits (60 calls/60s)."""
-    if not headers:
-        headers = get_cin7_headers()
-    
+    if not headers: headers = get_cin7_headers()
     max_retries = 6
-    backoff = 1.0 # Start with 1s wait
-    
+    backoff = 1.0 
     for attempt in range(max_retries):
         try:
             response = requests.request(method, url, headers=headers, **kwargs)
-            
-            # Rate Limit Hit (429)
             if response.status_code == 429:
                 time.sleep(backoff)
-                backoff *= 2 # Exponential backoff
+                backoff *= 2 
                 continue
-                
             return response
-            
         except Exception as e:
             if attempt == max_retries - 1: raise e
             time.sleep(backoff)
             backoff *= 2
-            
     return response
 
 @st.cache_data(ttl=3600)
@@ -338,7 +289,6 @@ def get_cin7_product_id(sku):
     url = f"{get_cin7_base_url()}/product"
     params = {"Sku": sku}
     try:
-        # Rate Limit Safe Call
         response = make_cin7_request("GET", url, headers=headers, params=params)
         if response.status_code == 200:
             data = response.json()
@@ -353,7 +303,6 @@ def get_cin7_supplier(name):
     safe_name = quote(name)
     url = f"{get_cin7_base_url()}/supplier?Name={safe_name}"
     try:
-        # Rate Limit Safe Call
         response = make_cin7_request("GET", url, headers=headers)
         if response.status_code == 200:
             data = response.json()
@@ -363,13 +312,9 @@ def get_cin7_supplier(name):
     if "&" in name: return get_cin7_supplier(name.replace("&", "and"))
     return None
 
-# --- SHOPIFY SPECIFIC FUNCTIONS ---
+# --- SHOPIFY HELPERS ---
 
 def fetch_shopify_products_by_vendor(vendor):
-    """
-    Used in Tab 1 for Reconciliation. 
-    Uses GraphQL to get all products for a specific vendor.
-    """
     if "shopify" not in st.secrets: return []
     if not vendor or not isinstance(vendor, str): return []
     creds = st.secrets["shopify"]
@@ -402,59 +347,37 @@ def fetch_shopify_products_by_vendor(vendor):
     return all_products
 
 def check_shopify_title(title):
-    """
-    Used in Tab 4 for Product Upload.
-    Checks Shopify for a product with this EXACT title.
-    Returns: (Product_ID, First_Variant_ID) or (None, None)
-    """
     if "shopify" not in st.secrets: return None, None
-    
     creds = st.secrets["shopify"]
     shop_url = creds.get("shop_url")
     token = creds.get("access_token")
     version = creds.get("api_version", "2024-04")
-    
-    # Endpoint: /products.json?title=...
     url = f"https://{shop_url}/admin/api/{version}/products.json"
-    
-    headers = {
-        "X-Shopify-Access-Token": token,
-        "Content-Type": "application/json"
-    }
-    
+    headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
     try:
-        # Shopify API filters are case-insensitive usually, but we verify exact match below
         response = requests.get(url, headers=headers, params={"title": title})
-        
         if response.status_code == 200:
             products = response.json().get("products", [])
             for p in products:
-                # Double check exact string match to avoid partial matches
                 if p["title"] == title:
-                    # Return Product ID and the first Variant ID (useful for API writes later)
                     v_id = p["variants"][0]["id"] if p["variants"] else None
                     return p["id"], v_id
-    except Exception:
-        pass
-        
+    except Exception: pass
     return None, None
 
-# --- SHOPIFY PAYLOAD HELPERS ---
+# --- SHOPIFY PAYLOAD HELPERS (STRICT VALIDATION) ---
 
 def get_abv_category(abv_str):
-    """Generates the '0% - 3%' string based on float value."""
     try:
         val = float(abv_str)
     except:
         return ""
-    
     if val <= 3.0: return "0% - 3%"
     if val <= 5.0: return "3% - 5%"
     if val <= 7.0: return "5% - 7%"
     return "7%+"
 
 def split_untappd_style(full_style):
-    """Splits 'Stout - Milk / Sweet' into Primary='Stout', Secondary='Milk / Sweet'"""
     if not full_style: return "", ""
     parts = str(full_style).split("-", 1)
     primary = parts[0].strip()
@@ -463,50 +386,48 @@ def split_untappd_style(full_style):
 
 def get_filter_group(row):
     """
-    Generates the strict value for custom.filter_group.
-    Prioritizes Keg_Connector (Sankey/KeyKeg) then Pack Size (12 Packs).
+    STRICTLY MATCHES SHOPIFY ALLOWED VALUES.
+    If it doesn't match the list, return None to avoid API errors.
     """
-    # 1. Check if it's a Keg with a known connector
-    # In Tab 4, we generated 'Keg_Connector' with values like 'KeyKeg Coupler'
+    valid_options = [
+        "6 Packs", "12 Packs", "24 Packs", 
+        "KeyKeg Coupler", "Sankey Coupler", "US Sankey D-Type Coupler"
+    ]
+    
+    # 1. Try Connector First (Must match strict casing)
     connector = str(row.get('Keg_Connector', '')).strip()
-    if connector and connector.lower() != 'nan' and connector.lower() != 'none':
+    if connector in valid_options:
         return connector
 
-    # 2. If no connector, assume Small Pack logic
+    # 2. Try Pack Size
     try:
-        pack = float(row.get('pack_size', 1))
+        pack = int(float(row.get('pack_size', 0)))
     except:
-        pack = 1.0
-    
-    if pack > 1:
-        return f"{int(pack)} Packs"
-    
-    # If it's a Single can/bottle and not in the validated list, 
-    # we might need to skip this field or map it to "Single".
-    # Based on your error log, "Single" wasn't listed, but usually it exists.
-    # We will return "Single" for now, but if that fails, we might need to return None.
-    return "Single" 
+        pack = 0
+
+    pack_str = f"{pack} Packs"
+    if pack_str in valid_options:
+        return pack_str
+
+    # 3. Fail safe: Return None if not in strict list (e.g. Single cans)
+    return None 
 
 def create_shopify_variant_payload(row, location_prefix):
-    """Creates the JSON for a SINGLE variant."""
     is_london = location_prefix == "L"
     prefix = "L-" if is_london else "G-"
-    
-    # Data extraction
     sku = f"{prefix}{row['Variant_SKU']}"
     price = str(row['Sales_Price']) 
     title = row['Variant_Name']
     weight = float(row.get('Weight', 0))
     
-    # --- FIXED: Use the new logic that looks at Keg_Connector ---
+    # Validation Logic
     filter_val = get_filter_group(row)
     
-    # Metafields List
     metafields = [
         {"key": "split_case", "value": "false", "type": "boolean", "namespace": "custom"}
     ]
     
-    # Only add filter_group if we have a valid value
+    # Only append if valid
     if filter_val:
         metafields.append({
             "key": "filter_group", 
@@ -529,50 +450,37 @@ def create_shopify_variant_payload(row, location_prefix):
     }
 
 def create_shopify_product_payload(row, location_prefix, variants_list):
-    """Creates the FULL product JSON (Body, Tags, Metafields)."""
     is_london = location_prefix == "L"
     prefix = "L-" if is_london else "G-"
     loc_name = "London" if is_london else "Gloucester"
-    
-    # Base Data
     family_base = row['Family_Name']
     full_title = f"{prefix}{family_base}"
     vendor = row['untappd_brewery']
     body_html = row.get('description', '')
     prod_type = loc_name
-    
-    # Calculated Fields
     abv_val = row.get('untappd_abv', '0')
     abv_cat = get_abv_category(abv_val)
     style_prim, style_sec = split_untappd_style(row.get('untappd_style', ''))
     untappd_id = row.get('Untappd_ID', '') or row.get('untappd_id', '')
     
-    # --- TAGS CONSTRUCTION ---
-    # We want to tag it with the Filter Group (e.g. KeyKeg Coupler) if applicable
     filter_val = get_filter_group(row)
     
     tags_list = [
-        loc_name, 
-        "Wholesale", 
-        vendor, 
+        loc_name, "Wholesale", vendor, 
         row.get('Type', 'Beer'), 
         row.get('format', ''), 
-        style_prim, 
-        style_sec, 
+        style_prim, style_sec, 
         abv_cat, 
         row.get('Attribute_5', 'Rotational Product'),
-        filter_val # Add the strict connector/pack size as a tag too
+        filter_val # Add strict value to tags
     ]
-    # Filter out empty strings/None and join
     tags_str = ",".join([str(t) for t in tags_list if t])
 
-    # Images
     images = []
     if row.get('Label_Thumb'):
         img_url = row['Label_Thumb'].replace("Icon.png", "HD.png")
         images.append({"src": img_url})
 
-    # Metafields
     metafields = [
         {"key": "abv", "value": str(abv_val), "type": "number_decimal", "namespace": "custom"},
         {"key": "depot", "value": loc_name, "type": "single_line_text_field", "namespace": "custom"},
@@ -580,7 +488,6 @@ def create_shopify_product_payload(row, location_prefix, variants_list):
         {"key": "primary_style", "value": style_prim, "type": "single_line_text_field", "namespace": "custom"},
         {"key": "secondary_style", "value": style_sec, "type": "single_line_text_field", "namespace": "custom"},
         {"key": "collaboration", "value": row.get('collaborator', ''), "type": "single_line_text_field", "namespace": "custom"},
-        # Map format to keg_type for now, or use connector if you prefer
         {"key": "keg_type", "value": row.get('format', ''), "type": "single_line_text_field", "namespace": "custom"},
         {"key": "ut_ignore", "value": "false", "type": "boolean", "namespace": "custom"},
         {"key": "ut_id", "value": str(untappd_id), "type": "number_integer", "namespace": "custom"},
@@ -618,7 +525,6 @@ def check_cin7_exists(endpoint, name_or_sku, is_sku=False):
     safe_val = quote(name_or_sku)
     url = f"{get_cin7_base_url()}/{endpoint}?{param}={safe_val}"
     try:
-        # Rate Limit Safe Call
         response = make_cin7_request("GET", url, headers=headers)
         if response.status_code == 200:
             data = response.json()
@@ -637,15 +543,12 @@ def create_cin7_family_node(family_base_sku, family_base_name, brand_name, locat
     full_sku = f"{prefix}{family_base_sku}"
     full_name = f"{prefix}{family_base_name}"
     
-    # 1. CHECK BY SKU FIRST
     existing_id = check_cin7_exists("productFamily", full_sku, is_sku=True)
     if existing_id: return existing_id, f"✅ Family Exists (SKU Match) [ID: {existing_id}]"
 
-    # 2. CHECK BY NAME
     existing_id = check_cin7_exists("productFamily", full_name, is_sku=False)
     if existing_id: return existing_id, f"✅ Family Exists (Name Match) [ID: {existing_id}]"
 
-    # 3. CREATE NEW
     tags = f"{location_name},Wholesale,{brand_name}"
     payload = {
         "Products": [],
@@ -671,23 +574,16 @@ def create_cin7_family_node(family_base_sku, family_base_name, brand_name, locat
     url = f"{get_cin7_base_url()}/productFamily"
     headers = get_cin7_headers()
     try:
-        # Rate Limit Safe Call
         response = make_cin7_request("POST", url, headers=headers, json=payload)
-        
         if response.status_code == 200:
             resp_data = response.json()
             new_id = resp_data.get('ID')
             if not new_id and "ProductFamilies" in resp_data and len(resp_data["ProductFamilies"]) > 0:
                 new_id = resp_data["ProductFamilies"][0].get("ID")
-            
-            if new_id:
-                return new_id, f"🆕 Created Family {full_sku} (ID: {new_id})"
-            else:
-                return None, f"⚠️ HTTP 200 but No ID. Response: {json.dumps(resp_data)}"
-        else:
-            return None, f"❌ Failed Family {full_sku} [HTTP {response.status_code}]: {response.text}"
-    except Exception as e:
-        return None, f"💥 Exception Family: {str(e)}"
+            if new_id: return new_id, f"🆕 Created Family {full_sku} (ID: {new_id})"
+            else: return None, f"⚠️ HTTP 200 but No ID. Response: {json.dumps(resp_data)}"
+        else: return None, f"❌ Failed Family {full_sku} [HTTP {response.status_code}]: {response.text}"
+    except Exception as e: return None, f"💥 Exception Family: {str(e)}"
 
 def create_cin7_variant(row_data, family_id, family_base_sku, family_base_name, location_prefix):
     prefix = "L-" if location_prefix == "L" else "G-"
@@ -704,10 +600,8 @@ def create_cin7_variant(row_data, family_id, family_base_sku, family_base_name, 
     product_id = None
     product_created = False
 
-    # 1. GET OR CREATE PRODUCT
     check_url = f"{base_url}/product?Sku={quote(full_var_sku)}"
     try:
-        # Rate Limit Safe Call
         r_check = make_cin7_request("GET", check_url, headers=headers)
         if r_check.status_code == 200:
             data = r_check.json()
@@ -768,7 +662,6 @@ def create_cin7_variant(row_data, family_id, family_base_sku, family_base_name, 
         }
         
         try:
-            # Rate Limit Safe Call
             r_create = make_cin7_request("POST", f"{base_url}/product", headers=headers, json=payload_prod)
             if r_create.status_code == 200:
                 resp_data = r_create.json()
@@ -785,10 +678,8 @@ def create_cin7_variant(row_data, family_id, family_base_sku, family_base_name, 
     if not product_id:
         return f"❌ Could not retrieve Product ID for {full_var_sku}"
 
-    # 2. LINK TO FAMILY
     fam_url = f"{base_url}/productFamily?ID={family_id}"
     try:
-        # Rate Limit Safe Call
         r_fam = make_cin7_request("GET", fam_url, headers=headers)
         if r_fam.status_code != 200:
             return f"⚠️ Fetch Family Failed: {r_fam.text}"
@@ -829,7 +720,6 @@ def create_cin7_variant(row_data, family_id, family_base_sku, family_base_name, 
 
     put_fam_url = f"{base_url}/productFamily"
     try:
-        # Rate Limit Safe Call
         r_put = make_cin7_request("PUT", put_fam_url, headers=headers, json=family_obj)
         if r_put.status_code == 200:
             action = "Created & Linked" if product_created else "Linked Existing"
@@ -839,7 +729,6 @@ def create_cin7_variant(row_data, family_id, family_base_sku, family_base_name, 
     except Exception as e:
         return f"💥 Link Ex: {e}"
 
-# --- MASTER SYNC FUNCTION ---
 def sync_product_to_cin7(upload_df):
     log = []
     families = upload_df.groupby('Family_SKU')
@@ -910,7 +799,6 @@ def create_cin7_purchase_order(header_df, lines_df, location_choice):
     
     task_id = None
     try:
-        # Rate Limit Safe Call
         r1 = make_cin7_request("POST", url_create, headers=headers, json=payload_header)
         if r1.status_code == 200:
             task_id = r1.json().get('ID')
@@ -928,7 +816,6 @@ def create_cin7_purchase_order(header_df, lines_df, location_choice):
             "AdditionalCharges": []
         }
         try:
-            # Rate Limit Safe Call
             r2 = make_cin7_request("POST", url_lines, headers=headers, json=payload_lines)
             if r2.status_code == 200:
                 return True, f"✅ PO Created! ID: {task_id}", logs
@@ -936,38 +823,6 @@ def create_cin7_purchase_order(header_df, lines_df, location_choice):
         except Exception as e: return False, f"Lines Ex: {e}", logs
             
     return False, "Unknown Error", logs
-
-def fetch_shopify_products_by_vendor(vendor):
-    if "shopify" not in st.secrets: return []
-    if not vendor or not isinstance(vendor, str): return []
-    creds = st.secrets["shopify"]
-    shop_url = creds.get("shop_url")
-    token = creds.get("access_token")
-    version = creds.get("api_version", "2024-04")
-    endpoint = f"https://{shop_url}/admin/api/{version}/graphql.json"
-    headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
-    query = """query ($query: String!, $cursor: String) { products(first: 50, query: $query, after: $cursor) { pageInfo { hasNextPage endCursor } edges { node { id title status format_meta: metafield(namespace: "custom", key: "Format") { value } abv_meta: metafield(namespace: "custom", key: "ABV") { value } variants(first: 20) { edges { node { id title sku inventoryQuantity } } } } } } }"""
-    search_vendor = vendor.replace("'", "\\'") 
-    variables = {"query": f"vendor:'{search_vendor}'"} 
-    all_products = []
-    cursor = None
-    has_next = True
-    while has_next:
-        vars_curr = variables.copy()
-        if cursor: vars_curr['cursor'] = cursor
-        try:
-            response = requests.post(endpoint, json={"query": query, "variables": vars_curr}, headers=headers)
-            if response.status_code == 200:
-                data = response.json()
-                if "data" in data and "products" in data["data"]:
-                    p_data = data["data"]["products"]
-                    all_products.extend(p_data["edges"])
-                    has_next = p_data["pageInfo"]["hasNextPage"]
-                    cursor = p_data["pageInfo"]["endCursor"]
-                else: has_next = False
-            else: has_next = False
-        except: has_next = False
-    return all_products
 
 def normalize_vol_string(v_str):
     if not v_str: return "0"
@@ -1185,7 +1040,7 @@ def get_beer_style_list():
         if not df.empty:
             return sorted(df.iloc[:, 0].dropna().astype(str).unique().tolist())
     except Exception: pass
-    return ["IPA", "Pale Ale"] # Fallback
+    return ["IPA", "Pale Ale"] 
 
 def normalize_supplier_names(df, master_list):
     if df is None or df.empty or not master_list: return df
@@ -1223,7 +1078,7 @@ def create_product_matrix(df):
     for name, group in grouped:
         row = {
             'Supplier_Name': name[0], 
-            'Type': 'Beer', # <--- DEFAULT TYPE
+            'Type': 'Beer', 
             'Collaborator': name[1], 
             'Product_Name': name[2], 
             'ABV': name[3]
@@ -1334,7 +1189,7 @@ if 'untappd_logs' not in st.session_state: st.session_state.untappd_logs = []
 if 'cin7_all_suppliers' not in st.session_state: st.session_state.cin7_all_suppliers = fetch_all_cin7_suppliers_cached()
 if 'line_items_key' not in st.session_state: st.session_state.line_items_key = 0
 if 'matrix_key' not in st.session_state: st.session_state.matrix_key = 0
-if 'upload_generated' not in st.session_state: st.session_state.upload_generated = False # STATE FLAG
+if 'upload_generated' not in st.session_state: st.session_state.upload_generated = False 
 
 with st.sidebar:
     st.header("Settings")
@@ -1373,20 +1228,14 @@ with st.sidebar:
         custom_rule = st.text_area("Inject Temporary Rule:", height=100)
         st.form_submit_button("Set Rule")
 
-    # --- NEW: Rule Formatter ---
     if custom_rule:
         st.markdown("---")
         st.caption("💾 **Save to Knowledge Base**")
         st.caption("Copy this snippet into `SUPPLIER_RULEBOOK`:")
-        
-        # Try to guess the supplier name from the current processed invoice
         current_supplier = "Unknown Supplier"
         if st.session_state.header_data is not None and not st.session_state.header_data.empty:
             current_supplier = st.session_state.header_data.iloc[0].get('Payable_To', 'Unknown Supplier')
-            
-        # Format correctly for Python dictionary
         formatted_rule = f'   "{current_supplier}": """\n   {custom_rule.strip()}\n   """,\n'
-        
         st.code(formatted_rule, language="python")
 
     st.divider()
@@ -1699,7 +1548,7 @@ if st.session_state.header_data is not None:
                     st.session_state.upload_generated = False # RESET FLAG
                     st.success("Products staged successfully! Go to Tab 4.")
 
-    # --- TAB 4: PRODUCT UPLOAD (NEW) ---
+    # --- TAB 4: PRODUCT UPLOAD ---
     with current_tabs[3]:
         st.subheader("4. Product Upload Stage")
         
@@ -1734,8 +1583,8 @@ if st.session_state.header_data is not None:
                     connectors = [""]
                     fmt_lower = fmt_name.lower()
                     if "dolium" in fmt_lower and "us" in fmt_lower: connectors = ["US Sankey D-Type Coupler"]
-                    elif "poly" in fmt_lower: connectors = ["Sankey Coupler", "Keykeg Coupler"]
-                    elif "key" in fmt_lower: connectors = ["Keykeg Coupler"]
+                    elif "poly" in fmt_lower: connectors = ["Sankey Coupler", "KeyKeg Coupler"]
+                    elif "key" in fmt_lower: connectors = ["KeyKeg Coupler"]
                     elif "steel" in fmt_lower: connectors = ["Sankey Coupler"]
                         
                     s_code = supplier_map.get(supp_name, "XXXX")
@@ -1780,83 +1629,51 @@ if st.session_state.header_data is not None:
                 st.success("Upload Data Generated (SKUs, Names, Weights, Connectors)!")
                 st.rerun()
 
-            # ... (Inside Tab 4, after the "Generate Upload Data" logic) ...
-            
-            # ... (Inside Tab 4, after "Generate Upload Data" button) ...
-
+            # --- SHOPIFY SECTION ---
             st.divider()
             st.markdown("### 🛒 Shopify Integration")
 
             if st.button("🕵️ Check Shopify Existence (L- & G-)", disabled=not st.session_state.upload_generated):
                 if "shopify" in st.secrets:
-                    
-                    # 1. Get unique base Family Names
                     unique_families = st.session_state.upload_data['Family_Name'].unique()
-                    
                     st.write(f"Scanning Shopify for {len(unique_families)} Families (x2 locations)...")
-                    
                     results = []
                     prog_bar = st.progress(0)
-                    
-                    # 2. Iterate and Check
                     for i, base_name in enumerate(unique_families):
                         prog_bar.progress((i + 1) / len(unique_families))
-                        
                         l_title = f"L-{base_name}"
                         g_title = f"G-{base_name}"
-                        
-                        # Call the helper function
                         l_pid, _ = check_shopify_title(l_title)
                         g_pid, _ = check_shopify_title(g_title)
-                        
                         l_status = f"✅ ({l_pid})" if l_pid else "🆕 Create"
                         g_status = f"✅ ({g_pid})" if g_pid else "🆕 Create"
-                        
                         results.append({
                             "Family Base Name": base_name,
-                            "L- Prefix": l_status,
-                            "G- Prefix": g_status,
-                            "L_ID": l_pid, 
-                            "G_ID": g_pid  
+                            "L- Prefix": l_status, "G- Prefix": g_status,
+                            "L_ID": l_pid, "G_ID": g_pid  
                         })
-                        
-                        time.sleep(0.2) # Rate limit safety
+                        time.sleep(0.2) 
 
-                    # 3. Display Results
                     st.success("Scan Complete")
                     results_df = pd.DataFrame(results)
-                    
-                    # --- FIXED LINE BELOW (width="stretch") ---
-                    st.dataframe(
-                        results_df[["Family Base Name", "L- Prefix", "G- Prefix"]], 
-                        width="stretch"
-                    )
-                    
+                    st.dataframe(results_df[["Family Base Name", "L- Prefix", "G- Prefix"]], width="stretch")
                     st.session_state.shopify_check_results = results_df
-                    
-                else:
-                    st.error("Shopify secrets missing.")
-
-            # ... (Inside Tab 4, below the Check button) ...
+                else: st.error("Shopify secrets missing.")
 
             if st.button("🚀 Upload to Shopify (L & G)", disabled=not st.session_state.upload_generated):
                 if "shopify" not in st.secrets:
                     st.error("Shopify secrets missing.")
                     st.stop()
-
-                # Setup API details
+                
                 creds = st.secrets["shopify"]
                 shop_url = creds.get("shop_url")
                 token = creds.get("access_token")
-                version = creds.get("api_version", "2023-04") # Using your requested version
+                version = creds.get("api_version", "2023-04") 
                 base_url = f"https://{shop_url}/admin/api/{version}"
                 headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
                 
                 log_box = st.expander("Shopify Upload Logs", expanded=True)
-                
-                # Group by Family to handle multiple variants per product
                 grouped = st.session_state.upload_data.groupby('Family_Name')
-                
                 prog_bar = st.progress(0)
                 total_groups = len(grouped)
                 
@@ -1864,25 +1681,14 @@ if st.session_state.header_data is not None:
                     prog_bar.progress((i)/total_groups)
                     log_box.write(f"**Processing: {fam_name}**")
                     
-                    # We process London (L) and Gloucester (G) separately
                     for loc_prefix in ["L", "G"]:
                         full_title = f"{loc_prefix}-{fam_name}"
-                        
-                        # 1. CHECK EXISTENCE
                         pid, existing_vid = check_shopify_title(full_title)
                         
                         if pid:
-                            # --- PRODUCT EXISTS: ADD VARIANTS ---
                             log_box.write(f"   🔹 {loc_prefix}: Found ID {pid}. Checking variants...")
-                            
                             for _, row in group.iterrows():
-                                # Create Variant Payload
                                 var_payload = {"variant": create_shopify_variant_payload(row, loc_prefix)}
-                                
-                                # Check if variant SKU already exists in this product (Optional optimization, but good safety)
-                                # For now, we assume if we are running this, we want to add/overwrite.
-                                # To add a variant, we POST to /products/{id}/variants.json
-                                
                                 url = f"{base_url}/products/{pid}/variants.json"
                                 try:
                                     r = requests.post(url, json=var_payload, headers=headers)
@@ -1896,18 +1702,12 @@ if st.session_state.header_data is not None:
                                     log_box.write(f"      💥 Variant Exception: {e}")
                                     
                         else:
-                            # --- PRODUCT MISSING: CREATE NEW ---
                             log_box.write(f"   🆕 {loc_prefix}: Creating New Product...")
-                            
-                            # Prepare all variants for this family at once for the creation payload
                             variants_list = []
                             for _, row in group.iterrows():
-                                # For creation, we don't wrap in "variant": {} inside the list
-                                # We just need the dict
                                 v_data = create_shopify_variant_payload(row, loc_prefix)
                                 variants_list.append(v_data)
                             
-                            # Use the first row for product-level data (Tags, Body, etc)
                             first_row = group.iloc[0]
                             prod_payload = create_shopify_product_payload(first_row, loc_prefix, variants_list)
                             
@@ -1921,14 +1721,14 @@ if st.session_state.header_data is not None:
                                     log_box.write(f"      ❌ Create Error: {r.text}")
                             except Exception as e:
                                 log_box.write(f"      💥 Create Exception: {e}")
-                                
-                        time.sleep(0.5) # Rate limit kindness
-
+                        time.sleep(0.5)
                 prog_bar.progress(1.0)
                 st.success("Shopify Process Complete!")
 
-            # ... (Existing "Upload To Cin7" button follows here) ...
-
+            # --- CIN7 SECTION ---
+            st.divider()
+            st.markdown("### 📦 Cin7 Integration")
+            
             if st.button("🚀 Upload To Cin7 (Families & Variants)", disabled=not st.session_state.upload_generated):
                 if "cin7" in st.secrets:
                     unique_rows = st.session_state.upload_data.copy()
@@ -2040,12 +1840,3 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
-
-
-
-
-
-
-
-
-
