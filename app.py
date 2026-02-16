@@ -1584,7 +1584,7 @@ if st.session_state.header_data is not None:
         
         if st.session_state.upload_data is not None and not st.session_state.upload_data.empty:
 
-           if st.button("🛠️ Generate Upload Data"):
+            if st.button("🛠️ Generate Upload Data"):
                 supplier_map = fetch_supplier_codes()
                 format_map = fetch_format_codes()
                 weight_map, size_code_map = fetch_weight_map() 
@@ -1669,7 +1669,7 @@ if st.session_state.header_data is not None:
                             # Specific Variant Fields
                             new_row['item_price'] = curr_price
                             new_row['Sales_Price'] = sell_price
-                            new_row['pack_size'] = curr_pack # Important for Shopify Tags ("12 Packs")
+                            new_row['pack_size'] = curr_pack # Important for Shopify Tags
                             
                             # Name Generation
                             var_name_base = vol_name
@@ -1704,7 +1704,7 @@ if st.session_state.header_data is not None:
                 st.session_state.upload_generated = True 
                 st.success("Upload Data Generated (Split Cases Included)!")
                 st.rerun()
-               
+
             # --- SHOPIFY SECTION ---
             st.divider()
             st.markdown("### 🛒 Shopify Integration")
@@ -1820,7 +1820,7 @@ if st.session_state.header_data is not None:
             }
             
             current_cols = st.session_state.upload_data.columns.tolist()
-            disp_order = ['Attribute_5', 'Sales_Price', 'item_price', 'Variant_Name', 'Variant_SKU']
+            disp_order = ['Attribute_5', 'Sales_Price', 'item_price', 'Variant_Name', 'Variant_SKU', 'Family_Name']
             final_disp = []
             for c in disp_order:
                 if c in current_cols: final_disp.append(c)
@@ -1916,6 +1916,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
