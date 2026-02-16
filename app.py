@@ -1078,7 +1078,7 @@ def create_product_matrix(df):
     for name, group in grouped:
         row = {
             'Supplier_Name': name[0], 
-            'Type': 'Beer', 
+            'Type': 'Beer', # Default
             'Collaborator': name[1], 
             'Product_Name': name[2], 
             'ABV': name[3]
@@ -1090,7 +1090,7 @@ def create_product_matrix(df):
             row[f'Pack_Size{suffix}'] = item['Pack_Size']
             row[f'Volume{suffix}'] = item['Volume']
             row[f'Item_Price{suffix}'] = item['Item_Price']
-            row[f'Create{suffix}'] = False 
+            row[f'Split_Case{suffix}'] = False # <--- Default to False
         matrix_rows.append(row)
         
     matrix_df = pd.DataFrame(matrix_rows)
@@ -1101,18 +1101,24 @@ def create_product_matrix(df):
     base_cols = ['Supplier_Name', 'Type', 'Collaborator', 'Product_Name', 'ABV']
     format_cols = []
     for i in range(1, 4):
-        format_cols.extend([f'Format{i}', f'Pack_Size{i}', f'Volume{i}', f'Item_Price{i}', f'Create{i}'])
+        # Order: Format -> Pack -> Vol -> Price -> Tickbox
+        format_cols.extend([f'Format{i}', f'Pack_Size{i}', f'Volume{i}', f'Item_Price{i}', f'Split_Case{i}'])
     
     existing_format_cols = [c for c in format_cols if c in matrix_df.columns]
     final_cols = ['Untappd_Status'] + base_cols + existing_format_cols
     
     for col in final_cols:
         if col not in matrix_df.columns:
-            matrix_df[col] = ""
+            if "Split_Case" in col:
+                matrix_df[col] = False
+            else:
+                matrix_df[col] = ""
             
+    # Clean up string columns
     for col in final_cols:
-        if matrix_df[col].dtype == 'object':
-            matrix_df[col] = matrix_df[col].fillna("").astype(str)
+        if "Split_Case" not in col and "Item_Price" not in col:
+            if matrix_df[col].dtype == 'object':
+                matrix_df[col] = matrix_df[col].fillna("").astype(str)
 
     return matrix_df[final_cols]
 
@@ -1137,6 +1143,7 @@ def stage_products_for_upload(matrix_df):
     required = ['Untappd_Brewery', 'Untappd_Product', 'Untappd_ABV', 'Untappd_Style', 'Untappd_Desc']
     
     for idx, row in matrix_df.iterrows():
+        # Validation checks
         missing_cols = [c for c in required if c not in row.index]
         if missing_cols:
              errors.append(f"Row {idx+1}: Missing columns. Please run Search in Tab 2 first.")
@@ -1146,9 +1153,13 @@ def stage_products_for_upload(matrix_df):
             errors.append(f"Row {idx+1}: Empty fields for {', '.join(missing_vals)}. Please edit manually in Tab 3.")
             continue
 
+        # Loop through the 3 potential formats
         for i in range(1, 4):
             fmt_val = str(row.get(f'Format{i}', '')).strip()
+            
+            # Basic check: Only process if Format exists and isn't "None"
             if fmt_val and fmt_val.lower() not in ['nan', 'none']:
+                
                 new_row = {
                     'untappd_brewery': row['Untappd_Brewery'],
                     'collaborator': row.get('Collaborator', ''),
@@ -1160,6 +1171,7 @@ def stage_products_for_upload(matrix_df):
                     'pack_size': row.get(f'Pack_Size{i}', ''),
                     'volume': row.get(f'Volume{i}', ''),
                     'item_price': row.get(f'Item_Price{i}', ''),
+                    'is_split_case': row.get(f'Split_Case{i}', False), # <--- Persist the tick box data
                     'Family_SKU': '',
                     'Variant_SKU': '', 
                     'Family_Name': '',
@@ -1840,3 +1852,4 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
