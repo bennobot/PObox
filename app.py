@@ -768,9 +768,22 @@ def create_cin7_purchase_order(header_df, lines_df, location_choice):
     
     for _, row in lines_df.iterrows():
         prod_id = row.get(id_col)
+        # Check if matched and has ID
         if row.get('Shopify_Status') == "✅ Match" and pd.notna(prod_id) and str(prod_id).strip():
-            qty = float(row.get('Quantity', 0))
-            price = float(row.get('Item_Price', 0))
+            
+            # --- SPLIT LOGIC FOR PO ---
+            raw_qty = float(row.get('Quantity', 0))
+            raw_price = float(row.get('Item_Price', 0))
+            
+            if row.get('Use_Split', False):
+                qty = raw_qty * 2
+                price = raw_price / 2
+                logs.append(f"   ✂️ Splitting PO Line: {row['Product_Name']} (Qty {raw_qty}->{qty})")
+            else:
+                qty = raw_qty
+                price = raw_price
+            # --------------------------
+
             total = round(qty * price, 2)
             order_lines.append({
                 "ProductID": prod_id, 
@@ -783,6 +796,46 @@ def create_cin7_purchase_order(header_df, lines_df, location_choice):
             })
 
     if not order_lines: return False, "No valid lines found.", logs
+
+    url_create = f"{get_cin7_base_url()}/advanced-purchase"
+    payload_header = {
+        "SupplierID": supplier_id,
+        "Location": location_choice,
+        "Date": pd.to_datetime('today').strftime('%Y-%m-%d'),
+        "TaxRule": "20% (VAT on Expenses)",
+        "Approach": "Stock",
+        "BlindReceipt": False,
+        "PurchaseType": "Advanced",
+        "Status": "ORDERING",
+        "SupplierInvoiceNumber": str(header_df.iloc[0].get('Invoice_Number', ''))
+    }
+    
+    task_id = None
+    try:
+        r1 = make_cin7_request("POST", url_create, headers=headers, json=payload_header)
+        if r1.status_code == 200:
+            task_id = r1.json().get('ID')
+        else: return False, f"Header Error: {r1.text}", logs
+    except Exception as e: return False, f"Header Ex: {e}", logs
+
+    if task_id:
+        url_lines = f"{get_cin7_base_url()}/purchase/order"
+        payload_lines = {
+            "TaskID": task_id,
+            "CombineAdditionalCharges": False,
+            "Memo": "Streamlit Import",
+            "Status": "DRAFT", 
+            "Lines": order_lines,
+            "AdditionalCharges": []
+        }
+        try:
+            r2 = make_cin7_request("POST", url_lines, headers=headers, json=payload_lines)
+            if r2.status_code == 200:
+                return True, f"✅ PO Created! ID: {task_id}", logs
+            else: return False, f"Line Error: {r2.text}", logs
+        except Exception as e: return False, f"Lines Ex: {e}", logs
+            
+    return False, "Unknown Error", logs
 
     url_create = f"{get_cin7_base_url()}/advanced-purchase"
     payload_header = {
@@ -839,6 +892,10 @@ def run_reconciliation_check(lines_df):
     logs = []
     df = lines_df.copy()
     
+    # Ensure Use_Split exists
+    if 'Use_Split' not in df.columns:
+        df['Use_Split'] = False
+
     df['Shopify_Status'] = "Pending"
     df['Matched_Product'] = ""
     df['Matched_Variant'] = "" 
@@ -868,8 +925,21 @@ def run_reconciliation_check(lines_df):
         
         supplier = str(row.get('Supplier_Name', ''))
         inv_prod_name = row['Product_Name']
-        raw_pack = str(row.get('Pack_Size', '')).strip()
-        inv_pack = "1" if raw_pack.lower() in ['none', 'nan', '', '0'] else raw_pack.replace('.0', '')
+        
+        # --- NEW SPLIT LOGIC ---
+        use_split = row.get('Use_Split', False)
+        raw_pack = str(row.get('Pack_Size', '1')).strip()
+        try: pack_val = float(raw_pack)
+        except: pack_val = 1.0
+
+        if use_split and pack_val > 1:
+            target_pack = pack_val / 2
+            inv_pack = str(int(target_pack)) if target_pack.is_integer() else str(target_pack)
+            logs.append(f"   ✂️ Splitting: Invoice says {raw_pack}, looking for {inv_pack}")
+        else:
+            inv_pack = str(int(pack_val)) if pack_val.is_integer() else str(pack_val)
+        # -----------------------
+
         inv_vol = normalize_vol_string(row.get('Volume', ''))
         inv_fmt = str(row.get('Format', '')).lower()
         
@@ -1366,6 +1436,7 @@ if st.button("🚀 Process Invoice", type="primary"):
                     st.error(f"AI returned invalid JSON: {response.text}")
                     st.stop()
                 
+                # ... inside the "Process Invoice" block ...
                 st.write("5. Finalizing Data...")
                 st.session_state.header_data = pd.DataFrame([data['header']])
                 st.session_state.header_data['Cin7_Supplier_ID'] = ""
@@ -1377,9 +1448,14 @@ if st.button("🚀 Process Invoice", type="primary"):
                     df_lines = normalize_supplier_names(df_lines, st.session_state.master_suppliers)
 
                 df_lines['Shopify_Status'] = "Pending"
-                cols = ["Supplier_Name", "Collaborator", "Product_Name", "ABV", "Format", "Pack_Size", "Volume", "Item_Price", "Quantity"]
+                
+                # --- ADDED THIS LINE ---
+                df_lines['Use_Split'] = False 
+                
+                cols = ["Use_Split", "Supplier_Name", "Collaborator", "Product_Name", "ABV", "Format", "Pack_Size", "Volume", "Item_Price", "Quantity"]
                 existing = [c for c in cols if c in df_lines.columns]
                 st.session_state.line_items = df_lines[existing]
+                # ...
                 
                 st.session_state.shopify_logs = []
                 st.session_state.untappd_logs = []
@@ -1413,13 +1489,15 @@ if st.session_state.header_data is not None:
     current_tabs = st.tabs(tabs)
     
     # --- TAB 1: LINE ITEMS ---
+    # --- TAB 1: LINE ITEMS ---
     with current_tabs[0]:
         st.subheader("1. Review & Edit Lines")
         display_df = st.session_state.line_items.copy()
         if 'Shopify_Status' in display_df.columns:
             display_df.rename(columns={'Shopify_Status': 'Product_Status'}, inplace=True)
 
-        ideal_order = ['Product_Status', 'Matched_Product', 'Matched_Variant', 'Image', 'Supplier_Name', 'Product_Name', 'ABV', 'Format', 'Pack_Size', 'Volume', 'Quantity', 'Item_Price', 'Collaborator', 'Shopify_Variant_ID', 'London_SKU', 'Gloucester_SKU']
+        # Added Use_Split to the ideal order at the front
+        ideal_order = ['Use_Split', 'Product_Status', 'Matched_Product', 'Matched_Variant', 'Image', 'Supplier_Name', 'Product_Name', 'ABV', 'Format', 'Pack_Size', 'Volume', 'Quantity', 'Item_Price', 'Collaborator', 'Shopify_Variant_ID', 'London_SKU', 'Gloucester_SKU']
         final_cols = [c for c in ideal_order if c in display_df.columns]
         rem = [c for c in display_df.columns if c not in final_cols]
         display_df = display_df[final_cols + rem]
@@ -1429,6 +1507,8 @@ if st.session_state.header_data is not None:
             "Product_Status": st.column_config.TextColumn("Status", disabled=True),
             "Matched_Product": st.column_config.TextColumn("Shopify Match", disabled=True),
             "Matched_Variant": st.column_config.TextColumn("Variant Match", disabled=True),
+            # New config for the split box
+            "Use_Split": st.column_config.CheckboxColumn("Order Split?", width="small", help="Tick if ordering as half-case (e.g. 12x instead of 24x)")
         }
 
         edited_lines = st.data_editor(
@@ -1438,6 +1518,7 @@ if st.session_state.header_data is not None:
             key=f"line_editor_{st.session_state.line_items_key}",
             column_config=column_config
         )
+        # ... rest of Tab 1 code ...
         
         if edited_lines is not None:
             saved_df = edited_lines.copy()
@@ -1916,6 +1997,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
