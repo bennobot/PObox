@@ -1584,7 +1584,7 @@ if st.session_state.header_data is not None:
         
         if st.session_state.upload_data is not None and not st.session_state.upload_data.empty:
 
-            if st.button("🛠️ Generate Upload Data"):
+           if st.button("🛠️ Generate Upload Data"):
                 supplier_map = fetch_supplier_codes()
                 format_map = fetch_format_codes()
                 weight_map, size_code_map = fetch_weight_map() 
@@ -1593,59 +1593,105 @@ if st.session_state.header_data is not None:
                 processed_rows = []
                 
                 for idx, row in st.session_state.upload_data.iterrows():
+                    # 1. Extract Base Data common to all variants of this line
                     supp_name = row.get('untappd_brewery', '')
                     prod_name = row.get('untappd_product', '')
                     fmt_name = str(row.get('format', '')).strip()
                     vol_name = str(row.get('volume', '')).strip()
-                    pack_val = row.get('pack_size', '')
                     abv_val = str(row.get('untappd_abv', '')).strip()
                     attr_5 = row.get('Attribute_5', 'Rotational Product')
                     
+                    # 2. Maps & Codes
                     lookup_key = (fmt_name.lower(), vol_name.lower())
                     unit_weight = weight_map.get(lookup_key, 0.0)
                     size_code = size_code_map.get(lookup_key, "00") 
-                    try: pack_mult = float(pack_val) if pack_val and str(pack_val).lower() != 'nan' else 1.0
-                    except: pack_mult = 1.0
-                    is_multipack = pack_mult > 1.0
-                    pack_int = int(pack_mult)
-                    total_weight = unit_weight * pack_mult
+                    
+                    s_code = supplier_map.get(supp_name, "XXXX")
+                    p_code = generate_sku_parts(prod_name)
+                    f_code = format_map.get(fmt_name.lower(), "UN")
+                    
+                    # 3. Generate Family Identity (Shared by Split & Original)
+                    family_sku = f"{s_code}{p_code}-{today_str}-{idx}-{f_code}"
+                    family_name = f"{supp_name} / {prod_name} / {abv_val}% / {fmt_name}"
 
+                    # 4. Determine Connectors (for Kegs)
                     connectors = [""]
                     fmt_lower = fmt_name.lower()
                     if "dolium" in fmt_lower and "us" in fmt_lower: connectors = ["US Sankey D-Type Coupler"]
                     elif "poly" in fmt_lower: connectors = ["Sankey Coupler", "KeyKeg Coupler"]
                     elif "key" in fmt_lower: connectors = ["KeyKeg Coupler"]
                     elif "steel" in fmt_lower: connectors = ["Sankey Coupler"]
-                        
-                    s_code = supplier_map.get(supp_name, "XXXX")
-                    p_code = generate_sku_parts(prod_name)
-                    f_code = format_map.get(fmt_name.lower(), "UN")
+                    
+                    # 5. Prepare Variant Configurations (Original + Split)
+                    variants_config = []
+                    
+                    # A. Original Config
+                    raw_pack = row.get('pack_size', '1')
+                    try: 
+                        orig_pack = float(raw_pack) if raw_pack and str(raw_pack).lower() != 'nan' else 1.0
+                    except: 
+                        orig_pack = 1.0
+                    
+                    raw_price = row.get('item_price', 0)
+                    try: orig_price = float(raw_price)
+                    except: orig_price = 0.0
+                    
+                    variants_config.append({'pack': orig_pack, 'price': orig_price})
+                    
+                    # B. Split Config (if ticked and pack > 1)
+                    if row.get('is_split_case', False) and orig_pack > 1:
+                        split_pack = orig_pack / 2
+                        split_price = orig_price / 2
+                        variants_config.append({'pack': split_pack, 'price': split_price})
 
-                    for conn in connectors:
-                        new_row = row.to_dict()
-                        new_row['Family_SKU'] = f"{s_code}{p_code}-{today_str}-{idx}-{f_code}"
-                        new_row['Family_Name'] = f"{supp_name} / {prod_name} / {abv_val}% / {fmt_name}"
-                        new_row['Weight'] = total_weight
-                        new_row['Keg_Connector'] = conn
-                        new_row['Attribute_5'] = attr_5
+                    # 6. Generate Rows for each Config
+                    for v_conf in variants_config:
+                        curr_pack = v_conf['pack']
+                        curr_price = v_conf['price']
                         
-                        cost = float(new_row.get('item_price', 0))
-                        new_row['Sales_Price'] = calculate_sell_price(cost, attr_5, fmt_name)
+                        pack_int = int(curr_pack)
+                        is_multipack = curr_pack > 1.0
+                        total_weight = unit_weight * curr_pack
                         
-                        var_name_base = vol_name
-                        if is_multipack: var_name_base = f"{pack_int} x {vol_name}"
-                        if conn: new_row['Variant_Name'] = f"{var_name_base} - {conn}"
-                        else: new_row['Variant_Name'] = var_name_base
-                        
-                        if is_multipack: sku_suffix = f"-{pack_int}X{size_code}"
-                        else: sku_suffix = f"-{size_code}"
-                        if conn:
-                            conn_code = keg_map.get(conn.lower(), "XX")
-                            sku_suffix += f"-{conn_code}"
-                        new_row['Variant_SKU'] = f"{new_row['Family_SKU']}{sku_suffix}"
-                        processed_rows.append(new_row)
+                        # Recalculate Sales Price based on the specific variant cost
+                        sell_price = calculate_sell_price(curr_price, attr_5, fmt_name)
+
+                        for conn in connectors:
+                            new_row = row.to_dict()
+                            
+                            # Standard Fields
+                            new_row['Family_SKU'] = family_sku
+                            new_row['Family_Name'] = family_name
+                            new_row['Weight'] = total_weight
+                            new_row['Keg_Connector'] = conn
+                            new_row['Attribute_5'] = attr_5
+                            
+                            # Specific Variant Fields
+                            new_row['item_price'] = curr_price
+                            new_row['Sales_Price'] = sell_price
+                            new_row['pack_size'] = curr_pack # Important for Shopify Tags ("12 Packs")
+                            
+                            # Name Generation
+                            var_name_base = vol_name
+                            if is_multipack: var_name_base = f"{pack_int} x {vol_name}"
+                            if conn: new_row['Variant_Name'] = f"{var_name_base} - {conn}"
+                            else: new_row['Variant_Name'] = var_name_base
+                            
+                            # SKU Generation
+                            if is_multipack: sku_suffix = f"-{pack_int}X{size_code}"
+                            else: sku_suffix = f"-{size_code}"
+                            
+                            if conn:
+                                conn_code = keg_map.get(conn.lower(), "XX")
+                                sku_suffix += f"-{conn_code}"
+                            
+                            new_row['Variant_SKU'] = f"{family_sku}{sku_suffix}"
+                            
+                            processed_rows.append(new_row)
 
                 final_df = pd.DataFrame(processed_rows)
+                
+                # Reorder columns for clean display
                 all_cols = final_df.columns.tolist()
                 desired_order = ['Attribute_5', 'Sales_Price', 'item_price', 'Variant_Name', 'Variant_SKU', 'Family_Name']
                 final_order = []
@@ -1655,10 +1701,10 @@ if st.session_state.header_data is not None:
                     if c not in final_order: final_order.append(c)
                 
                 st.session_state.upload_data = final_df[final_order]
-                st.session_state.upload_generated = True # SET FLAG
-                st.success("Upload Data Generated (SKUs, Names, Weights, Connectors)!")
+                st.session_state.upload_generated = True 
+                st.success("Upload Data Generated (Split Cases Included)!")
                 st.rerun()
-
+               
             # --- SHOPIFY SECTION ---
             st.divider()
             st.markdown("### 🛒 Shopify Integration")
@@ -1870,5 +1916,6 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
