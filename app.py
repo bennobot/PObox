@@ -1473,16 +1473,34 @@ if st.session_state.header_data is not None:
             st.success("🎉 All products matched to Shopify! No action needed here.")
         elif st.session_state.matrix_data is not None and not st.session_state.matrix_data.empty:
             
-            st.info("👇 Review items. Select the correct **Type** for each product before searching.")
+            st.info("👇 Review items. Use the 'Split?' box to mark items for future half-pack creation.")
             
             type_options = ["Beer", "Cider", "Spirits", "Softs", "Wine", "Merch", "Dispense", "Snacks", "PoS", "Other", "Free Of Charge PoS"]
+            
+            # Base Configuration
             prep_config = {
                 "Type": st.column_config.SelectboxColumn("Product Type", options=type_options, required=True, width="medium")
             }
             
+            # Add Dynamic Config
+            for i in range(1, 4):
+                prep_config[f"Format{i}"] = st.column_config.TextColumn(f"Format {i}", width="small")
+                prep_config[f"Pack_Size{i}"] = st.column_config.TextColumn(f"Pack {i}", width="small")
+                prep_config[f"Volume{i}"] = st.column_config.TextColumn(f"Vol {i}", width="small")
+                prep_config[f"Item_Price{i}"] = st.column_config.NumberColumn(f"Cost {i}", format="£%.2f", width="small")
+                prep_config[f"Split_Case{i}"] = st.column_config.CheckboxColumn(f"Split {i}?", width="small")
+
+            # --- COLUMN ORDER LOGIC ---
             base_cols = ['Supplier_Name', 'Type', 'Collaborator', 'Product_Name', 'ABV']
-            fmt_cols = [c for c in st.session_state.matrix_data.columns if "Format" in c or "Pack" in c or "Volume" in c]
-            display_cols = [c for c in (base_cols + fmt_cols) if c in st.session_state.matrix_data.columns]
+            
+            # Explicitly define the order: Format -> Pack -> Vol -> Price -> Tickbox
+            ordered_cols = base_cols.copy()
+            for i in range(1, 4):
+                if f"Format{i}" in st.session_state.matrix_data.columns:
+                    ordered_cols.extend([f"Format{i}", f"Pack_Size{i}", f"Volume{i}", f"Item_Price{i}", f"Split_Case{i}"])
+            
+            # Filter to ensure columns actually exist
+            display_cols = [c for c in ordered_cols if c in st.session_state.matrix_data.columns]
 
             edited_prep = st.data_editor(
                 st.session_state.matrix_data[display_cols],
@@ -1852,4 +1870,5 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
