@@ -69,13 +69,15 @@ with col_head_1:
     st.title("Brewery Invoice Parser ⚡")
 
 with col_head_2:
-    st.write("") # Alignment spacer
+    # Use HTML to push the button down exactly 30px
+    st.markdown("<div style='margin-top: 30px;'></div>", unsafe_allow_html=True)
+    
     if st.button("🔄 Reset / New Invoice"):
         # List of keys to CLEAR
         keys_to_clear = [
             'header_data', 'line_items', 'matrix_data', 'upload_data', 
             'shopify_logs', 'untappd_logs', 'cin7_logs', 'shopify_check_results',
-            'selected_drive_id', 'selected_drive_name', # Clear selected file so user can pick new one
+            'selected_drive_id', 'selected_drive_name', 
             'upload_generated'
         ]
         
@@ -85,7 +87,7 @@ with col_head_2:
             if key in st.session_state:
                 del st.session_state[key]
                 
-        # Re-initialize essentials to avoid KeyErrors
+        # Re-initialize essentials
         st.session_state.header_data = None
         st.session_state.line_items = None
         st.session_state.matrix_data = None
@@ -2074,6 +2076,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
