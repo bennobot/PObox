@@ -312,6 +312,57 @@ def get_cin7_supplier(name):
     if "&" in name: return get_cin7_supplier(name.replace("&", "and"))
     return None
 
+def prepare_final_po_lines(line_items_df):
+    """
+    Transforms the raw invoice lines into the final PO structure.
+    - Filters for Matched items only.
+    - Applies Split Case logic (Qty x2, Price /2).
+    """
+    if line_items_df is None or line_items_df.empty:
+        return pd.DataFrame()
+        
+    po_rows = []
+    
+    for _, row in line_items_df.iterrows():
+        # 1. Only process matched items
+        if row.get('Shopify_Status') != "✅ Match":
+            continue
+            
+        # 2. Base Data
+        prod_name = row['Product_Name']
+        matched_sku = row.get('Matched_Variant', '') # Visual reference
+        
+        # 3. Calculate PO Values
+        raw_qty = float(row.get('Quantity', 0))
+        raw_price = float(row.get('Item_Price', 0))
+        
+        if row.get('Use_Split', False):
+            # --- SPLIT LOGIC APPLIED HERE ---
+            final_qty = raw_qty * 2
+            final_price = raw_price / 2
+            notes = "⚠️ Split Case (Half Size)"
+        else:
+            final_qty = raw_qty
+            final_price = raw_price
+            notes = ""
+
+        # 4. IDs for Cin7
+        l_id = row.get('Cin7_London_ID', '')
+        g_id = row.get('Cin7_Glou_ID', '')
+
+        po_rows.append({
+            "Product": prod_name,
+            "Variant_Match": matched_sku,
+            "PO_Qty": final_qty,
+            "PO_Cost": final_price,
+            "Total": final_qty * final_price,
+            "Notes": notes,
+            "Cin7_London_ID": l_id,
+            "Cin7_Glou_ID": g_id
+        })
+        
+    return pd.DataFrame(po_rows)
+
 # --- SHOPIFY HELPERS ---
 
 def fetch_shopify_products_by_vendor(vendor):
@@ -764,27 +815,22 @@ def create_cin7_purchase_order(header_df, lines_df, location_choice):
     if not supplier_id: return False, "Supplier not linked.", logs
 
     order_lines = []
+    # Determine which ID column to use based on location
     id_col = 'Cin7_London_ID' if location_choice == 'London' else 'Cin7_Glou_ID'
     
+    # Iterate through the PREPARED PO lines (from prepare_final_po_lines)
     for _, row in lines_df.iterrows():
         prod_id = row.get(id_col)
-        # Check if matched and has ID
-        if row.get('Shopify_Status') == "✅ Match" and pd.notna(prod_id) and str(prod_id).strip():
+        
+        # Validate ID exists
+        if pd.notna(prod_id) and str(prod_id).strip():
             
-            # --- SPLIT LOGIC FOR PO ---
-            raw_qty = float(row.get('Quantity', 0))
-            raw_price = float(row.get('Item_Price', 0))
+            # Use the PRE-CALCULATED values from the preview table
+            qty = float(row.get('PO_Qty', 0))
+            price = float(row.get('PO_Cost', 0))
             
-            if row.get('Use_Split', False):
-                qty = raw_qty * 2
-                price = raw_price / 2
-                logs.append(f"   ✂️ Splitting PO Line: {row['Product_Name']} (Qty {raw_qty}->{qty})")
-            else:
-                qty = raw_qty
-                price = raw_price
-            # --------------------------
-
             total = round(qty * price, 2)
+            
             order_lines.append({
                 "ProductID": prod_id, 
                 "Quantity": qty, 
@@ -795,47 +841,7 @@ def create_cin7_purchase_order(header_df, lines_df, location_choice):
                 "Tax": 0
             })
 
-    if not order_lines: return False, "No valid lines found.", logs
-
-    url_create = f"{get_cin7_base_url()}/advanced-purchase"
-    payload_header = {
-        "SupplierID": supplier_id,
-        "Location": location_choice,
-        "Date": pd.to_datetime('today').strftime('%Y-%m-%d'),
-        "TaxRule": "20% (VAT on Expenses)",
-        "Approach": "Stock",
-        "BlindReceipt": False,
-        "PurchaseType": "Advanced",
-        "Status": "ORDERING",
-        "SupplierInvoiceNumber": str(header_df.iloc[0].get('Invoice_Number', ''))
-    }
-    
-    task_id = None
-    try:
-        r1 = make_cin7_request("POST", url_create, headers=headers, json=payload_header)
-        if r1.status_code == 200:
-            task_id = r1.json().get('ID')
-        else: return False, f"Header Error: {r1.text}", logs
-    except Exception as e: return False, f"Header Ex: {e}", logs
-
-    if task_id:
-        url_lines = f"{get_cin7_base_url()}/purchase/order"
-        payload_lines = {
-            "TaskID": task_id,
-            "CombineAdditionalCharges": False,
-            "Memo": "Streamlit Import",
-            "Status": "DRAFT", 
-            "Lines": order_lines,
-            "AdditionalCharges": []
-        }
-        try:
-            r2 = make_cin7_request("POST", url_lines, headers=headers, json=payload_lines)
-            if r2.status_code == 200:
-                return True, f"✅ PO Created! ID: {task_id}", logs
-            else: return False, f"Line Error: {r2.text}", logs
-        except Exception as e: return False, f"Lines Ex: {e}", logs
-            
-    return False, "Unknown Error", logs
+    if not order_lines: return False, "No valid lines found to export.", logs
 
     url_create = f"{get_cin7_base_url()}/advanced-purchase"
     payload_header = {
@@ -1924,6 +1930,7 @@ if st.session_state.header_data is not None:
         else: st.info("No data staged yet. Go to Tab 3 and click 'Validate & Stage'.")
 
     # --- TAB 5: HEADER / EXPORT ---
+    # --- TAB 5: HEADER / EXPORT ---
     with current_tabs[4]:
         st.subheader("5. Finalize & Export")
         
@@ -1932,7 +1939,8 @@ if st.session_state.header_data is not None:
             st.error("🔒 **Tab Locked**")
             st.warning(f"You have **{unmatched_count} unmatched items**. Please resolve them in **Tab 1** (Check Inventory) or **Tab 2** (Search Untappd) before finalizing the Purchase Order.")
         else:
-            # --- UNLOCKED CONTENT ---
+            # --- HEADER SECTION ---
+            st.markdown("#### A. Header Details")
             current_payee = "Unknown"
             if not st.session_state.header_data.empty:
                  current_payee = st.session_state.header_data.iloc[0]['Payable_To']
@@ -1951,8 +1959,7 @@ if st.session_state.header_data is not None:
                     "Cin7 Supplier Link:", 
                     options=cin7_list_names,
                     index=default_index,
-                    key="header_supplier_select",
-                    help="Click 'Fetch Cin7 Suppliers' in sidebar if empty."
+                    key="header_supplier_select"
                 )
                 
                 if selected_supplier and not st.session_state.header_data.empty:
@@ -1971,18 +1978,47 @@ if st.session_state.header_data is not None:
                 num_rows="fixed", 
                 width='stretch'
             )
-            st.download_button("📥 Download Header CSV", edited_header.to_csv(index=False), "header.csv")
             
             st.divider()
+
+            # --- NEW PREVIEW SECTION ---
+            st.markdown("#### B. PO Line Preview (Calculated)")
+            st.caption("Review the final quantities and costs below. Split cases have been calculated.")
+
+            # Generate the preview dataframe
+            po_preview_df = prepare_final_po_lines(st.session_state.line_items)
+
+            if not po_preview_df.empty:
+                po_col_config = {
+                    "PO_Qty": st.column_config.NumberColumn("Final Qty", format="%.2f"),
+                    "PO_Cost": st.column_config.NumberColumn("Final Cost", format="£%.2f"),
+                    "Total": st.column_config.NumberColumn("Line Total", format="£%.2f", disabled=True),
+                    "Notes": st.column_config.TextColumn("Notes", disabled=True)
+                }
+                
+                # Show the editor (readonly except for maybe Qty/Cost if you really wanted, but best keep readonly for integrity)
+                st.dataframe(
+                    po_preview_df, 
+                    use_container_width=True, 
+                    column_config=po_col_config,
+                    hide_index=True
+                )
+            else:
+                st.warning("No matched lines to display.")
+
+            st.divider()
             
+            # --- EXPORT SECTION ---
+            st.markdown("#### C. Export")
             po_location = st.selectbox("Select Delivery Location:", ["London", "Gloucester"], key="final_po_loc")
             
-            if st.button(f"📤 Export PO to Cin7 ({po_location})", type="primary"):
+            if st.button(f"📤 Export PO to Cin7 ({po_location})", type="primary", disabled=po_preview_df.empty):
                 if "cin7" in st.secrets:
                     with st.spinner("Creating Purchase Order..."):
+                        # Pass the PREVIEW DF (po_preview_df) not the raw items
                         success, msg, logs = create_cin7_purchase_order(
                             st.session_state.header_data, 
-                            st.session_state.line_items, 
+                            po_preview_df, 
                             po_location
                         )
                         st.session_state.cin7_logs = logs
@@ -2002,6 +2038,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
