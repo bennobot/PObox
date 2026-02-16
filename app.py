@@ -1138,6 +1138,7 @@ def create_product_matrix(df):
     if df is None or df.empty: return pd.DataFrame()
     df = df.fillna("")
     if 'Shopify_Status' in df.columns:
+        # Filter out matched items so they don't appear in Tab 2
         df = df[df['Shopify_Status'] != "✅ Match"]
     if df.empty: return pd.DataFrame()
 
@@ -1160,7 +1161,11 @@ def create_product_matrix(df):
             row[f'Pack_Size{suffix}'] = item['Pack_Size']
             row[f'Volume{suffix}'] = item['Volume']
             row[f'Item_Price{suffix}'] = item['Item_Price']
-            row[f'Split_Case{suffix}'] = False # <--- Default to False
+            
+            # --- FIX IS HERE ---
+            # Carry over the decision from Tab 1
+            row[f'Split_Case{suffix}'] = item.get('Use_Split', False)
+            
         matrix_rows.append(row)
         
     matrix_df = pd.DataFrame(matrix_rows)
@@ -1997,6 +2002,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
