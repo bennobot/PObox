@@ -970,7 +970,7 @@ def run_reconciliation_check(lines_df):
         supplier = str(row.get('Supplier_Name', ''))
         inv_prod_name = row['Product_Name']
         
-        # --- NEW SPLIT LOGIC ---
+        # --- SPLIT LOGIC FOR TARGET PACK SIZE ---
         use_split = row.get('Use_Split', False)
         raw_pack = str(row.get('Pack_Size', '1')).strip()
         try: pack_val = float(raw_pack)
@@ -978,16 +978,18 @@ def run_reconciliation_check(lines_df):
 
         if use_split and pack_val > 1:
             target_pack = pack_val / 2
-            inv_pack = str(int(target_pack)) if target_pack.is_integer() else str(target_pack)
-            logs.append(f"   ✂️ Splitting: Invoice says {raw_pack}, looking for {inv_pack}")
+            inv_pack_int = int(target_pack)
+            logs.append(f"   ✂️ Splitting: Invoice says {raw_pack}, looking for {inv_pack_int} Pack")
         else:
-            inv_pack = str(int(pack_val)) if pack_val.is_integer() else str(pack_val)
+            target_pack = pack_val
+            inv_pack_int = int(target_pack)
+        
         # -----------------------
 
         inv_vol = normalize_vol_string(row.get('Volume', ''))
         inv_fmt = str(row.get('Format', '')).lower()
         
-        logs.append(f"Checking: **{inv_prod_name}** ({inv_fmt})")
+        logs.append(f"Checking: **{inv_prod_name}** ({inv_fmt} | {inv_pack_int} Pack)")
 
         if supplier in shopify_cache and shopify_cache[supplier]:
             candidates = shopify_cache[supplier]
@@ -1008,10 +1010,11 @@ def run_reconciliation_check(lines_df):
             
             for score, prod, clean_name in scored_candidates:
                 if score < 75: continue 
+                
+                # Format/Keg check (Product Level)
                 shop_fmt_meta = prod.get('format_meta', {}).get('value', '') or ""
                 shop_title_lower = prod['title'].lower()
                 shop_format_str = f"{shop_fmt_meta} {shop_title_lower}".lower()
-                
                 shop_keg_type_meta = prod.get('keg_meta', {}) or {}
                 shop_keg_val = str(shop_keg_type_meta.get('value', '')).lower()
 
@@ -1021,8 +1024,8 @@ def run_reconciliation_check(lines_df):
                     is_key_inv = "keykeg" in inv_fmt
                     is_steel_inv = "steel" in inv_fmt or "stainless" in inv_fmt
                     
-                    is_poly_shop = "poly" in shop_keg_val or "dolium" in shop_keg_val
-                    is_key_shop = "keykeg" in shop_keg_val
+                    is_poly_shop = "poly" in shop_keg_val or "dolium" in shop_keg_val or "poly" in shop_format_str
+                    is_key_shop = "keykeg" in shop_keg_val or "keykeg" in shop_format_str
                     is_steel_shop = "steel" in shop_keg_val or "stainless" in shop_keg_val
                     
                     if is_poly_inv and (is_key_shop or is_steel_shop): is_compatible = False
@@ -1034,53 +1037,42 @@ def run_reconciliation_check(lines_df):
                 
                 if not is_compatible: continue
 
+                # --- STRICT VARIANT MATCHING ---
                 for v_edge in prod['variants']['edges']:
                     variant = v_edge['node']
-                    v_title = variant['title'].lower()
+                    v_title = variant['title'].lower() # e.g. "12 x 440ml" or "30 litre"
                     v_sku = str(variant.get('sku', '')).strip()
-                    pack_ok = False
-                    if inv_pack == "1":
-                        if " x " not in v_title: pack_ok = True
-                    else:
-                        if f"{inv_pack} x" in v_title or f"{inv_pack}x" in v_title: pack_ok = True
-                    vol_ok = False
-                    if inv_vol in v_title: vol_ok = True
-                    if len(inv_vol) == 2 and f"{inv_vol}0" in v_title: vol_ok = True 
-                    if inv_vol == "9" and "firkin" in v_title: vol_ok = True
-                    if (inv_vol == "4" or inv_vol == "4.5") and "pin" in v_title: vol_ok = True
-                    if (inv_vol == "40" or inv_vol == "41") and "firkin" in v_title: vol_ok = True
-                    if (inv_vol == "20" or inv_vol == "21") and "pin" in v_title: vol_ok = True
                     
-                    if pack_ok and vol_ok:
-                        logs.append(f"   ✅ MATCH: `{variant['title']}` | SKU: `{v_sku}`")
-                        status = "✅ Match"
-                        match_found = True
-                        full_title = prod['title']
-                        matched_prod_name = full_title[2:] if full_title.startswith("L-") or full_title.startswith("G-") else full_title
-                        matched_var_name = variant['title']
-                        if prod.get('featuredImage'): img_url = prod['featuredImage']['url']
-                        if v_sku and len(v_sku) > 2:
-                            base_sku = v_sku[2:]
-                            london_sku = f"L-{base_sku}"
-                            glou_sku = f"G-{base_sku}"
-                        break
-                if match_found: break
-            if not match_found: status = "🟥 Check and Upload"
-        
-        if london_sku: cin7_l_id = get_cin7_product_id(london_sku)
-        if glou_sku: cin7_g_id = get_cin7_product_id(glou_sku)
-
-        row['Shopify_Status'] = status
-        row['Matched_Product'] = matched_prod_name
-        row['Matched_Variant'] = matched_var_name
-        row['Image'] = img_url
-        row['London_SKU'] = london_sku
-        row['Cin7_London_ID'] = cin7_l_id
-        row['Gloucester_SKU'] = glou_sku
-        row['Cin7_Glou_ID'] = cin7_g_id
-        results.append(row)
-    
-    return pd.DataFrame(results), logs
+                    # 1. Pack Size Check (Strict)
+                    pack_ok = False
+                    if inv_pack_int == 1:
+                        # Target is Single: Fail if title looks like a multipack "12 x" or "24x"
+                        # Regex checks for "digit x" pattern
+                        if re.search(r'\d+\s*x', v_title): 
+                            pack_ok = False
+                        else:
+                            pack_ok = True
+                    else:
+                        # Target is Multipack (e.g. 12): Title MUST contain "12 x" or "12x"
+                        target_str_1 = f"{inv_pack_int}x"
+                        target_str_2 = f"{inv_pack_int} x"
+                        if target_str_1 in v_title or target_str_2 in v_title:
+                            pack_ok = True
+                    
+                    # 2. Volume Check (Strict)
+                    vol_ok = False
+                    # Standard check: is "440" in "12 x 440ml" -> Yes
+                    if inv_vol in v_title: 
+                        vol_ok = True
+                    # Edge case: "9" (Gallon) vs "Firkin"
+                    elif inv_vol == "9" and "firkin" in v_title: 
+                        vol_ok = True
+                    # Edge case: "4.5" (Gallon) vs "Pin"
+                    elif (inv_vol == "4" or inv_vol == "4.5") and "pin" in v_title: 
+                        vol_ok = True
+                    # Edge case: "20" vs "20l"
+                    elif inv_vol + "l" in v_title or inv_vol + " l" in v_title:
+                        vol_ok = True
 
 def get_master_supplier_list():
     try:
@@ -2076,6 +2068,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
