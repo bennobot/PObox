@@ -45,7 +45,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 0. AUTHENTICATION
+# 0. AUTHENTICATION & HEADER
 # ==========================================
 def check_password():
     if "APP_PASSWORD" not in st.secrets: return True
@@ -62,7 +62,43 @@ def check_password():
 
 if not check_password(): st.stop()
 
-st.title("Brewery Invoice Parser ⚡")
+# --- RESET LOGIC & HEADER ---
+col_head_1, col_head_2 = st.columns([4, 1])
+
+with col_head_1:
+    st.title("Brewery Invoice Parser ⚡")
+
+with col_head_2:
+    st.write("") # Alignment spacer
+    if st.button("🔄 Reset / New Invoice"):
+        # List of keys to CLEAR
+        keys_to_clear = [
+            'header_data', 'line_items', 'matrix_data', 'upload_data', 
+            'shopify_logs', 'untappd_logs', 'cin7_logs', 'shopify_check_results',
+            'selected_drive_id', 'selected_drive_name', # Clear selected file so user can pick new one
+            'upload_generated'
+        ]
+        
+        # We explicitly DO NOT clear 'drive_files' so the folder scan remains
+        
+        for key in keys_to_clear:
+            if key in st.session_state:
+                del st.session_state[key]
+                
+        # Re-initialize essentials to avoid KeyErrors
+        st.session_state.header_data = None
+        st.session_state.line_items = None
+        st.session_state.matrix_data = None
+        st.session_state.upload_data = None
+        st.session_state.shopify_logs = []
+        st.session_state.untappd_logs = []
+        st.session_state.upload_generated = False
+        
+        # Increment widget keys to force UI refresh
+        st.session_state.line_items_key += 1
+        st.session_state.matrix_key += 1
+        
+        st.rerun()
 
 # ==========================================
 # 1. HELPER FUNCTIONS
@@ -2038,6 +2074,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
