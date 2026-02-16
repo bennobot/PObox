@@ -350,57 +350,6 @@ def get_cin7_supplier(name):
     if "&" in name: return get_cin7_supplier(name.replace("&", "and"))
     return None
 
-def prepare_final_po_lines(line_items_df):
-    """
-    Transforms the raw invoice lines into the final PO structure.
-    - Filters for Matched items only.
-    - Applies Split Case logic (Qty x2, Price /2).
-    """
-    if line_items_df is None or line_items_df.empty:
-        return pd.DataFrame()
-        
-    po_rows = []
-    
-    for _, row in line_items_df.iterrows():
-        # 1. Only process matched items
-        if row.get('Shopify_Status') != "✅ Match":
-            continue
-            
-        # 2. Base Data
-        prod_name = row['Product_Name']
-        matched_sku = row.get('Matched_Variant', '') # Visual reference
-        
-        # 3. Calculate PO Values
-        raw_qty = float(row.get('Quantity', 0))
-        raw_price = float(row.get('Item_Price', 0))
-        
-        if row.get('Use_Split', False):
-            # --- SPLIT LOGIC APPLIED HERE ---
-            final_qty = raw_qty * 2
-            final_price = raw_price / 2
-            notes = "⚠️ Split Case (Half Size)"
-        else:
-            final_qty = raw_qty
-            final_price = raw_price
-            notes = ""
-
-        # 4. IDs for Cin7
-        l_id = row.get('Cin7_London_ID', '')
-        g_id = row.get('Cin7_Glou_ID', '')
-
-        po_rows.append({
-            "Product": prod_name,
-            "Variant_Match": matched_sku,
-            "PO_Qty": final_qty,
-            "PO_Cost": final_price,
-            "Total": final_qty * final_price,
-            "Notes": notes,
-            "Cin7_London_ID": l_id,
-            "Cin7_Glou_ID": g_id
-        })
-        
-    return pd.DataFrame(po_rows)
-
 # --- SHOPIFY HELPERS ---
 
 def fetch_shopify_products_by_vendor(vendor):
@@ -605,6 +554,219 @@ def create_shopify_product_payload(row, location_prefix, variants_list):
             "metafields": metafields
         }
     }
+
+# --- RECONCILIATION LOGIC (WITH STRICT MATCHING) ---
+
+def run_reconciliation_check(lines_df):
+    if lines_df.empty: return lines_df, ["No Lines to check."]
+    logs = []
+    df = lines_df.copy()
+    
+    # Ensure Use_Split exists
+    if 'Use_Split' not in df.columns:
+        df['Use_Split'] = False
+
+    df['Shopify_Status'] = "Pending"
+    df['Matched_Product'] = ""
+    df['Matched_Variant'] = "" 
+    df['Image'] = ""
+    df['London_SKU'] = ""     
+    df['Cin7_London_ID'] = "" 
+    df['Gloucester_SKU'] = "" 
+    df['Cin7_Glou_ID'] = ""   
+    
+    suppliers = [s for s in df['Supplier_Name'].unique() if isinstance(s, str) and s.strip()]
+    shopify_cache = {}
+    
+    progress_bar = st.progress(0)
+    for i, supplier in enumerate(suppliers):
+        progress_bar.progress((i)/len(suppliers))
+        logs.append(f"🔎 **Fetching Shopify Data:** `{supplier}`")
+        products = fetch_shopify_products_by_vendor(supplier)
+        shopify_cache[supplier] = products
+        logs.append(f"   -> Found {len(products)} products.")
+    progress_bar.progress(1.0)
+
+    results = []
+    for _, row in df.iterrows():
+        status = "❓ Vendor Not Found"
+        london_sku, glou_sku, cin7_l_id, cin7_g_id, img_url = "", "", "", "", ""
+        matched_prod_name, matched_var_name = "", ""
+        
+        supplier = str(row.get('Supplier_Name', ''))
+        inv_prod_name = row['Product_Name']
+        
+        # --- SPLIT LOGIC FOR TARGET PACK SIZE ---
+        use_split = row.get('Use_Split', False)
+        raw_pack = str(row.get('Pack_Size', '1')).strip()
+        try: pack_val = float(raw_pack)
+        except: pack_val = 1.0
+
+        if use_split and pack_val > 1:
+            target_pack = pack_val / 2
+            inv_pack_int = int(target_pack)
+            logs.append(f"   ✂️ Splitting: Invoice says {raw_pack}, looking for {inv_pack_int} Pack")
+        else:
+            target_pack = pack_val
+            inv_pack_int = int(target_pack)
+        
+        # -----------------------
+
+        inv_vol = normalize_vol_string(row.get('Volume', ''))
+        inv_fmt = str(row.get('Format', '')).lower()
+        
+        logs.append(f"Checking: **{inv_prod_name}** ({inv_fmt} | {inv_pack_int} Pack)")
+
+        if supplier in shopify_cache and shopify_cache[supplier]:
+            candidates = shopify_cache[supplier]
+            scored_candidates = []
+            for edge in candidates:
+                prod = edge['node']
+                shop_title_full = prod['title']
+                shop_prod_name_clean = shop_title_full
+                if "/" in shop_title_full:
+                    parts = [p.strip() for p in shop_title_full.split("/")]
+                    if len(parts) >= 2: shop_prod_name_clean = parts[1]
+                score = fuzz.token_sort_ratio(inv_prod_name, shop_prod_name_clean)
+                if inv_prod_name.lower() in shop_prod_name_clean.lower(): score += 10
+                if score > 40: scored_candidates.append((score, prod, shop_prod_name_clean))
+            
+            scored_candidates.sort(key=lambda x: x[0], reverse=True)
+            match_found = False
+            
+            for score, prod, clean_name in scored_candidates:
+                if score < 75: continue 
+                
+                # Format/Keg check (Product Level)
+                shop_fmt_meta = prod.get('format_meta', {}).get('value', '') or ""
+                shop_title_lower = prod['title'].lower()
+                shop_format_str = f"{shop_fmt_meta} {shop_title_lower}".lower()
+                shop_keg_type_meta = prod.get('keg_meta', {}) or {}
+                shop_keg_val = str(shop_keg_type_meta.get('value', '')).lower()
+
+                is_compatible = True
+                if "keg" in inv_fmt:
+                    is_poly_inv = "poly" in inv_fmt or "dolium" in inv_fmt or "pet" in inv_fmt
+                    is_key_inv = "keykeg" in inv_fmt
+                    is_steel_inv = "steel" in inv_fmt or "stainless" in inv_fmt
+                    
+                    is_poly_shop = "poly" in shop_keg_val or "dolium" in shop_keg_val or "poly" in shop_format_str
+                    is_key_shop = "keykeg" in shop_keg_val or "keykeg" in shop_format_str
+                    is_steel_shop = "steel" in shop_keg_val or "stainless" in shop_keg_val
+                    
+                    if is_poly_inv and (is_key_shop or is_steel_shop): is_compatible = False
+                    if is_key_inv and (is_poly_shop or is_steel_shop): is_compatible = False
+                    if is_steel_inv and (is_poly_shop or is_key_shop): is_compatible = False
+                
+                elif "cask" in inv_fmt or "firkin" in inv_fmt:
+                    if "keg" in shop_format_str and "cask" not in shop_format_str: is_compatible = False
+                
+                if not is_compatible: continue
+
+                # --- STRICT VARIANT MATCHING ---
+                for v_edge in prod['variants']['edges']:
+                    variant = v_edge['node']
+                    v_title = variant['title'].lower() 
+                    v_sku = str(variant.get('sku', '')).strip()
+                    
+                    # 1. Pack Size Check (Strict)
+                    pack_ok = False
+                    if inv_pack_int == 1:
+                        # Target is Single: Fail if title looks like a multipack "12 x" or "24x"
+                        if re.search(r'\d+\s*x', v_title): 
+                            pack_ok = False
+                        else:
+                            pack_ok = True
+                    else:
+                        # Target is Multipack (e.g. 12): Title MUST contain "12 x" or "12x"
+                        target_str_1 = f"{inv_pack_int}x"
+                        target_str_2 = f"{inv_pack_int} x"
+                        if target_str_1 in v_title or target_str_2 in v_title:
+                            pack_ok = True
+                    
+                    # 2. Volume Check (Strict)
+                    vol_ok = False
+                    if inv_vol in v_title: 
+                        vol_ok = True
+                    elif inv_vol == "9" and "firkin" in v_title: 
+                        vol_ok = True
+                    elif (inv_vol == "4" or inv_vol == "4.5") and "pin" in v_title: 
+                        vol_ok = True
+                    elif inv_vol + "l" in v_title or inv_vol + " l" in v_title:
+                        vol_ok = True
+                    
+                    if pack_ok and vol_ok:
+                        logs.append(f"   ✅ MATCH: `{variant['title']}` | SKU: `{v_sku}`")
+                        status = "✅ Match"
+                        match_found = True
+                        full_title = prod['title']
+                        matched_prod_name = full_title[2:] if full_title.startswith("L-") or full_title.startswith("G-") else full_title
+                        matched_var_name = variant['title']
+                        if prod.get('featuredImage'): img_url = prod['featuredImage']['url']
+                        if v_sku and len(v_sku) > 2:
+                            base_sku = v_sku[2:]
+                            london_sku = f"L-{base_sku}"
+                            glou_sku = f"G-{base_sku}"
+                        break
+                if match_found: break
+            if not match_found: status = "🟥 Check and Upload"
+        
+        if london_sku: cin7_l_id = get_cin7_product_id(london_sku)
+        if glou_sku: cin7_g_id = get_cin7_product_id(glou_sku)
+
+        row['Shopify_Status'] = status
+        row['Matched_Product'] = matched_prod_name
+        row['Matched_Variant'] = matched_var_name
+        row['Image'] = img_url
+        row['London_SKU'] = london_sku
+        row['Cin7_London_ID'] = cin7_l_id
+        row['Gloucester_SKU'] = glou_sku
+        row['Cin7_Glou_ID'] = cin7_g_id
+        results.append(row)
+    
+    # --- RETURN TUPLE HERE (Crucial Fix) ---
+    return pd.DataFrame(results), logs
+
+def prepare_final_po_lines(line_items_df):
+    if line_items_df is None or line_items_df.empty:
+        return pd.DataFrame()
+        
+    po_rows = []
+    
+    for _, row in line_items_df.iterrows():
+        if row.get('Shopify_Status') != "✅ Match":
+            continue
+            
+        prod_name = row['Product_Name']
+        matched_sku = row.get('Matched_Variant', '')
+        
+        raw_qty = float(row.get('Quantity', 0))
+        raw_price = float(row.get('Item_Price', 0))
+        
+        if row.get('Use_Split', False):
+            final_qty = raw_qty * 2
+            final_price = raw_price / 2
+            notes = "⚠️ Split Case (Half Size)"
+        else:
+            final_qty = raw_qty
+            final_price = raw_price
+            notes = ""
+
+        l_id = row.get('Cin7_London_ID', '')
+        g_id = row.get('Cin7_Glou_ID', '')
+
+        po_rows.append({
+            "Product": prod_name,
+            "Variant_Match": matched_sku,
+            "PO_Qty": final_qty,
+            "PO_Cost": final_price,
+            "Total": final_qty * final_price,
+            "Notes": notes,
+            "Cin7_London_ID": l_id,
+            "Cin7_Glou_ID": g_id
+        })
+        
+    return pd.DataFrame(po_rows)
 
 # --- CIN7 FAMILY & PRODUCT CREATION ---
 def check_cin7_exists(endpoint, name_or_sku, is_sku=False):
@@ -853,22 +1015,14 @@ def create_cin7_purchase_order(header_df, lines_df, location_choice):
     if not supplier_id: return False, "Supplier not linked.", logs
 
     order_lines = []
-    # Determine which ID column to use based on location
     id_col = 'Cin7_London_ID' if location_choice == 'London' else 'Cin7_Glou_ID'
     
-    # Iterate through the PREPARED PO lines (from prepare_final_po_lines)
     for _, row in lines_df.iterrows():
         prod_id = row.get(id_col)
-        
-        # Validate ID exists
         if pd.notna(prod_id) and str(prod_id).strip():
-            
-            # Use the PRE-CALCULATED values from the preview table
             qty = float(row.get('PO_Qty', 0))
             price = float(row.get('PO_Cost', 0))
-            
             total = round(qty * price, 2)
-            
             order_lines.append({
                 "ProductID": prod_id, 
                 "Quantity": qty, 
@@ -879,7 +1033,7 @@ def create_cin7_purchase_order(header_df, lines_df, location_choice):
                 "Tax": 0
             })
 
-    if not order_lines: return False, "No valid lines found to export.", logs
+    if not order_lines: return False, "No valid lines found.", logs
 
     url_create = f"{get_cin7_base_url()}/advanced-purchase"
     payload_header = {
@@ -2068,6 +2222,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
