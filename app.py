@@ -456,6 +456,23 @@ def check_shopify_title(title):
 
 # --- SHOPIFY PAYLOAD HELPERS (STRICT VALIDATION) ---
 
+def clean_abv(abv_str):
+    """
+    Formats ABV:
+    - 4.0 -> "4"
+    - 4.5 -> "4.5"
+    - 4.52 -> "4.5" (Rounds to 1 decimal)
+    """
+    try:
+        if not abv_str: return "0"
+        val = float(abv_str)
+        val = round(val, 1) # Force 1 decimal max
+        if val.is_integer():
+            return str(int(val)) # 4.0 -> "4"
+        return str(val) # 4.5 -> "4.5"
+    except:
+        return str(abv_str)
+
 def get_abv_category(abv_str):
     try:
         val = float(abv_str)
@@ -498,7 +515,7 @@ def get_filter_group(row):
     if pack_str in valid_options:
         return pack_str
 
-    # 3. Fail safe: Return None if not in strict list (e.g. Single cans)
+    # 3. Fail safe: Return None if not in strict list
     return None 
 
 def create_shopify_variant_payload(row, location_prefix):
@@ -536,6 +553,77 @@ def create_shopify_variant_payload(row, location_prefix):
         "fulfillment_service": "manual",
         "inventory_policy": "deny",
         "metafields": metafields
+    }
+
+def create_shopify_product_payload(row, location_prefix, variants_list):
+    is_london = location_prefix == "L"
+    prefix = "L-" if is_london else "G-"
+    loc_name = "London" if is_london else "Gloucester"
+    family_base = row['Family_Name']
+    full_title = f"{prefix}{family_base}"
+    vendor = row['untappd_brewery']
+    body_html = row.get('description', '')
+    prod_type = loc_name
+    
+    # --- USE CLEAN ABV HERE ---
+    abv_val = clean_abv(row.get('untappd_abv', '0'))
+    
+    abv_cat = get_abv_category(abv_val)
+    style_prim, style_sec = split_untappd_style(row.get('untappd_style', ''))
+    untappd_id = row.get('Untappd_ID', '') or row.get('untappd_id', '')
+    
+    filter_val = get_filter_group(row)
+    
+    tags_list = [
+        loc_name, "Wholesale", vendor, 
+        row.get('Type', 'Beer'), 
+        row.get('format', ''), 
+        style_prim, style_sec, 
+        abv_cat, 
+        row.get('Attribute_5', 'Rotational Product'),
+        filter_val 
+    ]
+    tags_str = ",".join([str(t) for t in tags_list if t])
+
+    images = []
+    if row.get('Label_Thumb'):
+        img_url = row['Label_Thumb'].replace("Icon.png", "HD.png")
+        images.append({"src": img_url})
+
+    metafields = [
+        {"key": "abv", "value": str(abv_val), "type": "number_decimal", "namespace": "custom"},
+        {"key": "depot", "value": loc_name, "type": "single_line_text_field", "namespace": "custom"},
+        {"key": "format", "value": row.get('format', ''), "type": "single_line_text_field", "namespace": "custom"},
+        {"key": "primary_style", "value": style_prim, "type": "single_line_text_field", "namespace": "custom"},
+        {"key": "secondary_style", "value": style_sec, "type": "single_line_text_field", "namespace": "custom"},
+        {"key": "collaboration", "value": row.get('collaborator', ''), "type": "single_line_text_field", "namespace": "custom"},
+        {"key": "keg_type", "value": row.get('format', ''), "type": "single_line_text_field", "namespace": "custom"},
+        {"key": "ut_ignore", "value": "false", "type": "boolean", "namespace": "custom"},
+        {"key": "ut_id", "value": str(untappd_id), "type": "number_integer", "namespace": "custom"},
+        {"key": "ut_description", "value": body_html, "type": "multi_line_text_field", "namespace": "custom"},
+        {"key": "brewery_location", "value": row.get('Brewery_Loc', ''), "type": "single_line_text_field", "namespace": "custom"},
+        {"key": "abv_category", "value": abv_cat, "type": "single_line_text_field", "namespace": "custom"}
+    ]
+
+    if row.get('Label_Thumb'):
+         metafields.append({"key": "ut_img_small", "value": row['Label_Thumb'], "type": "single_line_text_field", "namespace": "custom"})
+         metafields.append({"key": "ut_img_hd", "value": row['Label_Thumb'], "type": "single_line_text_field", "namespace": "custom"})
+
+    if untappd_id:
+         metafields.append({"key": "ut_link", "value": f"https://untappd.com/beer/{untappd_id}", "type": "single_line_text_field", "namespace": "custom"})
+
+    return {
+        "product": {
+            "title": full_title,
+            "body_html": body_html,
+            "vendor": vendor,
+            "product_type": prod_type,
+            "status": "draft",
+            "tags": tags_str,
+            "variants": variants_list,
+            "images": images,
+            "metafields": metafields
+        }
     }
 
 def create_shopify_product_payload(row, location_prefix, variants_list):
@@ -1757,13 +1845,15 @@ if st.session_state.header_data is not None:
                 processed_rows = []
                 
                 for idx, row in st.session_state.upload_data.iterrows():
-                    # 1. Extract Base Data common to all variants of this line
+                    # 1. Extract Base Data
                     supp_name = row.get('untappd_brewery', '')
                     prod_name = row.get('untappd_product', '')
                     fmt_name = str(row.get('format', '')).strip()
                     vol_name = str(row.get('volume', '')).strip()
-                    abv_val = str(row.get('untappd_abv', '')).strip()
                     attr_5 = row.get('Attribute_5', 'Rotational Product')
+                    
+                    # --- FIX: CLEAN ABV HERE ---
+                    abv_val = clean_abv(row.get('untappd_abv', ''))
                     
                     # 2. Maps & Codes
                     lookup_key = (fmt_name.lower(), vol_name.lower())
@@ -1774,11 +1864,11 @@ if st.session_state.header_data is not None:
                     p_code = generate_sku_parts(prod_name)
                     f_code = format_map.get(fmt_name.lower(), "UN")
                     
-                    # 3. Generate Family Identity (Shared by Split & Original)
+                    # 3. Generate Family Identity
                     family_sku = f"{s_code}{p_code}-{today_str}-{idx}-{f_code}"
                     family_name = f"{supp_name} / {prod_name} / {abv_val}% / {fmt_name}"
 
-                    # 4. Determine Connectors (for Kegs)
+                    # 4. Determine Connectors
                     connectors = [""]
                     fmt_lower = fmt_name.lower()
                     if "dolium" in fmt_lower and "us" in fmt_lower: connectors = ["US Sankey D-Type Coupler"]
@@ -1786,10 +1876,10 @@ if st.session_state.header_data is not None:
                     elif "key" in fmt_lower: connectors = ["KeyKeg Coupler"]
                     elif "steel" in fmt_lower: connectors = ["Sankey Coupler"]
                     
-                    # 5. Prepare Variant Configurations (Original + Split)
+                    # 5. Variants Config
                     variants_config = []
                     
-                    # A. Original Config
+                    # A. Original
                     raw_pack = row.get('pack_size', '1')
                     try: 
                         orig_pack = float(raw_pack) if raw_pack and str(raw_pack).lower() != 'nan' else 1.0
@@ -1802,13 +1892,13 @@ if st.session_state.header_data is not None:
                     
                     variants_config.append({'pack': orig_pack, 'price': orig_price})
                     
-                    # B. Split Config (if ticked and pack > 1)
+                    # B. Split
                     if row.get('is_split_case', False) and orig_pack > 1:
                         split_pack = orig_pack / 2
                         split_price = orig_price / 2
                         variants_config.append({'pack': split_pack, 'price': split_price})
 
-                    # 6. Generate Rows for each Config
+                    # 6. Generate Rows
                     for v_conf in variants_config:
                         curr_pack = v_conf['pack']
                         curr_price = v_conf['price']
@@ -1817,31 +1907,26 @@ if st.session_state.header_data is not None:
                         is_multipack = curr_pack > 1.0
                         total_weight = unit_weight * curr_pack
                         
-                        # Recalculate Sales Price based on the specific variant cost
                         sell_price = calculate_sell_price(curr_price, attr_5, fmt_name)
 
                         for conn in connectors:
                             new_row = row.to_dict()
                             
-                            # Standard Fields
                             new_row['Family_SKU'] = family_sku
                             new_row['Family_Name'] = family_name
                             new_row['Weight'] = total_weight
                             new_row['Keg_Connector'] = conn
                             new_row['Attribute_5'] = attr_5
                             
-                            # Specific Variant Fields
                             new_row['item_price'] = curr_price
                             new_row['Sales_Price'] = sell_price
-                            new_row['pack_size'] = curr_pack # Important for Shopify Tags
+                            new_row['pack_size'] = curr_pack 
                             
-                            # Name Generation
                             var_name_base = vol_name
                             if is_multipack: var_name_base = f"{pack_int} x {vol_name}"
                             if conn: new_row['Variant_Name'] = f"{var_name_base} - {conn}"
                             else: new_row['Variant_Name'] = var_name_base
                             
-                            # SKU Generation
                             if is_multipack: sku_suffix = f"-{pack_int}X{size_code}"
                             else: sku_suffix = f"-{size_code}"
                             
@@ -1855,7 +1940,6 @@ if st.session_state.header_data is not None:
 
                 final_df = pd.DataFrame(processed_rows)
                 
-                # Reorder columns for clean display
                 all_cols = final_df.columns.tolist()
                 desired_order = ['Attribute_5', 'Sales_Price', 'item_price', 'Variant_Name', 'Variant_SKU', 'Family_Name']
                 final_order = []
@@ -1866,7 +1950,7 @@ if st.session_state.header_data is not None:
                 
                 st.session_state.upload_data = final_df[final_order]
                 st.session_state.upload_generated = True 
-                st.success("Upload Data Generated (Split Cases Included)!")
+                st.success("Upload Data Generated (Split Cases + Clean ABV)!")
                 st.rerun()
 
             # --- SHOPIFY SECTION ---
@@ -2110,6 +2194,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
