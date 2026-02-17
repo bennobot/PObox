@@ -1852,7 +1852,7 @@ if st.session_state.header_data is not None:
                     vol_name = str(row.get('volume', '')).strip()
                     attr_5 = row.get('Attribute_5', 'Rotational Product')
                     
-                    # --- FIX: CLEAN ABV HERE ---
+                    # Clean ABV
                     abv_val = clean_abv(row.get('untappd_abv', ''))
                     
                     # 2. Maps & Codes
@@ -1923,7 +1923,9 @@ if st.session_state.header_data is not None:
                             new_row['pack_size'] = curr_pack 
                             
                             var_name_base = vol_name
-                            if is_multipack: var_name_base = f"{pack_int} x {vol_name}"
+                            # --- MODIFIED LINE BELOW: REMOVED SPACES ---
+                            if is_multipack: var_name_base = f"{pack_int}x{vol_name}"
+                            
                             if conn: new_row['Variant_Name'] = f"{var_name_base} - {conn}"
                             else: new_row['Variant_Name'] = var_name_base
                             
@@ -1950,7 +1952,7 @@ if st.session_state.header_data is not None:
                 
                 st.session_state.upload_data = final_df[final_order]
                 st.session_state.upload_generated = True 
-                st.success("Upload Data Generated (Split Cases + Clean ABV)!")
+                st.success("Upload Data Generated (Split Cases + Clean ABV + No Spaces)!")
                 st.rerun()
 
             # --- SHOPIFY SECTION ---
@@ -2194,6 +2196,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
