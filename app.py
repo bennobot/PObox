@@ -970,37 +970,46 @@ def run_reconciliation_check(lines_df):
         supplier = str(row.get('Supplier_Name', ''))
         inv_prod_name = row['Product_Name']
         
-        # --- NEW SPLIT LOGIC ---
+        # --- SPLIT LOGIC (Keep this, but use simple matching) ---
         use_split = row.get('Use_Split', False)
         raw_pack = str(row.get('Pack_Size', '1')).strip()
         try: pack_val = float(raw_pack)
         except: pack_val = 1.0
 
         if use_split and pack_val > 1:
-            target_pack = pack_val / 2
-            inv_pack = str(int(target_pack)) if target_pack.is_integer() else str(target_pack)
-            logs.append(f"   ✂️ Splitting: Invoice says {raw_pack}, looking for {inv_pack}")
+            target_pack_val = pack_val / 2
+            logs.append(f"   ✂️ Splitting: Invoice {pack_val} -> Looking for {target_pack_val}")
         else:
-            inv_pack = str(int(pack_val)) if pack_val.is_integer() else str(pack_val)
-        # -----------------------
+            target_pack_val = pack_val
+            
+        # Convert to string for text matching (e.g. "24" or "12")
+        inv_pack = str(int(target_pack_val)) if target_pack_val.is_integer() else str(target_pack_val)
+        # -------------------------------------------------------
 
         inv_vol = normalize_vol_string(row.get('Volume', ''))
         inv_fmt = str(row.get('Format', '')).lower()
         
-        logs.append(f"Checking: **{inv_prod_name}** ({inv_fmt})")
+        logs.append(f"Checking: **{inv_prod_name}** ({inv_fmt} | {inv_pack} Pack)")
 
         if supplier in shopify_cache and shopify_cache[supplier]:
             candidates = shopify_cache[supplier]
             scored_candidates = []
+            
+            # 1. Fuzzy Match Product Name
             for edge in candidates:
                 prod = edge['node']
                 shop_title_full = prod['title']
+                
+                # Extract clean name (remove "L-Supplier /")
                 shop_prod_name_clean = shop_title_full
                 if "/" in shop_title_full:
                     parts = [p.strip() for p in shop_title_full.split("/")]
                     if len(parts) >= 2: shop_prod_name_clean = parts[1]
+                
+                # Loose matching
                 score = fuzz.token_sort_ratio(inv_prod_name, shop_prod_name_clean)
                 if inv_prod_name.lower() in shop_prod_name_clean.lower(): score += 10
+                
                 if score > 40: scored_candidates.append((score, prod, shop_prod_name_clean))
             
             scored_candidates.sort(key=lambda x: x[0], reverse=True)
@@ -1008,10 +1017,11 @@ def run_reconciliation_check(lines_df):
             
             for score, prod, clean_name in scored_candidates:
                 if score < 75: continue 
+                
+                # 2. Format Compatibility Check
                 shop_fmt_meta = prod.get('format_meta', {}).get('value', '') or ""
                 shop_title_lower = prod['title'].lower()
                 shop_format_str = f"{shop_fmt_meta} {shop_title_lower}".lower()
-                
                 shop_keg_type_meta = prod.get('keg_meta', {}) or {}
                 shop_keg_val = str(shop_keg_type_meta.get('value', '')).lower()
 
@@ -1028,21 +1038,27 @@ def run_reconciliation_check(lines_df):
                     if is_poly_inv and (is_key_shop or is_steel_shop): is_compatible = False
                     if is_key_inv and (is_poly_shop or is_steel_shop): is_compatible = False
                     if is_steel_inv and (is_poly_shop or is_key_shop): is_compatible = False
-                
                 elif "cask" in inv_fmt or "firkin" in inv_fmt:
                     if "keg" in shop_format_str and "cask" not in shop_format_str: is_compatible = False
                 
                 if not is_compatible: continue
 
+                # 3. Variant Matching (Looser "Contains" Logic)
                 for v_edge in prod['variants']['edges']:
                     variant = v_edge['node']
                     v_title = variant['title'].lower()
                     v_sku = str(variant.get('sku', '')).strip()
+                    
+                    # Check Pack Size
                     pack_ok = False
                     if inv_pack == "1":
+                        # If looking for Single, ensure no " x " in title
                         if " x " not in v_title: pack_ok = True
                     else:
+                        # If looking for Multipack, just check if number + x exists
                         if f"{inv_pack} x" in v_title or f"{inv_pack}x" in v_title: pack_ok = True
+                    
+                    # Check Volume
                     vol_ok = False
                     if inv_vol in v_title: vol_ok = True
                     if len(inv_vol) == 2 and f"{inv_vol}0" in v_title: vol_ok = True 
@@ -2082,6 +2098,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
