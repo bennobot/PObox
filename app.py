@@ -1206,7 +1206,6 @@ def create_product_matrix(df):
             row[f'Volume{suffix}'] = item['Volume']
             row[f'Item_Price{suffix}'] = item['Item_Price']
             
-            # --- FIX IS HERE ---
             # Carry over the decision from Tab 1
             row[f'Split_Case{suffix}'] = item.get('Use_Split', False)
             
@@ -1233,11 +1232,18 @@ def create_product_matrix(df):
             else:
                 matrix_df[col] = ""
             
-    # Clean up string columns
+    # --- FIX: ROBUST TYPE CONVERSION ---
     for col in final_cols:
-        if "Split_Case" not in col and "Item_Price" not in col:
-            if matrix_df[col].dtype == 'object':
-                matrix_df[col] = matrix_df[col].fillna("").astype(str)
+        # Skip Boolean (Checkbox) and Numeric (Price) columns
+        if "Split_Case" in col or "Item_Price" in col:
+            continue
+            
+        # For everything else (Pack_Size, Volume, Format, Names), force String
+        # This fixes the "ColumnDataKind.FLOAT" error
+        matrix_df[col] = matrix_df[col].fillna("").astype(str)
+        
+        # Optional: Clean up "24.0" to "24" for better readability
+        matrix_df[col] = matrix_df[col].str.replace(r'\.0$', '', regex=True)
 
     return matrix_df[final_cols]
 
@@ -2076,6 +2082,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
