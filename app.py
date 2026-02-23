@@ -619,20 +619,20 @@ def create_shopify_product_payload(row, location_prefix, variants_list):
         {"key": "brewery_location", "value": row.get('Brewery_Loc', ''), "type": "single_line_text_field", "namespace": "custom"},
         {"key": "abv_category", "value": abv_cat, "type": "single_line_text_field", "namespace": "custom"},
         
-        # --- NEW & UPDATED METAFIELDS ---
-        {"key": "ut_ibu", "value": str(row.get('untappd_ibu', 0)), "type": "number_integer", "namespace": "custom"},
+        # --- FIX: Send IBU as Decimal ---
+        {"key": "ut_ibu", "value": str(float(row.get('untappd_ibu', 0))), "type": "number_decimal", "namespace": "custom"},
+        
         {"key": "ut_brewery_country", "value": row.get('untappd_country', ''), "type": "single_line_text_field", "namespace": "custom"},
-        # Explicitly setting Ignore to false as requested
         {"key": "ut_ignore", "value": "false", "type": "boolean", "namespace": "custom"}
     ]
 
     if untappd_id:
+        # Keeping ID as integer for now. If this fails, switch to number_decimal or single_line_text_field
         metafields.append({"key": "ut_id", "value": str(untappd_id), "type": "number_integer", "namespace": "custom"})
         metafields.append({"key": "ut_link", "value": f"https://untappd.com/beer/{untappd_id}", "type": "single_line_text_field", "namespace": "custom"})
 
     if row.get('Label_Thumb'):
          metafields.append({"key": "ut_img_small", "value": row['Label_Thumb'], "type": "single_line_text_field", "namespace": "custom"})
-         # Heuristic for HD image
          hd_url = row['Label_Thumb'].replace("Icon.png", "HD.png")
          metafields.append({"key": "ut_img_hd", "value": hd_url, "type": "single_line_text_field", "namespace": "custom"})
 
@@ -2081,11 +2081,9 @@ if st.session_state.header_data is not None:
                 st.write("Fetching Location IDs...")
                 loc_data = fetch_shopify_location_ids()
                 
-                # Debug Output if matching fails
                 if not loc_data or not loc_data['london'] or not loc_data['gloucester']:
                     st.error("Could not determine 'London' and 'Gloucester' Location IDs.")
-                    st.write("Debug Data Found:", loc_data)
-                    st.warning("Please use the 'Check Location IDs' button above to find the correct IDs and add them to secrets.toml.")
+                    st.warning("Please check permissions or use 'Check Location IDs' above.")
                     st.stop()
                 
                 log_box = st.expander("Shopify Upload Logs", expanded=True)
@@ -2101,7 +2099,6 @@ if st.session_state.header_data is not None:
                         full_title = f"{loc_prefix}-{fam_name}"
                         pid, existing_vid = check_shopify_title(full_title)
                         
-                        # Determine correct location ID for this pass
                         target_loc_id = loc_data['london'] if loc_prefix == "L" else loc_data['gloucester']
                         
                         if pid:
@@ -2116,7 +2113,6 @@ if st.session_state.header_data is not None:
                                         inv_item_id = v_data.get('inventory_item_id')
                                         var_title = row['Variant_Name']
                                         
-                                        # --- UPDATE LOCATION ---
                                         if inv_item_id:
                                             set_variant_location(inv_item_id, target_loc_id, loc_data['all_ids'])
                                             log_box.write(f"      ✅ Added Variant & Set Loc: {var_title}")
@@ -2127,6 +2123,8 @@ if st.session_state.header_data is not None:
                                          log_box.write(f"      ⚠️ Variant SKU Exists: {row['Variant_Name']}")
                                     else:
                                         log_box.write(f"      ❌ Variant Error: {r.text}")
+                                        # LOG PAYLOAD FOR DEBUGGING
+                                        log_box.code(json.dumps(var_payload, indent=2))
                                 except Exception as e:
                                     log_box.write(f"      💥 Variant Exception: {e}")
                                     
@@ -2148,9 +2146,6 @@ if st.session_state.header_data is not None:
                                     new_id = p_resp['id']
                                     log_box.write(f"      ✅ Created Product! ID: {new_id}")
                                     
-                                    # --- LOOP VARIANTS TO UPDATE LOCATION ---
-                                    # When creating a product, variants are created immediately.
-                                    # We must iterate them to set location.
                                     created_variants = p_resp.get('variants', [])
                                     for cv in created_variants:
                                         inv_id = cv.get('inventory_item_id')
@@ -2160,6 +2155,8 @@ if st.session_state.header_data is not None:
                                     
                                 else:
                                     log_box.write(f"      ❌ Create Error: {r.text}")
+                                    # LOG PAYLOAD FOR DEBUGGING
+                                    log_box.code(json.dumps(prod_payload, indent=2))
                             except Exception as e:
                                 log_box.write(f"      💥 Create Exception: {e}")
                         time.sleep(0.5)
@@ -2311,6 +2308,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
