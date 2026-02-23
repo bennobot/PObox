@@ -2075,6 +2075,19 @@ if st.session_state.header_data is not None:
             # Filter to ensure columns actually exist
             display_cols = [c for c in ordered_cols if c in st.session_state.matrix_data.columns]
 
+            # --- SAFETY FIX: Enforce String Type for TextColumns ---
+            # This prevents "ColumnDataKind.FLOAT" errors if pandas inferred numbers
+            for col in display_cols:
+                if "Pack_Size" in col or "Volume" in col or "Format" in col:
+                    # Convert to string, handle NaNs, remove trailing .0
+                    st.session_state.matrix_data[col] = (
+                        st.session_state.matrix_data[col]
+                        .fillna("")
+                        .astype(str)
+                        .str.replace(r'\.0$', '', regex=True)
+                        .replace("nan", "")
+                    )
+
             edited_prep = st.data_editor(
                 st.session_state.matrix_data[display_cols],
                 num_rows="fixed",
@@ -2602,6 +2615,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
