@@ -205,7 +205,7 @@ def search_untappd_item(supplier, product):
 def batch_untappd_lookup(matrix_df):
     if matrix_df.empty: return matrix_df, ["Matrix Empty"]
     
-    # Added Untappd_IBU and Untappd_Country to columns
+    # Initialize columns
     cols = ['Untappd_Status', 'Untappd_ID', 'Untappd_Brewery', 'Untappd_Product', 
             'Untappd_ABV', 'Untappd_IBU', 'Untappd_Style', 'Untappd_Desc', 
             'Label_Thumb', 'Brewery_Loc', 'Untappd_Country']
@@ -222,27 +222,41 @@ def batch_untappd_lookup(matrix_df):
         
         current_status = str(row.get('Untappd_Status', ''))
         
+        # Only search if not already confirmed found
         if current_status != "✅ Found":
             res = search_untappd_item(row['Supplier_Name'], row['Product_Name'])
             
             if res and "untappd_id" in res:
+                # --- MATCH FOUND ---
                 logs.append(f"✅ Found: {res['name']}")
                 row['Untappd_Status'] = "✅ Found"
                 row['Untappd_ID'] = res['untappd_id']
                 row['Untappd_Brewery'] = res['brewery']
                 row['Untappd_Product'] = res['name']
                 row['Untappd_ABV'] = res['abv']
-                row['Untappd_IBU'] = res['ibu'] # --- NEW ---
+                row['Untappd_IBU'] = res['ibu']
                 row['Untappd_Style'] = res['style']
                 row['Untappd_Desc'] = res['description']
                 row['Label_Thumb'] = res['label_image_thumb']
                 row['Brewery_Loc'] = res['brewery_location']
-                row['Untappd_Country'] = res['brewery_country'] # --- NEW ---
+                row['Untappd_Country'] = res['brewery_country']
             else:
+                # --- NO MATCH: APPLY FALLBACKS ---
                 used_q = res.get('query_used', 'Unknown') if res else 'Error'
                 logs.append(f"❌ No match: {row['Product_Name']} | Query Sent: [{used_q}]")
+                
                 row['Untappd_Status'] = "❌ Not Found"
-                row['Untappd_ID'] = ""
+                row['Untappd_ID'] = "" # No ID
+                
+                # Pre-fill with Invoice Data so user doesn't have to re-type
+                row['Untappd_Brewery'] = row.get('Supplier_Name', '')
+                row['Untappd_Product'] = row.get('Product_Name', '')
+                row['Untappd_ABV'] = row.get('ABV', '') # Use invoice ABV if available
+                
+                # These remain blank for manual entry
+                row['Untappd_Style'] = "" 
+                row['Untappd_Desc'] = ""
+                row['Label_Thumb'] = ""
         
         updated_rows.append(row)
         
@@ -2519,6 +2533,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
