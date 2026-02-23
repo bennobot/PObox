@@ -1581,7 +1581,6 @@ def create_product_matrix(df):
     if df is None or df.empty: return pd.DataFrame()
     df = df.fillna("")
     if 'Shopify_Status' in df.columns:
-        # Filter out matched items so they don't appear in Tab 2
         df = df[df['Shopify_Status'] != "✅ Match"]
     if df.empty: return pd.DataFrame()
 
@@ -1590,12 +1589,16 @@ def create_product_matrix(df):
     matrix_rows = []
     
     for name, group in grouped:
+        # name tuple: (Supplier, Collab, Product, ABV)
+        # FIX: Clean ABV immediately here
+        clean_abv_val = clean_abv(name[3])
+        
         row = {
             'Supplier_Name': name[0], 
-            'Type': 'Beer', # Default
+            'Type': 'Beer', 
             'Collaborator': name[1], 
             'Product_Name': name[2], 
-            'ABV': name[3]
+            'ABV': clean_abv_val # <--- Stored as clean number (e.g. "4.4")
         }
         for i, (_, item) in enumerate(group.iterrows()):
             if i >= 3: break
@@ -1604,8 +1607,6 @@ def create_product_matrix(df):
             row[f'Pack_Size{suffix}'] = item['Pack_Size']
             row[f'Volume{suffix}'] = item['Volume']
             row[f'Item_Price{suffix}'] = item['Item_Price']
-            
-            # Carry over the decision from Tab 1
             row[f'Split_Case{suffix}'] = item.get('Use_Split', False)
             
         matrix_rows.append(row)
@@ -1618,7 +1619,6 @@ def create_product_matrix(df):
     base_cols = ['Supplier_Name', 'Type', 'Collaborator', 'Product_Name', 'ABV']
     format_cols = []
     for i in range(1, 4):
-        # Order: Format -> Pack -> Vol -> Price -> Tickbox
         format_cols.extend([f'Format{i}', f'Pack_Size{i}', f'Volume{i}', f'Item_Price{i}', f'Split_Case{i}'])
     
     existing_format_cols = [c for c in format_cols if c in matrix_df.columns]
@@ -1631,18 +1631,13 @@ def create_product_matrix(df):
             else:
                 matrix_df[col] = ""
             
-    # --- FIX: ROBUST TYPE CONVERSION ---
     for col in final_cols:
-        # Skip Boolean (Checkbox) and Numeric (Price) columns
-        if "Split_Case" in col or "Item_Price" in col:
-            continue
-            
-        # For everything else (Pack_Size, Volume, Format, Names), force String
-        # This fixes the "ColumnDataKind.FLOAT" error
-        matrix_df[col] = matrix_df[col].fillna("").astype(str)
-        
-        # Optional: Clean up "24.0" to "24" for better readability
-        matrix_df[col] = matrix_df[col].str.replace(r'\.0$', '', regex=True)
+        if "Split_Case" not in col and "Item_Price" not in col:
+            if matrix_df[col].dtype == 'object':
+                matrix_df[col] = matrix_df[col].fillna("").astype(str)
+                # Cleanup .0 only for non-ABV fields just in case (though ABV is handled above)
+                if "ABV" not in col:
+                    matrix_df[col] = matrix_df[col].str.replace(r'\.0$', '', regex=True)
 
     return matrix_df[final_cols]
 
@@ -1665,60 +1660,45 @@ def stage_products_for_upload(matrix_df):
     new_rows = []
     errors = []
     
-    # 1. Fetch Fallback Images
     fallback_map = fetch_fallback_images()
-    
-    # 2. Define Mandatory Fields for Manual Upload
-    # Note: We check these strictly. 
     required_manual = ['Untappd_ABV', 'Untappd_Style', 'Untappd_Desc']
     
     for idx, row in matrix_df.iterrows():
-        # Only process if at least one checkbox is ticked (or split ticked)
-        # Note: We actually iterate all now per previous instruction, but checking emptiness is good.
-        
-        # --- AUTO-FILL / FALLBACK LOGIC ---
-        
-        # A. Supplier Name Fallback
+        # Fallbacks
         brand_name = str(row.get('Untappd_Brewery', '')).strip()
-        if not brand_name:
-            brand_name = str(row.get('Supplier_Name', '')).strip()
+        if not brand_name: brand_name = str(row.get('Supplier_Name', '')).strip()
             
-        # B. Product Name Fallback
         prod_name = str(row.get('Untappd_Product', '')).strip()
-        if not prod_name:
-            prod_name = str(row.get('Product_Name', '')).strip()
+        if not prod_name: prod_name = str(row.get('Product_Name', '')).strip()
 
-        # C. Image Fallback
         img_url = str(row.get('Label_Thumb', '')).strip()
         if not img_url:
-            # Try to find a fallback image using the Brand Name
-            # We use the normalized Supplier Name from the matrix for lookup
             lookup_key = str(row.get('Supplier_Name', '')).lower().strip()
-            if lookup_key in fallback_map:
-                img_url = fallback_map[lookup_key]
+            if lookup_key in fallback_map: img_url = fallback_map[lookup_key]
 
-        # --- VALIDATION ---
+        # Validation
         missing_vals = []
         for field in required_manual:
             val = str(row.get(field, '')).strip()
-            if not val:
-                missing_vals.append(field)
+            if not val: missing_vals.append(field)
         
         if missing_vals:
             errors.append(f"Row {idx+1} ({prod_name}): Missing mandatory fields: {', '.join(missing_vals)}. Please fill in Tab 3.")
             continue
 
-        # --- ROW GENERATION ---
+        # --- FIX: Clean ABV before staging ---
+        raw_abv = row.get('Untappd_ABV', '')
+        clean_abv_val = clean_abv(raw_abv)
+
         for i in range(1, 4):
             fmt_val = str(row.get(f'Format{i}', '')).strip()
             
             if fmt_val and fmt_val.lower() not in ['nan', 'none']:
-                
                 new_row = {
                     'untappd_brewery': brand_name,
                     'collaborator': row.get('Collaborator', ''),
                     'untappd_product': prod_name,
-                    'untappd_abv': row.get('Untappd_ABV', ''),
+                    'untappd_abv': clean_abv_val, # <--- Used clean val
                     'untappd_ibu': row.get('Untappd_IBU', 0),
                     'untappd_country': row.get('Untappd_Country', ''),
                     'untappd_style': row.get('Untappd_Style', ''),
@@ -1728,7 +1708,7 @@ def stage_products_for_upload(matrix_df):
                     'volume': row.get(f'Volume{i}', ''),
                     'item_price': row.get(f'Item_Price{i}', ''),
                     'is_split_case': row.get(f'Split_Case{i}', False),
-                    'Label_Thumb': img_url,  # <--- Uses the fallback if matched
+                    'Label_Thumb': img_url,
                     'Untappd_ID': row.get('Untappd_ID', ''), 
                     'Brewery_Loc': row.get('Brewery_Loc', ''),
                     'Family_SKU': '',
@@ -2193,7 +2173,8 @@ if st.session_state.header_data is not None:
                     vol_name = str(row.get('volume', '')).strip()
                     attr_5 = row.get('Attribute_5', 'Rotational Product')
                     
-                    # Clean ABV
+                    # --- FINAL CLEANING of ABV ---
+                    # Ensure it is just "7.2" not "7.2%"
                     abv_val = clean_abv(row.get('untappd_abv', ''))
                     
                     # 2. Maps & Codes
@@ -2206,6 +2187,7 @@ if st.session_state.header_data is not None:
                     f_code = format_map.get(fmt_name.lower(), "UN")
                     
                     # 3. Generate Family Identity
+                    # We manually add the % sign here, so abv_val must be clean number
                     family_sku = f"{s_code}{p_code}-{today_str}-{idx}-{f_code}"
                     family_name = f"{supp_name} / {prod_name} / {abv_val}% / {fmt_name}"
 
@@ -2264,7 +2246,6 @@ if st.session_state.header_data is not None:
                             new_row['pack_size'] = curr_pack 
                             
                             var_name_base = vol_name
-                            # --- MODIFIED LINE BELOW: REMOVED SPACES ---
                             if is_multipack: var_name_base = f"{pack_int}x{vol_name}"
                             
                             if conn: new_row['Variant_Name'] = f"{var_name_base} - {conn}"
@@ -2621,6 +2602,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
