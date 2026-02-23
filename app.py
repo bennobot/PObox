@@ -106,20 +106,52 @@ with col_head_2:
 # 1. HELPER FUNCTIONS
 # ==========================================
 
-# --- 1A. PRICING LOGIC ---
+# --- 1A. PRICING & GENERAL LOGIC ---
+
+def clean_abv(abv_str):
+    """
+    Formats ABV string:
+    - Removes '%' signs.
+    - 4.0 -> "4"
+    - 4.5 -> "4.5"
+    - 4.52 -> "4.5"
+    """
+    try:
+        if not abv_str: return ""
+        # Remove % and whitespace
+        clean_s = str(abv_str).replace('%', '').strip()
+        val = float(clean_s)
+        val = round(val, 1) # Force 1 decimal max
+        if val.is_integer():
+            return str(int(val)) # 4.0 -> "4"
+        return str(val) # 4.5 -> "4.5"
+    except:
+        # Fallback: just return string without %
+        return str(abv_str).replace('%', '').strip()
+
 def calculate_sell_price(cost_price, product_type, fmt):
+    # ... (Keep existing pricing logic here) ...
     try:
         cost = float(cost_price)
     except:
         return 0.00
+
     if cost == 0: return 0.00
+
     fmt_lower = str(fmt).lower()
     draft_triggers = ['keykeg', 'steel', 'poly', 'uni', 'cask', 'keg', 'firkin', 'pin']
     is_draft = any(t in fmt_lower for t in draft_triggers)
-    if is_draft and cost > 140: return round(cost + 40, 2)
-    if is_draft and cost < 63: return round(cost + 20, 2)
-    if product_type == "Core Product": return round(cost * 1.265, 2)
-    else: return round(cost * 1.285, 2)
+
+    if is_draft and cost > 140:
+        return round(cost + 40, 2)
+
+    if is_draft and cost < 63:
+        return round(cost + 20, 2)
+
+    if product_type == "Core Product":
+        return round(cost * 1.265, 2)
+    else: 
+        return round(cost * 1.285, 2)
 
 # --- 1B. GOOGLE DRIVE ---
 def get_drive_service():
@@ -233,7 +265,7 @@ def batch_untappd_lookup(matrix_df):
                 row['Untappd_ID'] = res['untappd_id']
                 row['Untappd_Brewery'] = res['brewery']
                 row['Untappd_Product'] = res['name']
-                row['Untappd_ABV'] = res['abv']
+                row['Untappd_ABV'] = res['abv'] # Untappd API usually sends clean numbers
                 row['Untappd_IBU'] = res['ibu']
                 row['Untappd_Style'] = res['style']
                 row['Untappd_Desc'] = res['description']
@@ -246,12 +278,15 @@ def batch_untappd_lookup(matrix_df):
                 logs.append(f"❌ No match: {row['Product_Name']} | Query Sent: [{used_q}]")
                 
                 row['Untappd_Status'] = "❌ Not Found"
-                row['Untappd_ID'] = "" # No ID
+                row['Untappd_ID'] = "" 
                 
-                # Pre-fill with Invoice Data so user doesn't have to re-type
+                # Pre-fill with Invoice Data
                 row['Untappd_Brewery'] = row.get('Supplier_Name', '')
                 row['Untappd_Product'] = row.get('Product_Name', '')
-                row['Untappd_ABV'] = row.get('ABV', '') # Use invoice ABV if available
+                
+                # --- FIX: CLEAN ABV HERE ---
+                raw_invoice_abv = row.get('ABV', '')
+                row['Untappd_ABV'] = clean_abv(raw_invoice_abv)
                 
                 # These remain blank for manual entry
                 row['Untappd_Style'] = "" 
@@ -2586,6 +2621,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
