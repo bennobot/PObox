@@ -1946,29 +1946,51 @@ if st.session_state.header_data is not None:
     
     # --- TAB 1: LINE ITEMS ---
     # --- TAB 1: LINE ITEMS ---
-    # --- TAB 1: LINE ITEMS ---
     with current_tabs[0]:
         st.subheader("1. Review & Edit Lines")
+        
+        # 1. Prepare Display Data (No Renaming Columns!)
         display_df = st.session_state.line_items.copy()
-        if 'Shopify_Status' in display_df.columns:
-            display_df.rename(columns={'Shopify_Status': 'Product_Status'}, inplace=True)
-
-        # Added Strict_Search to order
-        ideal_order = ['Use_Split', 'Strict_Search', 'Product_Status', 'Matched_Product', 'Matched_Variant', 'Image', 'Supplier_Name', 'Product_Name', 'ABV', 'Format', 'Pack_Size', 'Volume', 'Quantity', 'Item_Price', 'Collaborator', 'Shopify_Variant_ID', 'London_SKU', 'Gloucester_SKU']
+        
+        # 2. Define Order (Use ACTUAL column names)
+        ideal_order = [
+            'Use_Split', 
+            'Strict_Search', 
+            'Shopify_Status', # <--- Keep original name
+            'Matched_Product', 
+            'Matched_Variant', 
+            'Image', 
+            'Supplier_Name', 
+            'Product_Name', 
+            'ABV', 
+            'Format', 
+            'Pack_Size', 
+            'Volume', 
+            'Quantity', 
+            'Item_Price', 
+            'Collaborator', 
+            'Shopify_Variant_ID', 
+            'London_SKU', 
+            'Gloucester_SKU'
+        ]
+        
+        # Filter and Reorder columns safely
         final_cols = [c for c in ideal_order if c in display_df.columns]
         rem = [c for c in display_df.columns if c not in final_cols]
         display_df = display_df[final_cols + rem]
         
+        # 3. Configure Columns (Renaming happens VISUALLY here)
         column_config = {
             "Image": st.column_config.ImageColumn("Img"),
-            "Product_Status": st.column_config.TextColumn("Status", disabled=True),
+            # Rename header visually, but keep data ID same to prevent bugs
+            "Shopify_Status": st.column_config.TextColumn("Status", disabled=True), 
             "Matched_Product": st.column_config.TextColumn("Shopify Match", disabled=True),
             "Matched_Variant": st.column_config.TextColumn("Variant Match", disabled=True),
             "Use_Split": st.column_config.CheckboxColumn("Order Split?", width="small", help="Tick to order half-case (e.g. 12x instead of 24x)"),
-            # New Checkbox
             "Strict_Search": st.column_config.CheckboxColumn("Strict?", width="small", help="Tick to force exact name matching (prevents Vol 1 matching Vol 2)")
         }
 
+        # 4. Render Editor
         edited_lines = st.data_editor(
             display_df, 
             num_rows="dynamic", 
@@ -1977,13 +1999,9 @@ if st.session_state.header_data is not None:
             column_config=column_config
         )
         
+        # 5. Save Data (Directly, no conversion needed)
         if edited_lines is not None:
-            saved_df = edited_lines.copy()
-            if 'Product_Status' in saved_df.columns:
-                saved_df.rename(columns={'Product_Status': 'Shopify_Status'}, inplace=True)
-            st.session_state.line_items = saved_df
-
-        # ... (Rest of Tab 1 buttons remain the same)
+            st.session_state.line_items = edited_lines
 
         col1, col2 = st.columns([1, 4])
         with col1:
@@ -2568,6 +2586,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
