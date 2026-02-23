@@ -472,6 +472,126 @@ def check_shopify_title(title):
     except Exception: pass
     return None, None
 
+# --- SHOPIFY B2B CATALOG / PUBLICATION HELPERS ---
+
+def fetch_publication_ids():
+    """
+    Fetches Publication IDs for 'London' and 'Gloucester'.
+    Checks both B2B Catalogs and Standard Publications (Sales Channels).
+    """
+    if "shopify" not in st.secrets: return None
+    creds = st.secrets["shopify"]
+    shop_url = creds.get("shop_url")
+    token = creds.get("access_token")
+    version = creds.get("api_version", "2024-04")
+    endpoint = f"https://{shop_url}/admin/api/{version}/graphql.json"
+    headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
+    
+    # Map to store findings
+    pub_map = {'london': None, 'gloucester': None}
+    
+    # 1. Try B2B Catalogs Query (Preferred)
+    query_catalogs = """
+    {
+      catalogs(first: 25) {
+        nodes {
+          id
+          title
+          publication {
+            id
+          }
+        }
+      }
+    }
+    """
+    try:
+        r = requests.post(endpoint, json={"query": query_catalogs}, headers=headers)
+        if r.status_code == 200:
+            data = r.json()
+            if "data" in data and "catalogs" in data["data"]:
+                for node in data["data"]["catalogs"]["nodes"]:
+                    title = node['title'].lower()
+                    pub_id = node['publication']['id']
+                    if "london" in title: pub_map['london'] = pub_id
+                    if "gloucester" in title: pub_map['gloucester'] = pub_id
+    except: pass
+
+    # 2. If missing, try Standard Publications (Sales Channels)
+    if not pub_map['london'] or not pub_map['gloucester']:
+        query_pubs = """
+        {
+          publications(first: 25) {
+            edges {
+              node {
+                id
+                name
+              }
+            }
+          }
+        }
+        """
+        try:
+            r = requests.post(endpoint, json={"query": query_pubs}, headers=headers)
+            if r.status_code == 200:
+                data = r.json()
+                if "data" in data and "publications" in data["data"]:
+                    for edge in data["data"]["publications"]["edges"]:
+                        node = edge['node']
+                        name = node['name'].lower()
+                        pid = node['id']
+                        # Only fill if empty (Catalogs take priority)
+                        if "london" in name and not pub_map['london']: 
+                            pub_map['london'] = pid
+                        if "gloucester" in name and not pub_map['gloucester']: 
+                            pub_map['gloucester'] = pid
+        except: pass
+
+    return pub_map
+
+def publish_product_to_app(product_id_numeric, publication_id_gql):
+    """
+    Publishes a Product (numeric ID) to a specific Publication (GraphQL ID).
+    """
+    if not product_id_numeric or not publication_id_gql: return False
+    
+    creds = st.secrets["shopify"]
+    shop_url = creds.get("shop_url")
+    token = creds.get("access_token")
+    version = creds.get("api_version", "2024-04")
+    endpoint = f"https://{shop_url}/admin/api/{version}/graphql.json"
+    headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
+    
+    # Convert numeric ID to GID
+    product_gid = f"gid://shopify/Product/{product_id_numeric}"
+    
+    mutation = """
+    mutation publishablePublish($id: ID!, $input: [PublicationInput!]!) {
+      publishablePublish(id: $id, input: $input) {
+        userErrors {
+          field
+          message
+        }
+      }
+    }
+    """
+    
+    variables = {
+        "id": product_gid,
+        "input": [{
+            "publicationId": publication_id_gql
+        }]
+    }
+    
+    try:
+        r = requests.post(endpoint, json={"query": mutation, "variables": variables}, headers=headers)
+        if r.status_code == 200:
+            data = r.json()
+            errors = data.get("data", {}).get("publishablePublish", {}).get("userErrors", [])
+            if not errors:
+                return True
+    except: pass
+    return False
+
 # --- SHOPIFY PAYLOAD HELPERS (STRICT VALIDATION) ---
 
 def clean_abv(abv_str):
@@ -2070,7 +2190,7 @@ if st.session_state.header_data is not None:
                     st.error("Shopify secrets missing.")
                     st.stop()
                 
-                # 1. SETUP & FETCH LOCATIONS
+                # 1. SETUP & FETCH IDs
                 creds = st.secrets["shopify"]
                 shop_url = creds.get("shop_url")
                 token = creds.get("access_token")
@@ -2078,14 +2198,21 @@ if st.session_state.header_data is not None:
                 base_url = f"https://{shop_url}/admin/api/{version}"
                 headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
                 
-                st.write("Fetching Location IDs...")
+                st.write("Fetching Configuration (Locations & Catalogs)...")
+                
+                # A. Locations
                 loc_data = fetch_shopify_location_ids()
-                
                 if not loc_data or not loc_data['london'] or not loc_data['gloucester']:
-                    st.error("Could not determine 'London' and 'Gloucester' Location IDs.")
-                    st.warning("Please check permissions or use 'Check Location IDs' above.")
+                    st.error("❌ Location Error: Could not find 'London' or 'Gloucester' Location IDs.")
                     st.stop()
-                
+
+                # B. Publications/Catalogs
+                pub_data = fetch_publication_ids()
+                if not pub_data or not pub_data['london'] or not pub_data['gloucester']:
+                    st.warning("⚠️ Catalog Warning: Could not find 'London' or 'Gloucester' Catalogs/Publications. Products will be created but NOT added to B2B catalogs.")
+                else:
+                    st.success("✅ Found Catalogs: London & Gloucester")
+
                 log_box = st.expander("Shopify Upload Logs", expanded=True)
                 grouped = st.session_state.upload_data.groupby('Family_Name')
                 prog_bar = st.progress(0)
@@ -2100,9 +2227,17 @@ if st.session_state.header_data is not None:
                         pid, existing_vid = check_shopify_title(full_title)
                         
                         target_loc_id = loc_data['london'] if loc_prefix == "L" else loc_data['gloucester']
+                        target_pub_id = pub_data['london'] if loc_prefix == "L" else pub_data['gloucester']
                         
                         if pid:
+                            # --- EXISTING PRODUCT ---
                             log_box.write(f"   🔹 {loc_prefix}: Found ID {pid}. Checking variants...")
+                            
+                            # Ensure existing product is published to the catalog
+                            if target_pub_id:
+                                published = publish_product_to_app(pid, target_pub_id)
+                                if published: log_box.write(f"      📖 Verified in Catalog")
+
                             for _, row in group.iterrows():
                                 var_payload = {"variant": create_shopify_variant_payload(row, loc_prefix)}
                                 url = f"{base_url}/products/{pid}/variants.json"
@@ -2123,12 +2258,12 @@ if st.session_state.header_data is not None:
                                          log_box.write(f"      ⚠️ Variant SKU Exists: {row['Variant_Name']}")
                                     else:
                                         log_box.write(f"      ❌ Variant Error: {r.text}")
-                                        # LOG PAYLOAD FOR DEBUGGING
                                         log_box.code(json.dumps(var_payload, indent=2))
                                 except Exception as e:
                                     log_box.write(f"      💥 Variant Exception: {e}")
                                     
                         else:
+                            # --- NEW PRODUCT ---
                             log_box.write(f"   🆕 {loc_prefix}: Creating New Product...")
                             variants_list = []
                             for _, row in group.iterrows():
@@ -2146,6 +2281,7 @@ if st.session_state.header_data is not None:
                                     new_id = p_resp['id']
                                     log_box.write(f"      ✅ Created Product! ID: {new_id}")
                                     
+                                    # 1. Update Inventory Locations
                                     created_variants = p_resp.get('variants', [])
                                     for cv in created_variants:
                                         inv_id = cv.get('inventory_item_id')
@@ -2153,9 +2289,14 @@ if st.session_state.header_data is not None:
                                             set_variant_location(inv_id, target_loc_id, loc_data['all_ids'])
                                     log_box.write(f"      📍 Location set to {'London' if loc_prefix=='L' else 'Gloucester'}")
                                     
+                                    # 2. Publish to Catalog
+                                    if target_pub_id:
+                                        published = publish_product_to_app(new_id, target_pub_id)
+                                        if published: log_box.write(f"      📖 Published to Catalog")
+                                        else: log_box.write(f"      ⚠️ Catalog Publish Failed")
+
                                 else:
                                     log_box.write(f"      ❌ Create Error: {r.text}")
-                                    # LOG PAYLOAD FOR DEBUGGING
                                     log_box.code(json.dumps(prod_payload, indent=2))
                             except Exception as e:
                                 log_box.write(f"      💥 Create Exception: {e}")
@@ -2308,6 +2449,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
