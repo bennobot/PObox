@@ -110,24 +110,26 @@ with col_head_2:
 
 def clean_abv(abv_str):
     """
-    Formats ABV string:
-    - Removes '%' signs.
-    - 4.0 -> "4"
-    - 4.5 -> "4.5"
-    - 4.52 -> "4.5"
+    Aggressively cleans ABV:
+    1. Force to string.
+    2. Remove % symbols.
+    3. Try to convert to number for formatting (4.0 -> "4").
     """
+    if abv_str is None: return ""
+    
+    # Step 1: Remove % and whitespace immediately
+    clean_s = str(abv_str).replace('%', '').strip()
+    
+    # Step 2: Try number formatting
     try:
-        if not abv_str: return ""
-        # Remove % and whitespace
-        clean_s = str(abv_str).replace('%', '').strip()
         val = float(clean_s)
         val = round(val, 1) # Force 1 decimal max
         if val.is_integer():
             return str(int(val)) # 4.0 -> "4"
         return str(val) # 4.5 -> "4.5"
     except:
-        # Fallback: just return string without %
-        return str(abv_str).replace('%', '').strip()
+        # If not a number (e.g. "TBC"), return the cleaned string (no %)
+        return clean_s
 
 def calculate_sell_price(cost_price, product_type, fmt):
     # ... (Keep existing pricing logic here) ...
@@ -1906,7 +1908,6 @@ if st.button("🚀 Process Invoice", type="primary"):
                     st.error(f"AI returned invalid JSON: {response.text}")
                     st.stop()
                 
-                # ... inside Process Invoice ...
                 st.write("5. Finalizing Data...")
                 st.session_state.header_data = pd.DataFrame([data['header']])
                 st.session_state.header_data['Cin7_Supplier_ID'] = ""
@@ -1914,11 +1915,11 @@ if st.button("🚀 Process Invoice", type="primary"):
                 
                 df_lines = pd.DataFrame(data['line_items'])
                 
-                # --- FIX: Clean ABV at the Source ---
-                # This ensures Tab 1, 2, 3, and 4 ALL see "4.4" instead of "4.4%"
+                # --- CRITICAL FIX: CLEAN ABV IMMEDIATELY ---
                 if 'ABV' in df_lines.columns:
+                    # Apply clean_abv to every row
                     df_lines['ABV'] = df_lines['ABV'].apply(clean_abv)
-                # ------------------------------------
+                # -------------------------------------------
 
                 df_lines = clean_product_names(df_lines)
                 if st.session_state.master_suppliers:
@@ -1926,7 +1927,7 @@ if st.button("🚀 Process Invoice", type="primary"):
 
                 df_lines['Shopify_Status'] = "Pending"
                 
-                # --- INITIALIZE FLAGS ---
+                # Initialize Flags
                 df_lines['Use_Split'] = False 
                 df_lines['Strict_Search'] = False 
                 
@@ -1934,11 +1935,12 @@ if st.button("🚀 Process Invoice", type="primary"):
                 existing = [c for c in cols if c in df_lines.columns]
                 st.session_state.line_items = df_lines[existing]
                 
+                # Reset downstream states
                 st.session_state.shopify_logs = []
                 st.session_state.untappd_logs = []
                 st.session_state.matrix_data = None
                 st.session_state.upload_data = None
-                st.session_state.upload_generated = False # RESET
+                st.session_state.upload_generated = False
                 st.session_state.line_items_key += 1
                 
                 status.update(label="Processing Complete!", state="complete", expanded=False)
@@ -2621,6 +2623,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
