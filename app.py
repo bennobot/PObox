@@ -771,6 +771,12 @@ def create_shopify_product_payload(row, location_prefix, variants_list):
         
     untappd_id = row.get('Untappd_ID', '') or row.get('untappd_id', '')
     
+    # --- DETERMINE IGNORE STATUS ---
+    # If ID exists -> It is a match -> Ignore = false
+    # If ID missing -> Manual/Fallback -> Ignore = true
+    is_match = bool(untappd_id)
+    ignore_val = "false" if is_match else "true"
+    
     filter_val = get_filter_group(row)
     
     tags_list = [
@@ -784,7 +790,7 @@ def create_shopify_product_payload(row, location_prefix, variants_list):
     ]
     tags_str = ",".join([str(t) for t in tags_list if t])
 
-    # --- IMAGE HANDLING ---
+    # --- MAIN PRODUCT IMAGES (Keep Fallbacks here) ---
     images = []
     if row.get('Label_Thumb'):
         img_url = row['Label_Thumb']
@@ -792,7 +798,7 @@ def create_shopify_product_payload(row, location_prefix, variants_list):
             img_url = img_url.replace("Icon.png", "HD.png") + "?size=hd"
         images.append({"src": img_url})
 
-    # --- DEFENSIVE METAFIELDS BUILDER ---
+    # --- METAFIELDS BUILDER ---
     metafields = []
     
     def add_meta(key, value, type_def, namespace="custom"):
@@ -810,28 +816,29 @@ def create_shopify_product_payload(row, location_prefix, variants_list):
     add_meta("brewery_location", row.get('Brewery_Loc', ''), "single_line_text_field")
     add_meta("abv_category", abv_cat, "single_line_text_field")
     
-    add_meta("ut_ibu", ibu_val, "number_decimal")
     add_meta("ut_brewery_country", row.get('untappd_country', ''), "single_line_text_field")
-    
-    # --- DYNAMIC IGNORE FLAG ---
-    # If Untappd ID exists -> False (Don't ignore)
-    # If ID is missing -> True (Ignore/Manual)
-    ignore_val = "false" if untappd_id else "true"
     add_meta("ut_ignore", ignore_val, "boolean")
 
-    if untappd_id:
+    # --- CONDITIONAL METAFIELDS (Match Only) ---
+    if is_match:
+        # Only add IBU if it's a match (otherwise leave blank)
+        add_meta("ut_ibu", ibu_val, "number_decimal")
+        
+        # Only add ID/Link if matched
         add_meta("ut_id", untappd_id, "number_integer")
         add_meta("ut_link", f"https://untappd.com/beer/{untappd_id}", "single_line_text_field")
 
-    if row.get('Label_Thumb'):
-         add_meta("ut_img_small", row['Label_Thumb'], "single_line_text_field")
-         
-         if "Icon.png" in row['Label_Thumb']:
-             hd_url = row['Label_Thumb'].replace("Icon.png", "HD.png") + "?size=hd"
-         else:
-             hd_url = row['Label_Thumb'] 
+        # Only add UT Image Metafields if matched
+        # (We still added the image to the main gallery above, but we don't flag it as UT-sourced in metafields)
+        if row.get('Label_Thumb'):
+             add_meta("ut_img_small", row['Label_Thumb'], "single_line_text_field")
              
-         add_meta("ut_img_hd", hd_url, "single_line_text_field")
+             if "Icon.png" in row['Label_Thumb']:
+                 hd_url = row['Label_Thumb'].replace("Icon.png", "HD.png") + "?size=hd"
+             else:
+                 hd_url = row['Label_Thumb'] 
+                 
+             add_meta("ut_img_hd", hd_url, "single_line_text_field")
 
     return {
         "product": {
@@ -2555,6 +2562,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
