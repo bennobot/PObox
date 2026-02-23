@@ -750,9 +750,26 @@ def create_shopify_product_payload(row, location_prefix, variants_list):
     body_html = row.get('description', '')
     prod_type = loc_name
     
-    abv_val = clean_abv(row.get('untappd_abv', '0'))
+    # 1. Clean ABV (Strip % signs first to handle '4.4%%')
+    raw_abv = str(row.get('untappd_abv', '0')).replace('%', '').strip()
+    abv_val = clean_abv(raw_abv)
+    
+    # Ensure ABV is a valid number string for Shopify, else 0
+    try:
+        float(abv_val)
+    except ValueError:
+        abv_val = "0"
+
     abv_cat = get_abv_category(abv_val)
     style_prim, style_sec = split_untappd_style(row.get('untappd_style', ''))
+    
+    # 2. Safe IBU (Handle empty strings or errors)
+    raw_ibu = row.get('untappd_ibu', 0)
+    try:
+        ibu_val = float(raw_ibu)
+    except (ValueError, TypeError):
+        ibu_val = 0.0 # Default to 0.0 if missing
+        
     untappd_id = row.get('Untappd_ID', '') or row.get('untappd_id', '')
     
     filter_val = get_filter_group(row)
@@ -768,48 +785,54 @@ def create_shopify_product_payload(row, location_prefix, variants_list):
     ]
     tags_str = ",".join([str(t) for t in tags_list if t])
 
-    # --- IMAGE HANDLING (SMART FALLBACK) ---
+    # --- IMAGE HANDLING ---
     images = []
-    raw_img = row.get('Label_Thumb', '')
-    if raw_img:
-        if "Icon.png" in raw_img:
-            # It's an Untappd Image -> Try to get HD
-            img_url = raw_img.replace("Icon.png", "HD.png") + "?size=hd"
-        else:
-            # It's a Fallback/Custom Image -> Use as is
-            img_url = raw_img
+    if row.get('Label_Thumb'):
+        img_url = row['Label_Thumb']
+        if "Icon.png" in img_url:
+            img_url = img_url.replace("Icon.png", "HD.png") + "?size=hd"
         images.append({"src": img_url})
-    # ---------------------------------------
 
-    metafields = [
-        {"key": "abv", "value": str(abv_val), "type": "number_decimal", "namespace": "custom"},
-        {"key": "depot", "value": loc_name, "type": "single_line_text_field", "namespace": "custom"},
-        {"key": "format", "value": row.get('format', ''), "type": "single_line_text_field", "namespace": "custom"},
-        {"key": "primary_style", "value": style_prim, "type": "single_line_text_field", "namespace": "custom"},
-        {"key": "secondary_style", "value": style_sec, "type": "single_line_text_field", "namespace": "custom"},
-        {"key": "collaboration", "value": row.get('collaborator', ''), "type": "single_line_text_field", "namespace": "custom"},
-        {"key": "keg_type", "value": row.get('format', ''), "type": "single_line_text_field", "namespace": "custom"},
-        {"key": "ut_description", "value": body_html, "type": "multi_line_text_field", "namespace": "custom"},
-        {"key": "brewery_location", "value": row.get('Brewery_Loc', ''), "type": "single_line_text_field", "namespace": "custom"},
-        {"key": "abv_category", "value": abv_cat, "type": "single_line_text_field", "namespace": "custom"},
-        {"key": "ut_ibu", "value": str(float(row.get('untappd_ibu', 0))), "type": "number_decimal", "namespace": "custom"},
-        {"key": "ut_brewery_country", "value": row.get('untappd_country', ''), "type": "single_line_text_field", "namespace": "custom"},
-        {"key": "ut_ignore", "value": "false", "type": "boolean", "namespace": "custom"}
-    ]
+    # --- DEFENSIVE METAFIELDS BUILDER ---
+    metafields = []
+    
+    def add_meta(key, value, type_def, namespace="custom"):
+        # Only add if value exists and is not empty string (except for 0 which is valid)
+        if value is not None and str(value).strip() != "":
+            metafields.append({"key": key, "value": str(value), "type": type_def, "namespace": namespace})
 
+    add_meta("abv", abv_val, "number_decimal")
+    add_meta("depot", loc_name, "single_line_text_field")
+    add_meta("format", row.get('format', ''), "single_line_text_field")
+    add_meta("primary_style", style_prim, "single_line_text_field")
+    add_meta("secondary_style", style_sec, "single_line_text_field")
+    add_meta("collaboration", row.get('collaborator', ''), "single_line_text_field")
+    add_meta("keg_type", row.get('format', ''), "single_line_text_field")
+    add_meta("ut_description", body_html, "multi_line_text_field")
+    add_meta("brewery_location", row.get('Brewery_Loc', ''), "single_line_text_field")
+    add_meta("abv_category", abv_cat, "single_line_text_field")
+    
+    # Safe IBU
+    add_meta("ut_ibu", ibu_val, "number_decimal")
+    
+    add_meta("ut_brewery_country", row.get('untappd_country', ''), "single_line_text_field")
+    add_meta("ut_ignore", "false", "boolean")
+
+    # Add Untappd ID/Link only if valid
     if untappd_id:
-        metafields.append({"key": "ut_id", "value": str(untappd_id), "type": "number_integer", "namespace": "custom"})
-        metafields.append({"key": "ut_link", "value": f"https://untappd.com/beer/{untappd_id}", "type": "single_line_text_field", "namespace": "custom"})
+        add_meta("ut_id", untappd_id, "number_integer")
+        add_meta("ut_link", f"https://untappd.com/beer/{untappd_id}", "single_line_text_field")
 
-    if raw_img:
-         metafields.append({"key": "ut_img_small", "value": raw_img, "type": "single_line_text_field", "namespace": "custom"})
+    # Add Images to Metafields
+    if row.get('Label_Thumb'):
+         add_meta("ut_img_small", row['Label_Thumb'], "single_line_text_field")
          
-         if "Icon.png" in raw_img:
-             hd_url = raw_img.replace("Icon.png", "HD.png") + "?size=hd"
+         if "Icon.png" in row['Label_Thumb']:
+             hd_url = row['Label_Thumb'].replace("Icon.png", "HD.png") + "?size=hd"
          else:
-             hd_url = raw_img
+             hd_url = row['Label_Thumb'] # Fallback image
              
-         metafields.append({"key": "ut_img_hd", "value": hd_url, "type": "single_line_text_field", "namespace": "custom"})
+         add_meta("ut_img_hd", hd_url, "single_line_text_field")
 
     return {
         "product": {
@@ -2533,6 +2556,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
