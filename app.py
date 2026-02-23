@@ -108,8 +108,6 @@ with col_head_2:
 
 # --- 1A. PRICING & GENERAL LOGIC ---
 
-# --- 1A. PRICING & GENERAL LOGIC ---
-
 def clean_abv(abv_str):
     """
     Aggressively cleans ABV using Regex.
@@ -133,8 +131,7 @@ def clean_abv(abv_str):
             return str(int(val)) # 4.0 -> "4"
         return str(val) # 4.5 -> "4.5"
     except:
-        # If regex killed everything (e.g. input was "TBC"), return empty
-        return ""
+        return "" # Return empty if no number found
 
 def calculate_sell_price(cost_price, product_type, fmt):
     # ... (Keep existing pricing logic here) ...
@@ -1597,7 +1594,7 @@ def create_product_matrix(df):
     
     for name, group in grouped:
         # name tuple: (Supplier, Collab, Product, ABV)
-        # FIX: Clean ABV immediately here
+        # Ensure ABV is clean in the matrix
         clean_abv_val = clean_abv(name[3])
         
         row = {
@@ -1605,7 +1602,7 @@ def create_product_matrix(df):
             'Type': 'Beer', 
             'Collaborator': name[1], 
             'Product_Name': name[2], 
-            'ABV': clean_abv_val # <--- Stored as clean number (e.g. "4.4")
+            'ABV': clean_abv_val 
         }
         for i, (_, item) in enumerate(group.iterrows()):
             if i >= 3: break
@@ -1642,7 +1639,6 @@ def create_product_matrix(df):
         if "Split_Case" not in col and "Item_Price" not in col:
             if matrix_df[col].dtype == 'object':
                 matrix_df[col] = matrix_df[col].fillna("").astype(str)
-                # Cleanup .0 only for non-ABV fields just in case (though ABV is handled above)
                 if "ABV" not in col:
                     matrix_df[col] = matrix_df[col].str.replace(r'\.0$', '', regex=True)
 
@@ -1871,6 +1867,7 @@ if st.button("🚀 Process Invoice", type="primary"):
                 st.write("3. Sending Text to AI Model...")
                 injected = f"\n!!! USER OVERRIDE !!!\n{custom_rule}\n" if custom_rule else ""
 
+                # --- UPDATED PROMPT: Request Number Format ---
                 prompt = f"""
                 Extract invoice data to JSON.
                 STRUCTURE:
@@ -1882,7 +1879,8 @@ if st.button("🚀 Process Invoice", type="primary"):
                     }},
                     "line_items": [
                         {{
-                            "Supplier_Name": "...", "Collaborator": "...", "Product_Name": "...", "ABV": "...", 
+                            "Supplier_Name": "...", "Collaborator": "...", "Product_Name": "...", 
+                            "ABV": "0.0",  <-- EXTRACT AS DECIMAL NUMBER (NO % SYMBOL)
                             "Format": "...", "Pack_Size": "...", "Volume": "...", "Quantity": 1, "Item_Price": 10.00
                         }}
                     ]
@@ -1920,19 +1918,15 @@ if st.button("🚀 Process Invoice", type="primary"):
                 
                 df_lines = pd.DataFrame(data['line_items'])
                 
-                # --- FIX: ROBUST COLUMN & ABV CLEANING ---
-                
-                # 1. Normalize Column Names (Strip whitespace)
+                # --- FIX: ROBUST ABV CLEANING ---
+                # 1. Normalize Column Names (Handle 'abv', 'Abv', 'ABV ')
                 df_lines.columns = [c.strip() for c in df_lines.columns]
-                
-                # 2. Handle Case Sensitivity (abv -> ABV) if needed
-                if 'abv' in df_lines.columns and 'ABV' not in df_lines.columns:
-                    df_lines.rename(columns={'abv': 'ABV'}, inplace=True)
+                df_lines.rename(columns=lambda x: 'ABV' if x.lower() == 'abv' else x, inplace=True)
 
-                # 3. Apply Regex Cleaning
+                # 2. Apply Regex Cleaning
                 if 'ABV' in df_lines.columns:
                     df_lines['ABV'] = df_lines['ABV'].apply(clean_abv)
-                # -----------------------------------------
+                # --------------------------------
 
                 df_lines = clean_product_names(df_lines)
                 if st.session_state.master_suppliers:
@@ -1948,11 +1942,12 @@ if st.button("🚀 Process Invoice", type="primary"):
                 existing = [c for c in cols if c in df_lines.columns]
                 st.session_state.line_items = df_lines[existing]
                 
+                # Reset downstream states
                 st.session_state.shopify_logs = []
                 st.session_state.untappd_logs = []
                 st.session_state.matrix_data = None
                 st.session_state.upload_data = None
-                st.session_state.upload_generated = False # RESET
+                st.session_state.upload_generated = False
                 st.session_state.line_items_key += 1
                 
                 status.update(label="Processing Complete!", state="complete", expanded=False)
@@ -2635,6 +2630,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
