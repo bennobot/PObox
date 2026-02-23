@@ -626,73 +626,82 @@ def create_shopify_product_payload(row, location_prefix, variants_list):
         }
     }
 
-def create_shopify_product_payload(row, location_prefix, variants_list):
-    is_london = location_prefix == "L"
-    prefix = "L-" if is_london else "G-"
-    loc_name = "London" if is_london else "Gloucester"
-    family_base = row['Family_Name']
-    full_title = f"{prefix}{family_base}"
-    vendor = row['untappd_brewery']
-    body_html = row.get('description', '')
-    prod_type = loc_name
-    abv_val = row.get('untappd_abv', '0')
-    abv_cat = get_abv_category(abv_val)
-    style_prim, style_sec = split_untappd_style(row.get('untappd_style', ''))
-    untappd_id = row.get('Untappd_ID', '') or row.get('untappd_id', '')
+# --- SHOPIFY INVENTORY LOCATION HELPERS ---
+
+def fetch_shopify_location_ids():
+    """
+    Fetches all Location IDs from Shopify.
+    Returns: Dict {'london': 123, 'gloucester': 456, 'others': [789]}
+    """
+    if "shopify" not in st.secrets: return None
+    creds = st.secrets["shopify"]
+    shop_url = creds.get("shop_url")
+    token = creds.get("access_token")
+    version = creds.get("api_version", "2024-04")
     
-    filter_val = get_filter_group(row)
+    url = f"https://{shop_url}/admin/api/{version}/locations.json"
+    headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
     
-    tags_list = [
-        loc_name, "Wholesale", vendor, 
-        row.get('Type', 'Beer'), 
-        row.get('format', ''), 
-        style_prim, style_sec, 
-        abv_cat, 
-        row.get('Attribute_5', 'Rotational Product'),
-        filter_val # Add strict value to tags
-    ]
-    tags_str = ",".join([str(t) for t in tags_list if t])
+    loc_map = {'london': None, 'gloucester': None, 'all_ids': []}
+    
+    try:
+        r = requests.get(url, headers=headers)
+        if r.status_code == 200:
+            locations = r.json().get('locations', [])
+            for loc in locations:
+                lid = loc['id']
+                lname = loc['name'].lower()
+                loc_map['all_ids'].append(lid)
+                
+                # Loose matching for safety
+                if "london" in lname:
+                    loc_map['london'] = lid
+                elif "gloucester" in lname:
+                    loc_map['gloucester'] = lid
+    except Exception: pass
+    
+    return loc_map
 
-    images = []
-    if row.get('Label_Thumb'):
-        img_url = row['Label_Thumb'].replace("Icon.png", "HD.png")
-        images.append({"src": img_url})
+def set_variant_location(inventory_item_id, target_location_id, all_location_ids):
+    """
+    Ensures the item is ONLY at the target location.
+    1. Connects to Target.
+    2. Disconnects from all others.
+    """
+    if not inventory_item_id or not target_location_id: return False
+    
+    creds = st.secrets["shopify"]
+    shop_url = creds.get("shop_url")
+    token = creds.get("access_token")
+    version = creds.get("api_version", "2024-04")
+    headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
+    base_url = f"https://{shop_url}/admin/api/{version}/inventory_levels"
 
-    metafields = [
-        {"key": "abv", "value": str(abv_val), "type": "number_decimal", "namespace": "custom"},
-        {"key": "depot", "value": loc_name, "type": "single_line_text_field", "namespace": "custom"},
-        {"key": "format", "value": row.get('format', ''), "type": "single_line_text_field", "namespace": "custom"},
-        {"key": "primary_style", "value": style_prim, "type": "single_line_text_field", "namespace": "custom"},
-        {"key": "secondary_style", "value": style_sec, "type": "single_line_text_field", "namespace": "custom"},
-        {"key": "collaboration", "value": row.get('collaborator', ''), "type": "single_line_text_field", "namespace": "custom"},
-        {"key": "keg_type", "value": row.get('format', ''), "type": "single_line_text_field", "namespace": "custom"},
-        {"key": "ut_ignore", "value": "false", "type": "boolean", "namespace": "custom"},
-        {"key": "ut_id", "value": str(untappd_id), "type": "number_integer", "namespace": "custom"},
-        {"key": "ut_description", "value": body_html, "type": "multi_line_text_field", "namespace": "custom"},
-        {"key": "brewery_location", "value": row.get('Brewery_Loc', ''), "type": "single_line_text_field", "namespace": "custom"},
-        {"key": "abv_category", "value": abv_cat, "type": "single_line_text_field", "namespace": "custom"}
-    ]
-
-    if row.get('Label_Thumb'):
-         metafields.append({"key": "ut_img_small", "value": row['Label_Thumb'], "type": "single_line_text_field", "namespace": "custom"})
-         metafields.append({"key": "ut_img_hd", "value": row['Label_Thumb'], "type": "single_line_text_field", "namespace": "custom"})
-
-    if untappd_id:
-         metafields.append({"key": "ut_link", "value": f"https://untappd.com/beer/{untappd_id}", "type": "single_line_text_field", "namespace": "custom"})
-
-    return {
-        "product": {
-            "title": full_title,
-            "body_html": body_html,
-            "vendor": vendor,
-            "product_type": prod_type,
-            "status": "draft",
-            "tags": tags_str,
-            "variants": variants_list,
-            "images": images,
-            "metafields": metafields
-        }
+    # 1. CONNECT to Target Location
+    # We use 'set.json' with available=0 to ensure it is connected.
+    # We can't use 'connect' endpoint because it throws error if already connected.
+    # 'set' is safer: it connects AND sets level.
+    set_url = f"{base_url}/set.json"
+    payload = {
+        "location_id": target_location_id,
+        "inventory_item_id": inventory_item_id,
+        "available": 0 # Start at 0 stock
     }
+    try:
+        requests.post(set_url, json=payload, headers=headers)
+    except: pass
+
+    # 2. DISCONNECT from others (e.g. remove Gloucester item from London)
+    del_url = f"{base_url}.json" # DELETE endpoint
+    for loc_id in all_location_ids:
+        if loc_id != target_location_id:
+            try:
+                requests.delete(del_url, headers=headers, params={
+                    "inventory_item_id": inventory_item_id,
+                    "location_id": loc_id
+                })
+            except: pass
+    return True
 
 # --- CIN7 FAMILY & PRODUCT CREATION ---
 def check_cin7_exists(endpoint, name_or_sku, is_sku=False):
@@ -1991,12 +2000,20 @@ if st.session_state.header_data is not None:
                     st.error("Shopify secrets missing.")
                     st.stop()
                 
+                # 1. SETUP & FETCH LOCATIONS
                 creds = st.secrets["shopify"]
                 shop_url = creds.get("shop_url")
                 token = creds.get("access_token")
                 version = creds.get("api_version", "2023-04") 
                 base_url = f"https://{shop_url}/admin/api/{version}"
                 headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
+                
+                st.write("Fetching Location IDs...")
+                loc_data = fetch_shopify_location_ids()
+                
+                if not loc_data or not loc_data['london'] or not loc_data['gloucester']:
+                    st.error("Could not determine 'London' and 'Gloucester' Location IDs from Shopify.")
+                    st.stop()
                 
                 log_box = st.expander("Shopify Upload Logs", expanded=True)
                 grouped = st.session_state.upload_data.groupby('Family_Name')
@@ -2011,6 +2028,9 @@ if st.session_state.header_data is not None:
                         full_title = f"{loc_prefix}-{fam_name}"
                         pid, existing_vid = check_shopify_title(full_title)
                         
+                        # Determine correct location ID for this pass
+                        target_loc_id = loc_data['london'] if loc_prefix == "L" else loc_data['gloucester']
+                        
                         if pid:
                             log_box.write(f"   🔹 {loc_prefix}: Found ID {pid}. Checking variants...")
                             for _, row in group.iterrows():
@@ -2019,7 +2039,17 @@ if st.session_state.header_data is not None:
                                 try:
                                     r = requests.post(url, json=var_payload, headers=headers)
                                     if r.status_code in [200, 201]:
-                                        log_box.write(f"      ✅ Added Variant: {row['Variant_Name']}")
+                                        v_data = r.json().get('variant', {})
+                                        inv_item_id = v_data.get('inventory_item_id')
+                                        var_title = row['Variant_Name']
+                                        
+                                        # --- UPDATE LOCATION ---
+                                        if inv_item_id:
+                                            set_variant_location(inv_item_id, target_loc_id, loc_data['all_ids'])
+                                            log_box.write(f"      ✅ Added Variant & Set Loc: {var_title}")
+                                        else:
+                                            log_box.write(f"      ⚠️ Added {var_title} but missed inventory ID.")
+                                            
                                     elif r.status_code == 422 and "already exists" in r.text:
                                          log_box.write(f"      ⚠️ Variant SKU Exists: {row['Variant_Name']}")
                                     else:
@@ -2041,8 +2071,20 @@ if st.session_state.header_data is not None:
                             try:
                                 r = requests.post(url, json=prod_payload, headers=headers)
                                 if r.status_code in [200, 201]:
-                                    new_id = r.json()['product']['id']
+                                    p_resp = r.json()['product']
+                                    new_id = p_resp['id']
                                     log_box.write(f"      ✅ Created Product! ID: {new_id}")
+                                    
+                                    # --- LOOP VARIANTS TO UPDATE LOCATION ---
+                                    # When creating a product, variants are created immediately.
+                                    # We must iterate them to set location.
+                                    created_variants = p_resp.get('variants', [])
+                                    for cv in created_variants:
+                                        inv_id = cv.get('inventory_item_id')
+                                        if inv_id:
+                                            set_variant_location(inv_id, target_loc_id, loc_data['all_ids'])
+                                    log_box.write(f"      📍 Location set to {'London' if loc_prefix=='L' else 'Gloucester'}")
+                                    
                                 else:
                                     log_box.write(f"      ❌ Create Error: {r.text}")
                             except Exception as e:
@@ -2196,6 +2238,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
