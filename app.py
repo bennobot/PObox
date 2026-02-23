@@ -1913,6 +1913,13 @@ if st.button("🚀 Process Invoice", type="primary"):
                 st.session_state.header_data['Cin7_Supplier_Name'] = ""
                 
                 df_lines = pd.DataFrame(data['line_items'])
+                
+                # --- FIX: Clean ABV at the Source ---
+                # This ensures Tab 1, 2, 3, and 4 ALL see "4.4" instead of "4.4%"
+                if 'ABV' in df_lines.columns:
+                    df_lines['ABV'] = df_lines['ABV'].apply(clean_abv)
+                # ------------------------------------
+
                 df_lines = clean_product_names(df_lines)
                 if st.session_state.master_suppliers:
                     df_lines = normalize_supplier_names(df_lines, st.session_state.master_suppliers)
@@ -1921,12 +1928,11 @@ if st.button("🚀 Process Invoice", type="primary"):
                 
                 # --- INITIALIZE FLAGS ---
                 df_lines['Use_Split'] = False 
-                df_lines['Strict_Search'] = False # <--- Added
+                df_lines['Strict_Search'] = False 
                 
                 cols = ["Use_Split", "Strict_Search", "Supplier_Name", "Collaborator", "Product_Name", "ABV", "Format", "Pack_Size", "Volume", "Item_Price", "Quantity"]
                 existing = [c for c in cols if c in df_lines.columns]
                 st.session_state.line_items = df_lines[existing]
-                # ...
                 
                 st.session_state.shopify_logs = []
                 st.session_state.untappd_logs = []
@@ -2615,6 +2621,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
