@@ -723,7 +723,8 @@ def create_shopify_product_payload(row, location_prefix, variants_list):
 
     images = []
     if row.get('Label_Thumb'):
-        img_url = row['Label_Thumb'].replace("Icon.png", "HD.png")
+        # Heuristic for HD image + suffix
+        img_url = row['Label_Thumb'].replace("Icon.png", "HD.png") + "?size=hd"
         images.append({"src": img_url})
 
     # --- METAFIELDS MAPPING ---
@@ -739,7 +740,7 @@ def create_shopify_product_payload(row, location_prefix, variants_list):
         {"key": "brewery_location", "value": row.get('Brewery_Loc', ''), "type": "single_line_text_field", "namespace": "custom"},
         {"key": "abv_category", "value": abv_cat, "type": "single_line_text_field", "namespace": "custom"},
         
-        # --- FIX: Send IBU as Decimal ---
+        # Fixed: Decimal IBU
         {"key": "ut_ibu", "value": str(float(row.get('untappd_ibu', 0))), "type": "number_decimal", "namespace": "custom"},
         
         {"key": "ut_brewery_country", "value": row.get('untappd_country', ''), "type": "single_line_text_field", "namespace": "custom"},
@@ -747,13 +748,14 @@ def create_shopify_product_payload(row, location_prefix, variants_list):
     ]
 
     if untappd_id:
-        # Keeping ID as integer for now. If this fails, switch to number_decimal or single_line_text_field
         metafields.append({"key": "ut_id", "value": str(untappd_id), "type": "number_integer", "namespace": "custom"})
         metafields.append({"key": "ut_link", "value": f"https://untappd.com/beer/{untappd_id}", "type": "single_line_text_field", "namespace": "custom"})
 
     if row.get('Label_Thumb'):
          metafields.append({"key": "ut_img_small", "value": row['Label_Thumb'], "type": "single_line_text_field", "namespace": "custom"})
-         hd_url = row['Label_Thumb'].replace("Icon.png", "HD.png")
+         
+         # --- FIX IS HERE: Append ?size=hd ---
+         hd_url = row['Label_Thumb'].replace("Icon.png", "HD.png") + "?size=hd"
          metafields.append({"key": "ut_img_hd", "value": hd_url, "type": "single_line_text_field", "namespace": "custom"})
 
     return {
@@ -2449,6 +2451,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
