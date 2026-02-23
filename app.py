@@ -166,6 +166,7 @@ def search_untappd_item(supplier, product):
     creds = st.secrets["untappd"]
     base_url = creds.get("base_url", "https://business.untappd.com/api/v1")
     token = creds.get("api_token")
+    
     raw_supp = str(supplier).replace("&", " and ")
     raw_prod = str(product).replace("&", " and ")
     clean_supp = re.sub(r'(?i)\b(ltd|limited|llp|plc|brewing|brewery|co\.?)\b', '', raw_supp).strip()
@@ -173,9 +174,11 @@ def search_untappd_item(supplier, product):
     full_string = f"{clean_supp} {clean_prod}"
     parts = full_string.split() 
     query_str = " ".join(parts)
+    
     safe_q = quote(query_str)
     url = f"{base_url}/items/search?q={safe_q}"
     headers = {"Authorization": f"Basic {token}", "Content-Type": "application/json"}
+    
     try:
         response = requests.get(url, headers=headers)
         if response.status_code == 200:
@@ -188,10 +191,12 @@ def search_untappd_item(supplier, product):
                     "name": best.get("name"),
                     "brewery": best.get("brewery"),
                     "abv": best.get("abv"),
+                    "ibu": best.get("ibu", 0),  # --- NEW ---
                     "style": best.get("style"), 
                     "description": best.get("description"),
                     "label_image_thumb": best.get("label_image_thumb"),
                     "brewery_location": best.get("brewery_location"),
+                    "brewery_country": best.get("country", "") or best.get("brewery_country", ""), # --- NEW ---
                     "query_used": query_str 
                 }
     except: pass
@@ -199,18 +204,27 @@ def search_untappd_item(supplier, product):
 
 def batch_untappd_lookup(matrix_df):
     if matrix_df.empty: return matrix_df, ["Matrix Empty"]
+    
+    # Added Untappd_IBU and Untappd_Country to columns
     cols = ['Untappd_Status', 'Untappd_ID', 'Untappd_Brewery', 'Untappd_Product', 
-            'Untappd_ABV', 'Untappd_Style', 'Untappd_Desc', 'Label_Thumb', 'Brewery_Loc']
+            'Untappd_ABV', 'Untappd_IBU', 'Untappd_Style', 'Untappd_Desc', 
+            'Label_Thumb', 'Brewery_Loc', 'Untappd_Country']
+    
     for c in cols:
         if c not in matrix_df.columns: matrix_df[c] = ""
+            
     updated_rows = []
     logs = []
     prog_bar = st.progress(0)
+    
     for idx, row in matrix_df.iterrows():
         prog_bar.progress((idx + 1) / len(matrix_df))
+        
         current_status = str(row.get('Untappd_Status', ''))
+        
         if current_status != "✅ Found":
             res = search_untappd_item(row['Supplier_Name'], row['Product_Name'])
+            
             if res and "untappd_id" in res:
                 logs.append(f"✅ Found: {res['name']}")
                 row['Untappd_Status'] = "✅ Found"
@@ -218,16 +232,20 @@ def batch_untappd_lookup(matrix_df):
                 row['Untappd_Brewery'] = res['brewery']
                 row['Untappd_Product'] = res['name']
                 row['Untappd_ABV'] = res['abv']
+                row['Untappd_IBU'] = res['ibu'] # --- NEW ---
                 row['Untappd_Style'] = res['style']
                 row['Untappd_Desc'] = res['description']
                 row['Label_Thumb'] = res['label_image_thumb']
                 row['Brewery_Loc'] = res['brewery_location']
+                row['Untappd_Country'] = res['brewery_country'] # --- NEW ---
             else:
                 used_q = res.get('query_used', 'Unknown') if res else 'Error'
                 logs.append(f"❌ No match: {row['Product_Name']} | Query Sent: [{used_q}]")
                 row['Untappd_Status'] = "❌ Not Found"
                 row['Untappd_ID'] = ""
+        
         updated_rows.append(row)
+        
     return pd.DataFrame(updated_rows), logs
 
 # --- 1D. SHOPIFY & CIN7 ---
@@ -565,9 +583,7 @@ def create_shopify_product_payload(row, location_prefix, variants_list):
     body_html = row.get('description', '')
     prod_type = loc_name
     
-    # --- USE CLEAN ABV HERE ---
     abv_val = clean_abv(row.get('untappd_abv', '0'))
-    
     abv_cat = get_abv_category(abv_val)
     style_prim, style_sec = split_untappd_style(row.get('untappd_style', ''))
     untappd_id = row.get('Untappd_ID', '') or row.get('untappd_id', '')
@@ -590,6 +606,7 @@ def create_shopify_product_payload(row, location_prefix, variants_list):
         img_url = row['Label_Thumb'].replace("Icon.png", "HD.png")
         images.append({"src": img_url})
 
+    # --- METAFIELDS MAPPING ---
     metafields = [
         {"key": "abv", "value": str(abv_val), "type": "number_decimal", "namespace": "custom"},
         {"key": "depot", "value": loc_name, "type": "single_line_text_field", "namespace": "custom"},
@@ -598,19 +615,26 @@ def create_shopify_product_payload(row, location_prefix, variants_list):
         {"key": "secondary_style", "value": style_sec, "type": "single_line_text_field", "namespace": "custom"},
         {"key": "collaboration", "value": row.get('collaborator', ''), "type": "single_line_text_field", "namespace": "custom"},
         {"key": "keg_type", "value": row.get('format', ''), "type": "single_line_text_field", "namespace": "custom"},
-        {"key": "ut_ignore", "value": "false", "type": "boolean", "namespace": "custom"},
-        {"key": "ut_id", "value": str(untappd_id), "type": "number_integer", "namespace": "custom"},
         {"key": "ut_description", "value": body_html, "type": "multi_line_text_field", "namespace": "custom"},
         {"key": "brewery_location", "value": row.get('Brewery_Loc', ''), "type": "single_line_text_field", "namespace": "custom"},
-        {"key": "abv_category", "value": abv_cat, "type": "single_line_text_field", "namespace": "custom"}
+        {"key": "abv_category", "value": abv_cat, "type": "single_line_text_field", "namespace": "custom"},
+        
+        # --- NEW & UPDATED METAFIELDS ---
+        {"key": "ut_ibu", "value": str(row.get('untappd_ibu', 0)), "type": "number_integer", "namespace": "custom"},
+        {"key": "ut_brewery_country", "value": row.get('untappd_country', ''), "type": "single_line_text_field", "namespace": "custom"},
+        # Explicitly setting Ignore to false as requested
+        {"key": "ut_ignore", "value": "false", "type": "boolean", "namespace": "custom"}
     ]
+
+    if untappd_id:
+        metafields.append({"key": "ut_id", "value": str(untappd_id), "type": "number_integer", "namespace": "custom"})
+        metafields.append({"key": "ut_link", "value": f"https://untappd.com/beer/{untappd_id}", "type": "single_line_text_field", "namespace": "custom"})
 
     if row.get('Label_Thumb'):
          metafields.append({"key": "ut_img_small", "value": row['Label_Thumb'], "type": "single_line_text_field", "namespace": "custom"})
-         metafields.append({"key": "ut_img_hd", "value": row['Label_Thumb'], "type": "single_line_text_field", "namespace": "custom"})
-
-    if untappd_id:
-         metafields.append({"key": "ut_link", "value": f"https://untappd.com/beer/{untappd_id}", "type": "single_line_text_field", "namespace": "custom"})
+         # Heuristic for HD image
+         hd_url = row['Label_Thumb'].replace("Icon.png", "HD.png")
+         metafields.append({"key": "ut_img_hd", "value": hd_url, "type": "single_line_text_field", "namespace": "custom"})
 
     return {
         "product": {
@@ -1412,11 +1436,9 @@ def stage_products_for_upload(matrix_df):
             errors.append(f"Row {idx+1}: Empty fields for {', '.join(missing_vals)}. Please edit manually in Tab 3.")
             continue
 
-        # Loop through the 3 potential formats
         for i in range(1, 4):
             fmt_val = str(row.get(f'Format{i}', '')).strip()
             
-            # Basic check: Only process if Format exists and isn't "None"
             if fmt_val and fmt_val.lower() not in ['nan', 'none']:
                 
                 new_row = {
@@ -1424,13 +1446,22 @@ def stage_products_for_upload(matrix_df):
                     'collaborator': row.get('Collaborator', ''),
                     'untappd_product': row['Untappd_Product'],
                     'untappd_abv': row['Untappd_ABV'],
+                    
+                    # --- NEW FIELDS PASSED FORWARD ---
+                    'untappd_ibu': row.get('Untappd_IBU', 0),
+                    'untappd_country': row.get('Untappd_Country', ''),
+                    # ---------------------------------
+                    
                     'untappd_style': row['Untappd_Style'],
                     'description': row['Untappd_Desc'],
                     'format': fmt_val,
                     'pack_size': row.get(f'Pack_Size{i}', ''),
                     'volume': row.get(f'Volume{i}', ''),
                     'item_price': row.get(f'Item_Price{i}', ''),
-                    'is_split_case': row.get(f'Split_Case{i}', False), # <--- Persist the tick box data
+                    'is_split_case': row.get(f'Split_Case{i}', False),
+                    'Label_Thumb': row.get('Label_Thumb', ''), # Ensure image URL is passed
+                    'Untappd_ID': row.get('Untappd_ID', ''), # Ensure ID is passed
+                    'Brewery_Loc': row.get('Brewery_Loc', ''), # Ensure Loc is passed
                     'Family_SKU': '',
                     'Variant_SKU': '', 
                     'Family_Name': '',
@@ -2280,6 +2311,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
