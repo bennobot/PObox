@@ -750,11 +750,10 @@ def create_shopify_product_payload(row, location_prefix, variants_list):
     body_html = row.get('description', '')
     prod_type = loc_name
     
-    # 1. Clean ABV (Strip % signs first to handle '4.4%%')
+    # 1. Clean ABV
     raw_abv = str(row.get('untappd_abv', '0')).replace('%', '').strip()
     abv_val = clean_abv(raw_abv)
     
-    # Ensure ABV is a valid number string for Shopify, else 0
     try:
         float(abv_val)
     except ValueError:
@@ -763,12 +762,12 @@ def create_shopify_product_payload(row, location_prefix, variants_list):
     abv_cat = get_abv_category(abv_val)
     style_prim, style_sec = split_untappd_style(row.get('untappd_style', ''))
     
-    # 2. Safe IBU (Handle empty strings or errors)
+    # 2. Safe IBU
     raw_ibu = row.get('untappd_ibu', 0)
     try:
         ibu_val = float(raw_ibu)
     except (ValueError, TypeError):
-        ibu_val = 0.0 # Default to 0.0 if missing
+        ibu_val = 0.0
         
     untappd_id = row.get('Untappd_ID', '') or row.get('untappd_id', '')
     
@@ -797,7 +796,6 @@ def create_shopify_product_payload(row, location_prefix, variants_list):
     metafields = []
     
     def add_meta(key, value, type_def, namespace="custom"):
-        # Only add if value exists and is not empty string (except for 0 which is valid)
         if value is not None and str(value).strip() != "":
             metafields.append({"key": key, "value": str(value), "type": type_def, "namespace": namespace})
 
@@ -812,25 +810,26 @@ def create_shopify_product_payload(row, location_prefix, variants_list):
     add_meta("brewery_location", row.get('Brewery_Loc', ''), "single_line_text_field")
     add_meta("abv_category", abv_cat, "single_line_text_field")
     
-    # Safe IBU
     add_meta("ut_ibu", ibu_val, "number_decimal")
-    
     add_meta("ut_brewery_country", row.get('untappd_country', ''), "single_line_text_field")
-    add_meta("ut_ignore", "false", "boolean")
+    
+    # --- DYNAMIC IGNORE FLAG ---
+    # If Untappd ID exists -> False (Don't ignore)
+    # If ID is missing -> True (Ignore/Manual)
+    ignore_val = "false" if untappd_id else "true"
+    add_meta("ut_ignore", ignore_val, "boolean")
 
-    # Add Untappd ID/Link only if valid
     if untappd_id:
         add_meta("ut_id", untappd_id, "number_integer")
         add_meta("ut_link", f"https://untappd.com/beer/{untappd_id}", "single_line_text_field")
 
-    # Add Images to Metafields
     if row.get('Label_Thumb'):
          add_meta("ut_img_small", row['Label_Thumb'], "single_line_text_field")
          
          if "Icon.png" in row['Label_Thumb']:
              hd_url = row['Label_Thumb'].replace("Icon.png", "HD.png") + "?size=hd"
          else:
-             hd_url = row['Label_Thumb'] # Fallback image
+             hd_url = row['Label_Thumb'] 
              
          add_meta("ut_img_hd", hd_url, "single_line_text_field")
 
@@ -2556,6 +2555,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
