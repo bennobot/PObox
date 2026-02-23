@@ -1270,9 +1270,9 @@ def run_reconciliation_check(lines_df):
     logs = []
     df = lines_df.copy()
     
-    # Ensure Use_Split exists
-    if 'Use_Split' not in df.columns:
-        df['Use_Split'] = False
+    # Ensure columns exist
+    if 'Use_Split' not in df.columns: df['Use_Split'] = False
+    if 'Strict_Search' not in df.columns: df['Strict_Search'] = False
 
     df['Shopify_Status'] = "Pending"
     df['Matched_Product'] = ""
@@ -1303,10 +1303,14 @@ def run_reconciliation_check(lines_df):
         supplier = str(row.get('Supplier_Name', ''))
         inv_prod_name = row['Product_Name']
         
-        # --- 1. DETERMINE TARGET PACK SIZE ---
+        # --- 1. SETTINGS & THRESHOLDS ---
         use_split = row.get('Use_Split', False)
+        is_strict = row.get('Strict_Search', False)
         
-        # Robust Pack Size Parsing (Handle "24", "24.0", "24 x 440")
+        # Threshold: 40 for Fuzzy, 88 for Strict (Very close match required)
+        match_threshold = 88 if is_strict else 40
+        
+        # --- 2. DETERMINE TARGET PACK SIZE ---
         raw_pack_str = str(row.get('Pack_Size', '1'))
         pack_nums = re.findall(r'\d+', raw_pack_str)
         if pack_nums:
@@ -1320,18 +1324,17 @@ def run_reconciliation_check(lines_df):
         else:
             target_pack = int(original_pack)
         
-        # -------------------------------------
-
         inv_vol = normalize_vol_string(row.get('Volume', ''))
         inv_fmt = str(row.get('Format', '')).lower()
         
-        logs.append(f"Checking: **{inv_prod_name}** ({inv_fmt} | Target Pack: {target_pack})")
+        debug_mode = "(Strict)" if is_strict else "(Fuzzy)"
+        logs.append(f"Checking: **{inv_prod_name}** {debug_mode} | Target Pack: {target_pack}")
 
         if supplier in shopify_cache and shopify_cache[supplier]:
             candidates = shopify_cache[supplier]
             scored_candidates = []
             
-            # --- 2. FUZZY MATCH PRODUCT NAME ---
+            # --- 3. MATCH PRODUCT NAME ---
             for edge in candidates:
                 prod = edge['node']
                 shop_title_full = prod['title']
@@ -1342,82 +1345,74 @@ def run_reconciliation_check(lines_df):
                     parts = [p.strip() for p in shop_title_full.split("/")]
                     if len(parts) >= 2: shop_prod_name_clean = parts[1]
                 
+                # Calculate Score
                 score = fuzz.token_sort_ratio(inv_prod_name, shop_prod_name_clean)
-                if inv_prod_name.lower() in shop_prod_name_clean.lower(): score += 15 # Bonus for substring
                 
-                if score > 40: scored_candidates.append((score, prod, shop_prod_name_clean))
+                # Bonus for substring match (Only apply in Fuzzy mode or if very high confidence)
+                if not is_strict:
+                    if inv_prod_name.lower() in shop_prod_name_clean.lower(): score += 15
+                
+                if score > match_threshold: 
+                    scored_candidates.append((score, prod, shop_prod_name_clean))
             
             scored_candidates.sort(key=lambda x: x[0], reverse=True)
             match_found = False
             
             for score, prod, clean_name in scored_candidates:
-                if score < 65: continue # Ignore low scores
+                # Double check score against threshold (in case sorting moved edge cases)
+                if score < match_threshold: continue 
                 
-                # --- 3. LENIENT COMPATIBILITY CHECK ---
+                # --- 4. FORMAT CHECK ---
                 shop_keg_meta = str(prod.get('keg_meta', {}).get('value', '')).lower()
                 shop_fmt_meta = str(prod.get('format_meta', {}).get('value', '')).lower()
                 shop_title_lower = prod['title'].lower()
-                
                 combined_shop_tags = f"{shop_keg_meta} {shop_fmt_meta} {shop_title_lower}"
                 
-                # Only Reject if EXPLICIT Contradiction
                 is_compatible = True
                 if "keg" in inv_fmt:
                     if "poly" in inv_fmt and ("steel" in combined_shop_tags or "stainless" in combined_shop_tags): is_compatible = False
                     if "steel" in inv_fmt and ("poly" in combined_shop_tags or "dolium" in combined_shop_tags): is_compatible = False
                     if "key" in inv_fmt and "sankey" in combined_shop_tags: is_compatible = False
                 
-                if not is_compatible:
-                    # logs.append(f"      Skipping {clean_name}: Incompatible Format")
-                    continue
+                if not is_compatible: continue
 
-                # --- 4. ROBUST VARIANT MATCHING (TOKEN BASED) ---
+                # --- 5. VARIANT MATCHING ---
                 for v_edge in prod['variants']['edges']:
                     variant = v_edge['node']
                     v_title = variant['title'].lower()
                     v_sku = str(variant.get('sku', '')).strip()
-                    
-                    # Tokenize variant title: "24 x 440ml" -> ['24', 'x', '440ml']
                     v_tokens = re.findall(r'\d+|[a-z]+', v_title)
                     
-                    # A. Pack Size Check
+                    # Pack Check
                     pack_match = False
                     if target_pack == 1:
-                        # For singles, we accept anything that DOESN'T explicitly look like a multipack (e.g. "12 x")
-                        # If title has "12" AND "x", it's likely a pack. If just "KeyKeg", it's a single unit.
                         if "x" in v_tokens and any(t.isdigit() and int(t) > 1 for t in v_tokens):
                             pack_match = False
                         else:
                             pack_match = True
                     else:
-                        # For multipacks, the number MUST exist as a distinct token
                         if str(target_pack) in v_tokens:
                             pack_match = True
                     
-                    # B. Volume Check
+                    # Volume Check
                     vol_match = False
-                    # Check 1: Exact string match (e.g. "440" in "440ml")
-                    if inv_vol in v_title: 
-                        vol_match = True
-                    # Check 2: Known Aliases
+                    if inv_vol in v_title: vol_match = True
                     elif inv_vol == "9" and "firkin" in v_title: vol_match = True
-                    elif inv_vol == "4.5" and "pin" in v_title: vol_match = True
-                    elif inv_vol == "40" and "firkin" in v_title: vol_match = True # Sometimes Firkins are listed as 40L
+                    elif (inv_vol == "4" or inv_vol == "4.5") and "pin" in v_title: vol_match = True
+                    elif inv_vol + "l" in v_title or inv_vol + " l" in v_title: vol_match = True
                     
                     if pack_match and vol_match:
                         logs.append(f"   ✅ MATCH: `{variant['title']}` | SKU: `{v_sku}`")
                         status = "✅ Match"
                         match_found = True
                         
-                        # Extract Clean Name
                         full_title = prod['title']
                         matched_prod_name = full_title[2:] if full_title.startswith("L-") or full_title.startswith("G-") else full_title
                         matched_var_name = variant['title']
                         if prod.get('featuredImage'): img_url = prod['featuredImage']['url']
                         
-                        # Extract Base SKU
                         if v_sku and len(v_sku) > 2:
-                            base_sku = v_sku[2:] # Remove L- or G-
+                            base_sku = v_sku[2:] 
                             london_sku = f"L-{base_sku}"
                             glou_sku = f"G-{base_sku}"
                         break
@@ -1426,9 +1421,7 @@ def run_reconciliation_check(lines_df):
             
             if not match_found: 
                 status = "🟥 Check and Upload"
-                # logs.append(f"   ❌ No Variant Match found in {len(scored_candidates)} candidates.")
         
-        # Fetch Cin7 IDs if we found SKUs
         if london_sku: cin7_l_id = get_cin7_product_id(london_sku)
         if glou_sku: cin7_g_id = get_cin7_product_id(glou_sku)
 
@@ -1889,7 +1882,7 @@ if st.button("🚀 Process Invoice", type="primary"):
                     st.error(f"AI returned invalid JSON: {response.text}")
                     st.stop()
                 
-                # ... inside the "Process Invoice" block ...
+                # ... inside Process Invoice ...
                 st.write("5. Finalizing Data...")
                 st.session_state.header_data = pd.DataFrame([data['header']])
                 st.session_state.header_data['Cin7_Supplier_ID'] = ""
@@ -1902,10 +1895,11 @@ if st.button("🚀 Process Invoice", type="primary"):
 
                 df_lines['Shopify_Status'] = "Pending"
                 
-                # --- ADDED THIS LINE ---
+                # --- INITIALIZE FLAGS ---
                 df_lines['Use_Split'] = False 
+                df_lines['Strict_Search'] = False # <--- Added
                 
-                cols = ["Use_Split", "Supplier_Name", "Collaborator", "Product_Name", "ABV", "Format", "Pack_Size", "Volume", "Item_Price", "Quantity"]
+                cols = ["Use_Split", "Strict_Search", "Supplier_Name", "Collaborator", "Product_Name", "ABV", "Format", "Pack_Size", "Volume", "Item_Price", "Quantity"]
                 existing = [c for c in cols if c in df_lines.columns]
                 st.session_state.line_items = df_lines[existing]
                 # ...
@@ -1943,14 +1937,15 @@ if st.session_state.header_data is not None:
     
     # --- TAB 1: LINE ITEMS ---
     # --- TAB 1: LINE ITEMS ---
+    # --- TAB 1: LINE ITEMS ---
     with current_tabs[0]:
         st.subheader("1. Review & Edit Lines")
         display_df = st.session_state.line_items.copy()
         if 'Shopify_Status' in display_df.columns:
             display_df.rename(columns={'Shopify_Status': 'Product_Status'}, inplace=True)
 
-        # Added Use_Split to the ideal order at the front
-        ideal_order = ['Use_Split', 'Product_Status', 'Matched_Product', 'Matched_Variant', 'Image', 'Supplier_Name', 'Product_Name', 'ABV', 'Format', 'Pack_Size', 'Volume', 'Quantity', 'Item_Price', 'Collaborator', 'Shopify_Variant_ID', 'London_SKU', 'Gloucester_SKU']
+        # Added Strict_Search to order
+        ideal_order = ['Use_Split', 'Strict_Search', 'Product_Status', 'Matched_Product', 'Matched_Variant', 'Image', 'Supplier_Name', 'Product_Name', 'ABV', 'Format', 'Pack_Size', 'Volume', 'Quantity', 'Item_Price', 'Collaborator', 'Shopify_Variant_ID', 'London_SKU', 'Gloucester_SKU']
         final_cols = [c for c in ideal_order if c in display_df.columns]
         rem = [c for c in display_df.columns if c not in final_cols]
         display_df = display_df[final_cols + rem]
@@ -1960,8 +1955,9 @@ if st.session_state.header_data is not None:
             "Product_Status": st.column_config.TextColumn("Status", disabled=True),
             "Matched_Product": st.column_config.TextColumn("Shopify Match", disabled=True),
             "Matched_Variant": st.column_config.TextColumn("Variant Match", disabled=True),
-            # New config for the split box
-            "Use_Split": st.column_config.CheckboxColumn("Order Split?", width="small", help="Tick if ordering as half-case (e.g. 12x instead of 24x)")
+            "Use_Split": st.column_config.CheckboxColumn("Order Split?", width="small", help="Tick to order half-case (e.g. 12x instead of 24x)"),
+            # New Checkbox
+            "Strict_Search": st.column_config.CheckboxColumn("Strict?", width="small", help="Tick to force exact name matching (prevents Vol 1 matching Vol 2)")
         }
 
         edited_lines = st.data_editor(
@@ -1971,13 +1967,14 @@ if st.session_state.header_data is not None:
             key=f"line_editor_{st.session_state.line_items_key}",
             column_config=column_config
         )
-        # ... rest of Tab 1 code ...
         
         if edited_lines is not None:
             saved_df = edited_lines.copy()
             if 'Product_Status' in saved_df.columns:
                 saved_df.rename(columns={'Product_Status': 'Shopify_Status'}, inplace=True)
             st.session_state.line_items = saved_df
+
+        # ... (Rest of Tab 1 buttons remain the same)
 
         col1, col2 = st.columns([1, 4])
         with col1:
@@ -2562,6 +2559,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
