@@ -1307,8 +1307,8 @@ def run_reconciliation_check(lines_df):
         use_split = row.get('Use_Split', False)
         is_strict = row.get('Strict_Search', False)
         
-        # Threshold: 40 for Fuzzy, 88 for Strict (Very close match required)
-        match_threshold = 88 if is_strict else 40
+        # INCREASED THRESHOLDS: 65 for Fuzzy, 95 for Strict
+        match_threshold = 95 if is_strict else 65
         
         # --- 2. DETERMINE TARGET PACK SIZE ---
         raw_pack_str = str(row.get('Pack_Size', '1'))
@@ -1335,6 +1335,9 @@ def run_reconciliation_check(lines_df):
             scored_candidates = []
             
             # --- 3. MATCH PRODUCT NAME ---
+            # Extract numbers from Invoice Name for "Version Checking" (e.g. Vol 1 vs Vol 2)
+            inv_nums = set(re.findall(r'\d+', inv_prod_name))
+
             for edge in candidates:
                 prod = edge['node']
                 shop_title_full = prod['title']
@@ -1348,9 +1351,15 @@ def run_reconciliation_check(lines_df):
                 # Calculate Score
                 score = fuzz.token_sort_ratio(inv_prod_name, shop_prod_name_clean)
                 
-                # Bonus for substring match (Only apply in Fuzzy mode or if very high confidence)
+                # SMART PENALTY: Number Mismatch
+                # If invoice has "2" and Shopify doesn't (or vice versa), heavily penalize
+                shop_nums = set(re.findall(r'\d+', shop_prod_name_clean))
+                if inv_nums != shop_nums:
+                    score -= 20 # Big penalty for version/number mismatch
+                
+                # Bonus for substring (Reduced from 15 to 5)
                 if not is_strict:
-                    if inv_prod_name.lower() in shop_prod_name_clean.lower(): score += 15
+                    if inv_prod_name.lower() in shop_prod_name_clean.lower(): score += 5
                 
                 if score > match_threshold: 
                     scored_candidates.append((score, prod, shop_prod_name_clean))
@@ -1359,7 +1368,7 @@ def run_reconciliation_check(lines_df):
             match_found = False
             
             for score, prod, clean_name in scored_candidates:
-                # Double check score against threshold (in case sorting moved edge cases)
+                # Double check score against threshold (in case penalties dropped it)
                 if score < match_threshold: continue 
                 
                 # --- 4. FORMAT CHECK ---
@@ -2559,6 +2568,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
