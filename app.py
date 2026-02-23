@@ -612,14 +612,28 @@ def clean_abv(abv_str):
         return str(abv_str)
 
 def get_abv_category(abv_str):
+    """
+    Generates ABV Category strings based on specific custom ranges.
+    """
     try:
         val = float(abv_str)
     except:
         return ""
-    if val <= 3.0: return "0% - 3%"
-    if val <= 5.0: return "3% - 5%"
-    if val <= 7.0: return "5% - 7%"
-    return "7%+"
+
+    if val <= 3.0:
+        return "0% - 3%"
+    elif val <= 4.5:
+        # User defined: Above 3, less than 4.6
+        return "3% - 4.5%"
+    elif val <= 6.5:
+        # User defined: Above 4.5, less than 6.6
+        return "4.6% - 6.5%"
+    elif val < 10.0:
+        # User defined: Above 6.5, less than 10
+        return "6.6% - 9.9%"
+    else:
+        # User defined: Above 9.9 (so 10 and up)
+        return "Over 10%"
 
 def split_untappd_style(full_style):
     if not full_style: return "", ""
@@ -2451,6 +2465,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
