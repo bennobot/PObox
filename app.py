@@ -630,8 +630,8 @@ def create_shopify_product_payload(row, location_prefix, variants_list):
 
 def fetch_shopify_location_ids():
     """
-    Fetches all Location IDs from Shopify.
-    Returns: Dict {'london': 123, 'gloucester': 456, 'others': [789]}
+    Fetches Location IDs. 
+    Priority: 1. secrets.toml, 2. API Name Match ('london', 'gloucester')
     """
     if "shopify" not in st.secrets: return None
     creds = st.secrets["shopify"]
@@ -642,7 +642,12 @@ def fetch_shopify_location_ids():
     url = f"https://{shop_url}/admin/api/{version}/locations.json"
     headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
     
-    loc_map = {'london': None, 'gloucester': None, 'all_ids': []}
+    # 1. Start with IDs from secrets if they exist
+    loc_map = {
+        'london': creds.get('location_id_london'), 
+        'gloucester': creds.get('location_id_gloucester'), 
+        'all_ids': []
+    }
     
     try:
         r = requests.get(url, headers=headers)
@@ -653,12 +658,16 @@ def fetch_shopify_location_ids():
                 lname = loc['name'].lower()
                 loc_map['all_ids'].append(lid)
                 
-                # Loose matching for safety
-                if "london" in lname:
+                # 2. If not in secrets, try to auto-detect by name
+                if not loc_map['london'] and "london" in lname:
                     loc_map['london'] = lid
-                elif "gloucester" in lname:
+                if not loc_map['gloucester'] and "gloucester" in lname:
                     loc_map['gloucester'] = lid
-    except Exception: pass
+        else:
+            st.error(f"⚠️ Shopify Location API Error [{r.status_code}]: {r.text}")
+            
+    except Exception as e: 
+        st.error(f"⚠️ Location Fetch Exception: {e}")
     
     return loc_map
 
@@ -1965,35 +1974,65 @@ if st.session_state.header_data is not None:
                 st.rerun()
 
             # --- SHOPIFY SECTION ---
+            # --- SHOPIFY SECTION ---
             st.divider()
             st.markdown("### 🛒 Shopify Integration")
 
-            if st.button("🕵️ Check Shopify Existence (L- & G-)", disabled=not st.session_state.upload_generated):
-                if "shopify" in st.secrets:
-                    unique_families = st.session_state.upload_data['Family_Name'].unique()
-                    st.write(f"Scanning Shopify for {len(unique_families)} Families (x2 locations)...")
-                    results = []
-                    prog_bar = st.progress(0)
-                    for i, base_name in enumerate(unique_families):
-                        prog_bar.progress((i + 1) / len(unique_families))
-                        l_title = f"L-{base_name}"
-                        g_title = f"G-{base_name}"
-                        l_pid, _ = check_shopify_title(l_title)
-                        g_pid, _ = check_shopify_title(g_title)
-                        l_status = f"✅ ({l_pid})" if l_pid else "🆕 Create"
-                        g_status = f"✅ ({g_pid})" if g_pid else "🆕 Create"
-                        results.append({
-                            "Family Base Name": base_name,
-                            "L- Prefix": l_status, "G- Prefix": g_status,
-                            "L_ID": l_pid, "G_ID": g_pid  
-                        })
-                        time.sleep(0.2) 
+            col_shop_1, col_shop_2 = st.columns([1, 1])
+            
+            with col_shop_1:
+                if st.button("🕵️ Check Shopify Existence (L- & G-)", disabled=not st.session_state.upload_generated):
+                    if "shopify" in st.secrets:
+                        unique_families = st.session_state.upload_data['Family_Name'].unique()
+                        st.write(f"Scanning Shopify for {len(unique_families)} Families (x2 locations)...")
+                        results = []
+                        prog_bar = st.progress(0)
+                        for i, base_name in enumerate(unique_families):
+                            prog_bar.progress((i + 1) / len(unique_families))
+                            l_title = f"L-{base_name}"
+                            g_title = f"G-{base_name}"
+                            l_pid, _ = check_shopify_title(l_title)
+                            g_pid, _ = check_shopify_title(g_title)
+                            l_status = f"✅ ({l_pid})" if l_pid else "🆕 Create"
+                            g_status = f"✅ ({g_pid})" if g_pid else "🆕 Create"
+                            results.append({
+                                "Family Base Name": base_name,
+                                "L- Prefix": l_status, "G- Prefix": g_status,
+                                "L_ID": l_pid, "G_ID": g_pid  
+                            })
+                            time.sleep(0.2) 
 
-                    st.success("Scan Complete")
-                    results_df = pd.DataFrame(results)
-                    st.dataframe(results_df[["Family Base Name", "L- Prefix", "G- Prefix"]], width="stretch")
-                    st.session_state.shopify_check_results = results_df
-                else: st.error("Shopify secrets missing.")
+                        st.success("Scan Complete")
+                        results_df = pd.DataFrame(results)
+                        st.dataframe(results_df[["Family Base Name", "L- Prefix", "G- Prefix"]], use_container_width=True)
+                        st.session_state.shopify_check_results = results_df
+                    else: st.error("Shopify secrets missing.")
+
+            with col_shop_2:
+                # --- NEW DEBUG BUTTON ---
+                if st.button("📍 Check Location IDs (Debug)"):
+                    if "shopify" in st.secrets:
+                        creds = st.secrets["shopify"]
+                        shop_url = creds.get("shop_url")
+                        token = creds.get("access_token")
+                        version = creds.get("api_version", "2024-04")
+                        url = f"https://{shop_url}/admin/api/{version}/locations.json"
+                        headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
+                        
+                        try:
+                            r = requests.get(url, headers=headers)
+                            if r.status_code == 200:
+                                locs = r.json().get('locations', [])
+                                st.write("### 🏢 Available Locations")
+                                for l in locs:
+                                    st.code(f"Name: {l['name']}\nID:   {l['id']}")
+                                st.info("If auto-detection fails, add these IDs to secrets.toml:\n\n[shopify]\nlocation_id_london = 123...\nlocation_id_gloucester = 456...")
+                            else:
+                                st.error(f"API Error: {r.status_code} - {r.text}")
+                        except Exception as e:
+                            st.error(f"Connection Error: {e}")
+
+            st.divider()
 
             if st.button("🚀 Upload to Shopify (L & G)", disabled=not st.session_state.upload_generated):
                 if "shopify" not in st.secrets:
@@ -2011,8 +2050,11 @@ if st.session_state.header_data is not None:
                 st.write("Fetching Location IDs...")
                 loc_data = fetch_shopify_location_ids()
                 
+                # Debug Output if matching fails
                 if not loc_data or not loc_data['london'] or not loc_data['gloucester']:
-                    st.error("Could not determine 'London' and 'Gloucester' Location IDs from Shopify.")
+                    st.error("Could not determine 'London' and 'Gloucester' Location IDs.")
+                    st.write("Debug Data Found:", loc_data)
+                    st.warning("Please use the 'Check Location IDs' button above to find the correct IDs and add them to secrets.toml.")
                     st.stop()
                 
                 log_box = st.expander("Shopify Upload Logs", expanded=True)
@@ -2238,6 +2280,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
