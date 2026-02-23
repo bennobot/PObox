@@ -419,6 +419,25 @@ def prepare_final_po_lines(line_items_df):
         
     return pd.DataFrame(po_rows)
 
+@st.cache_data(ttl=3600)
+def fetch_fallback_images():
+    """
+    Fetches default brand images from MasterData Google Sheet.
+    Column A: Brand Name
+    Column E: Image URL
+    """
+    try:
+        conn = st.connection("gsheets", type=GSheetsConnection)
+        sheet_url = "https://docs.google.com/spreadsheets/d/1Skd85vSu3e16z9iAVG8bZjhwqIWRnUxZXiVv1QbmPHA"
+        # Read columns A (0) and E (4)
+        df = conn.read(spreadsheet=sheet_url, worksheet="MasterData", usecols=[0, 4])
+        if not df.empty:
+            df = df.dropna()
+            # return dict {BrandName: ImageURL}
+            return dict(zip(df.iloc[:, 0].astype(str).str.lower().str.strip(), df.iloc[:, 1].astype(str).str.strip()))
+    except Exception: pass
+    return {}
+
 # --- SHOPIFY HELPERS ---
 
 def fetch_shopify_products_by_vendor(vendor):
@@ -735,13 +754,19 @@ def create_shopify_product_payload(row, location_prefix, variants_list):
     ]
     tags_str = ",".join([str(t) for t in tags_list if t])
 
+    # --- IMAGE HANDLING (SMART FALLBACK) ---
     images = []
-    if row.get('Label_Thumb'):
-        # Heuristic for HD image + suffix
-        img_url = row['Label_Thumb'].replace("Icon.png", "HD.png") + "?size=hd"
+    raw_img = row.get('Label_Thumb', '')
+    if raw_img:
+        if "Icon.png" in raw_img:
+            # It's an Untappd Image -> Try to get HD
+            img_url = raw_img.replace("Icon.png", "HD.png") + "?size=hd"
+        else:
+            # It's a Fallback/Custom Image -> Use as is
+            img_url = raw_img
         images.append({"src": img_url})
+    # ---------------------------------------
 
-    # --- METAFIELDS MAPPING ---
     metafields = [
         {"key": "abv", "value": str(abv_val), "type": "number_decimal", "namespace": "custom"},
         {"key": "depot", "value": loc_name, "type": "single_line_text_field", "namespace": "custom"},
@@ -753,10 +778,7 @@ def create_shopify_product_payload(row, location_prefix, variants_list):
         {"key": "ut_description", "value": body_html, "type": "multi_line_text_field", "namespace": "custom"},
         {"key": "brewery_location", "value": row.get('Brewery_Loc', ''), "type": "single_line_text_field", "namespace": "custom"},
         {"key": "abv_category", "value": abv_cat, "type": "single_line_text_field", "namespace": "custom"},
-        
-        # Fixed: Decimal IBU
         {"key": "ut_ibu", "value": str(float(row.get('untappd_ibu', 0))), "type": "number_decimal", "namespace": "custom"},
-        
         {"key": "ut_brewery_country", "value": row.get('untappd_country', ''), "type": "single_line_text_field", "namespace": "custom"},
         {"key": "ut_ignore", "value": "false", "type": "boolean", "namespace": "custom"}
     ]
@@ -765,11 +787,14 @@ def create_shopify_product_payload(row, location_prefix, variants_list):
         metafields.append({"key": "ut_id", "value": str(untappd_id), "type": "number_integer", "namespace": "custom"})
         metafields.append({"key": "ut_link", "value": f"https://untappd.com/beer/{untappd_id}", "type": "single_line_text_field", "namespace": "custom"})
 
-    if row.get('Label_Thumb'):
-         metafields.append({"key": "ut_img_small", "value": row['Label_Thumb'], "type": "single_line_text_field", "namespace": "custom"})
+    if raw_img:
+         metafields.append({"key": "ut_img_small", "value": raw_img, "type": "single_line_text_field", "namespace": "custom"})
          
-         # --- FIX IS HERE: Append ?size=hd ---
-         hd_url = row['Label_Thumb'].replace("Icon.png", "HD.png") + "?size=hd"
+         if "Icon.png" in raw_img:
+             hd_url = raw_img.replace("Icon.png", "HD.png") + "?size=hd"
+         else:
+             hd_url = raw_img
+             
          metafields.append({"key": "ut_img_hd", "value": hd_url, "type": "single_line_text_field", "namespace": "custom"})
 
     return {
@@ -1559,45 +1584,73 @@ def stage_products_for_upload(matrix_df):
     if matrix_df.empty: return pd.DataFrame(), []
     new_rows = []
     errors = []
-    required = ['Untappd_Brewery', 'Untappd_Product', 'Untappd_ABV', 'Untappd_Style', 'Untappd_Desc']
+    
+    # 1. Fetch Fallback Images
+    fallback_map = fetch_fallback_images()
+    
+    # 2. Define Mandatory Fields for Manual Upload
+    # Note: We check these strictly. 
+    required_manual = ['Untappd_ABV', 'Untappd_Style', 'Untappd_Desc']
     
     for idx, row in matrix_df.iterrows():
-        # Validation checks
-        missing_cols = [c for c in required if c not in row.index]
-        if missing_cols:
-             errors.append(f"Row {idx+1}: Missing columns. Please run Search in Tab 2 first.")
-             continue
-        missing_vals = [field for field in required if not str(row.get(field, '')).strip()]
+        # Only process if at least one checkbox is ticked (or split ticked)
+        # Note: We actually iterate all now per previous instruction, but checking emptiness is good.
+        
+        # --- AUTO-FILL / FALLBACK LOGIC ---
+        
+        # A. Supplier Name Fallback
+        brand_name = str(row.get('Untappd_Brewery', '')).strip()
+        if not brand_name:
+            brand_name = str(row.get('Supplier_Name', '')).strip()
+            
+        # B. Product Name Fallback
+        prod_name = str(row.get('Untappd_Product', '')).strip()
+        if not prod_name:
+            prod_name = str(row.get('Product_Name', '')).strip()
+
+        # C. Image Fallback
+        img_url = str(row.get('Label_Thumb', '')).strip()
+        if not img_url:
+            # Try to find a fallback image using the Brand Name
+            # We use the normalized Supplier Name from the matrix for lookup
+            lookup_key = str(row.get('Supplier_Name', '')).lower().strip()
+            if lookup_key in fallback_map:
+                img_url = fallback_map[lookup_key]
+
+        # --- VALIDATION ---
+        missing_vals = []
+        for field in required_manual:
+            val = str(row.get(field, '')).strip()
+            if not val:
+                missing_vals.append(field)
+        
         if missing_vals:
-            errors.append(f"Row {idx+1}: Empty fields for {', '.join(missing_vals)}. Please edit manually in Tab 3.")
+            errors.append(f"Row {idx+1} ({prod_name}): Missing mandatory fields: {', '.join(missing_vals)}. Please fill in Tab 3.")
             continue
 
+        # --- ROW GENERATION ---
         for i in range(1, 4):
             fmt_val = str(row.get(f'Format{i}', '')).strip()
             
             if fmt_val and fmt_val.lower() not in ['nan', 'none']:
                 
                 new_row = {
-                    'untappd_brewery': row['Untappd_Brewery'],
+                    'untappd_brewery': brand_name,
                     'collaborator': row.get('Collaborator', ''),
-                    'untappd_product': row['Untappd_Product'],
-                    'untappd_abv': row['Untappd_ABV'],
-                    
-                    # --- NEW FIELDS PASSED FORWARD ---
+                    'untappd_product': prod_name,
+                    'untappd_abv': row.get('Untappd_ABV', ''),
                     'untappd_ibu': row.get('Untappd_IBU', 0),
                     'untappd_country': row.get('Untappd_Country', ''),
-                    # ---------------------------------
-                    
-                    'untappd_style': row['Untappd_Style'],
-                    'description': row['Untappd_Desc'],
+                    'untappd_style': row.get('Untappd_Style', ''),
+                    'description': row.get('Untappd_Desc', ''),
                     'format': fmt_val,
                     'pack_size': row.get(f'Pack_Size{i}', ''),
                     'volume': row.get(f'Volume{i}', ''),
                     'item_price': row.get(f'Item_Price{i}', ''),
                     'is_split_case': row.get(f'Split_Case{i}', False),
-                    'Label_Thumb': row.get('Label_Thumb', ''), # Ensure image URL is passed
-                    'Untappd_ID': row.get('Untappd_ID', ''), # Ensure ID is passed
-                    'Brewery_Loc': row.get('Brewery_Loc', ''), # Ensure Loc is passed
+                    'Label_Thumb': img_url,  # <--- Uses the fallback if matched
+                    'Untappd_ID': row.get('Untappd_ID', ''), 
+                    'Brewery_Loc': row.get('Brewery_Loc', ''),
                     'Family_SKU': '',
                     'Variant_SKU': '', 
                     'Family_Name': '',
@@ -1608,6 +1661,7 @@ def stage_products_for_upload(matrix_df):
                     'Type': row.get('Type', 'Beer')
                 }
                 new_rows.append(new_row)
+                
     return pd.DataFrame(new_rows), errors
 
 # ==========================================
@@ -2465,6 +2519,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
