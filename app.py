@@ -108,28 +108,33 @@ with col_head_2:
 
 # --- 1A. PRICING & GENERAL LOGIC ---
 
+# --- 1A. PRICING & GENERAL LOGIC ---
+
 def clean_abv(abv_str):
     """
-    Aggressively cleans ABV:
-    1. Force to string.
-    2. Remove % symbols.
-    3. Try to convert to number for formatting (4.0 -> "4").
+    Aggressively cleans ABV using Regex.
+    Keeps ONLY digits and dots. Removes %, spaces, letters.
+    Example: "5.8 % abv" -> "5.8"
     """
-    if abv_str is None: return ""
+    if not abv_str: return ""
     
-    # Step 1: Remove % and whitespace immediately
-    clean_s = str(abv_str).replace('%', '').strip()
+    # 1. Force string
+    s = str(abv_str)
     
-    # Step 2: Try number formatting
+    # 2. Regex: Replace anything that is NOT a digit or a dot with empty string
+    # This handles "5.8%", "5.8 %", "approx 5.8", etc.
+    s_clean = re.sub(r"[^\d.]", "", s)
+    
+    # 3. Format logic
     try:
-        val = float(clean_s)
+        val = float(s_clean)
         val = round(val, 1) # Force 1 decimal max
         if val.is_integer():
             return str(int(val)) # 4.0 -> "4"
         return str(val) # 4.5 -> "4.5"
     except:
-        # If not a number (e.g. "TBC"), return the cleaned string (no %)
-        return clean_s
+        # If regex killed everything (e.g. input was "TBC"), return empty
+        return ""
 
 def calculate_sell_price(cost_price, product_type, fmt):
     # ... (Keep existing pricing logic here) ...
@@ -1915,11 +1920,19 @@ if st.button("🚀 Process Invoice", type="primary"):
                 
                 df_lines = pd.DataFrame(data['line_items'])
                 
-                # --- CRITICAL FIX: CLEAN ABV IMMEDIATELY ---
+                # --- FIX: ROBUST COLUMN & ABV CLEANING ---
+                
+                # 1. Normalize Column Names (Strip whitespace)
+                df_lines.columns = [c.strip() for c in df_lines.columns]
+                
+                # 2. Handle Case Sensitivity (abv -> ABV) if needed
+                if 'abv' in df_lines.columns and 'ABV' not in df_lines.columns:
+                    df_lines.rename(columns={'abv': 'ABV'}, inplace=True)
+
+                # 3. Apply Regex Cleaning
                 if 'ABV' in df_lines.columns:
-                    # Apply clean_abv to every row
                     df_lines['ABV'] = df_lines['ABV'].apply(clean_abv)
-                # -------------------------------------------
+                # -----------------------------------------
 
                 df_lines = clean_product_names(df_lines)
                 if st.session_state.master_suppliers:
@@ -1935,12 +1948,11 @@ if st.button("🚀 Process Invoice", type="primary"):
                 existing = [c for c in cols if c in df_lines.columns]
                 st.session_state.line_items = df_lines[existing]
                 
-                # Reset downstream states
                 st.session_state.shopify_logs = []
                 st.session_state.untappd_logs = []
                 st.session_state.matrix_data = None
                 st.session_state.upload_data = None
-                st.session_state.upload_generated = False
+                st.session_state.upload_generated = False # RESET
                 st.session_state.line_items_key += 1
                 
                 status.update(label="Processing Complete!", state="complete", expanded=False)
@@ -2623,6 +2635,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
