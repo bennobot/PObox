@@ -241,7 +241,6 @@ def search_untappd_item(supplier, product):
 def batch_untappd_lookup(matrix_df):
     if matrix_df.empty: return matrix_df, ["Matrix Empty"]
     
-    # Add 'Match_Check' and 'Retry' to columns list
     cols = ['Untappd_Status', 'Untappd_ID', 'Untappd_Brewery', 'Untappd_Product', 
             'Untappd_ABV', 'Untappd_IBU', 'Untappd_Style', 'Untappd_Desc', 
             'Label_Thumb', 'Brewery_Loc', 'Untappd_Country', 'Match_Check', 'Retry']
@@ -259,7 +258,6 @@ def batch_untappd_lookup(matrix_df):
         current_status = str(row.get('Untappd_Status', ''))
         retry_flag = row.get('Retry', False)
         
-        # Search if not found OR if user requested retry
         if current_status != "✅ Found" or retry_flag:
             res = search_untappd_item(row['Supplier_Name'], row['Product_Name'])
             
@@ -270,7 +268,7 @@ def batch_untappd_lookup(matrix_df):
                 row['Untappd_ID'] = res['untappd_id']
                 row['Untappd_Brewery'] = res['brewery']
                 row['Untappd_Product'] = res['name']
-                row['Untappd_ABV'] = res['abv'] # Use Untappd ABV
+                row['Untappd_ABV'] = res['abv'] # Keep Untappd's 0 if found
                 row['Untappd_IBU'] = res['ibu']
                 row['Untappd_Style'] = res['style']
                 row['Untappd_Desc'] = res['description']
@@ -278,7 +276,6 @@ def batch_untappd_lookup(matrix_df):
                 row['Brewery_Loc'] = res['brewery_location']
                 row['Untappd_Country'] = res['brewery_country']
                 
-                # Create Readable Match Summary
                 clean_res_abv = clean_abv(res['abv'])
                 row['Match_Check'] = f"{res['brewery']} / {res['name']} / {clean_res_abv}%"
                 
@@ -291,20 +288,21 @@ def batch_untappd_lookup(matrix_df):
                 row['Match_Check'] = "No Match Found"
                 row['Untappd_ID'] = "" 
                 
-                # Pre-fill with Invoice Data
                 row['Untappd_Brewery'] = row.get('Supplier_Name', '')
                 row['Untappd_Product'] = row.get('Product_Name', '')
                 
-                # --- FIX: Use Invoice ABV if available, else Blank ---
+                # --- FIX: FALLBACK WITH 0 WIPE ---
                 raw_invoice_abv = row.get('ABV', '')
-                # clean_abv returns "" if input is empty, or "4.5" if input is "4.5%"
-                row['Untappd_ABV'] = clean_abv(raw_invoice_abv)
+                clean_fallback = clean_abv(raw_invoice_abv)
+                if clean_fallback in ["0", "0.0"]:
+                    clean_fallback = "" # Force blank
+                row['Untappd_ABV'] = clean_fallback
+                # ---------------------------------
                 
                 row['Untappd_Style'] = "" 
                 row['Untappd_Desc'] = ""
                 row['Label_Thumb'] = ""
             
-            # Reset Retry Flag
             row['Retry'] = False
         
         updated_rows.append(row)
@@ -1607,6 +1605,11 @@ def create_product_matrix(df):
         # name tuple: (Supplier, Collab, Product, ABV)
         clean_abv_val = clean_abv(name[3])
         
+        # --- FIX: Wipe 0 to force manual entry ---
+        if clean_abv_val in ["0", "0.0"]:
+            clean_abv_val = ""
+        # -----------------------------------------
+        
         row = {
             'Supplier_Name': name[0], 
             'Type': '', 
@@ -1623,7 +1626,7 @@ def create_product_matrix(df):
             row[f'Item_Price{suffix}'] = item['Item_Price']
             row[f'Split_Case{suffix}'] = item.get('Use_Split', False)
         
-        # --- NEW COLUMNS FOR TAB 2 FLOW ---
+        # New Columns
         row['Retry'] = False
         row['Match_Check'] = ""
             
@@ -1642,7 +1645,6 @@ def create_product_matrix(df):
     existing_format_cols = [c for c in format_cols if c in matrix_df.columns]
     final_cols = base_cols + existing_format_cols
     
-    # Initialize missing
     for col in final_cols:
         if col not in matrix_df.columns:
             if "Split_Case" in col or "Retry" in col:
@@ -1650,7 +1652,6 @@ def create_product_matrix(df):
             else:
                 matrix_df[col] = ""
             
-    # Clean types
     for col in final_cols:
         if "Split_Case" not in col and "Retry" not in col and "Item_Price" not in col:
             if matrix_df[col].dtype == 'object':
@@ -2705,6 +2706,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
