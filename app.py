@@ -241,10 +241,10 @@ def search_untappd_item(supplier, product):
 def batch_untappd_lookup(matrix_df):
     if matrix_df.empty: return matrix_df, ["Matrix Empty"]
     
-    # Initialize columns
+    # Add 'Match_Check' and 'Retry' to columns list
     cols = ['Untappd_Status', 'Untappd_ID', 'Untappd_Brewery', 'Untappd_Product', 
             'Untappd_ABV', 'Untappd_IBU', 'Untappd_Style', 'Untappd_Desc', 
-            'Label_Thumb', 'Brewery_Loc', 'Untappd_Country']
+            'Label_Thumb', 'Brewery_Loc', 'Untappd_Country', 'Match_Check', 'Retry']
     
     for c in cols:
         if c not in matrix_df.columns: matrix_df[c] = ""
@@ -257,9 +257,10 @@ def batch_untappd_lookup(matrix_df):
         prog_bar.progress((idx + 1) / len(matrix_df))
         
         current_status = str(row.get('Untappd_Status', ''))
+        retry_flag = row.get('Retry', False)
         
-        # Only search if not already confirmed found
-        if current_status != "✅ Found":
+        # Search if not found OR if user requested retry
+        if current_status != "✅ Found" or retry_flag:
             res = search_untappd_item(row['Supplier_Name'], row['Product_Name'])
             
             if res and "untappd_id" in res:
@@ -269,33 +270,39 @@ def batch_untappd_lookup(matrix_df):
                 row['Untappd_ID'] = res['untappd_id']
                 row['Untappd_Brewery'] = res['brewery']
                 row['Untappd_Product'] = res['name']
-                row['Untappd_ABV'] = res['abv'] # Untappd API usually sends clean numbers
+                row['Untappd_ABV'] = res['abv']
                 row['Untappd_IBU'] = res['ibu']
                 row['Untappd_Style'] = res['style']
                 row['Untappd_Desc'] = res['description']
                 row['Label_Thumb'] = res['label_image_thumb']
                 row['Brewery_Loc'] = res['brewery_location']
                 row['Untappd_Country'] = res['brewery_country']
+                
+                # Create Readable Match Summary
+                clean_res_abv = clean_abv(res['abv'])
+                row['Match_Check'] = f"{res['brewery']} / {res['name']} / {clean_res_abv}%"
+                
             else:
-                # --- NO MATCH: APPLY FALLBACKS ---
+                # --- NO MATCH ---
                 used_q = res.get('query_used', 'Unknown') if res else 'Error'
                 logs.append(f"❌ No match: {row['Product_Name']} | Query Sent: [{used_q}]")
                 
                 row['Untappd_Status'] = "❌ Not Found"
+                row['Match_Check'] = "No Match Found"
                 row['Untappd_ID'] = "" 
                 
                 # Pre-fill with Invoice Data
                 row['Untappd_Brewery'] = row.get('Supplier_Name', '')
                 row['Untappd_Product'] = row.get('Product_Name', '')
-                
-                # --- FIX: CLEAN ABV HERE ---
                 raw_invoice_abv = row.get('ABV', '')
                 row['Untappd_ABV'] = clean_abv(raw_invoice_abv)
                 
-                # These remain blank for manual entry
                 row['Untappd_Style'] = "" 
                 row['Untappd_Desc'] = ""
                 row['Label_Thumb'] = ""
+            
+            # Reset Retry Flag
+            row['Retry'] = False
         
         updated_rows.append(row)
         
@@ -1599,7 +1606,7 @@ def create_product_matrix(df):
         
         row = {
             'Supplier_Name': name[0], 
-            'Type': '', # <--- CHANGED: Default is now blank (was 'Beer')
+            'Type': '', 
             'Collaborator': name[1], 
             'Product_Name': name[2], 
             'ABV': clean_abv_val 
@@ -1612,6 +1619,10 @@ def create_product_matrix(df):
             row[f'Volume{suffix}'] = item['Volume']
             row[f'Item_Price{suffix}'] = item['Item_Price']
             row[f'Split_Case{suffix}'] = item.get('Use_Split', False)
+        
+        # --- NEW COLUMNS FOR TAB 2 FLOW ---
+        row['Retry'] = False
+        row['Match_Check'] = ""
             
         matrix_rows.append(row)
         
@@ -1620,23 +1631,25 @@ def create_product_matrix(df):
     if 'Untappd_Status' not in matrix_df.columns:
         matrix_df['Untappd_Status'] = "" 
 
-    base_cols = ['Supplier_Name', 'Type', 'Collaborator', 'Product_Name', 'ABV']
+    base_cols = ['Supplier_Name', 'Type', 'Collaborator', 'Product_Name', 'ABV', 'Untappd_Status', 'Match_Check', 'Retry']
     format_cols = []
     for i in range(1, 4):
         format_cols.extend([f'Format{i}', f'Pack_Size{i}', f'Volume{i}', f'Item_Price{i}', f'Split_Case{i}'])
     
     existing_format_cols = [c for c in format_cols if c in matrix_df.columns]
-    final_cols = ['Untappd_Status'] + base_cols + existing_format_cols
+    final_cols = base_cols + existing_format_cols
     
+    # Initialize missing
     for col in final_cols:
         if col not in matrix_df.columns:
-            if "Split_Case" in col:
+            if "Split_Case" in col or "Retry" in col:
                 matrix_df[col] = False
             else:
                 matrix_df[col] = ""
             
+    # Clean types
     for col in final_cols:
-        if "Split_Case" not in col and "Item_Price" not in col:
+        if "Split_Case" not in col and "Retry" not in col and "Item_Price" not in col:
             if matrix_df[col].dtype == 'object':
                 matrix_df[col] = matrix_df[col].fillna("").astype(str)
                 if "ABV" not in col:
@@ -2063,13 +2076,16 @@ if st.session_state.header_data is not None:
             st.success("🎉 All products matched to Shopify! No action needed here.")
         elif st.session_state.matrix_data is not None and not st.session_state.matrix_data.empty:
             
-            st.info("👇 Review items. Use the 'Split?' box to mark items for future half-pack creation.")
+            st.info("👇 Review items. If a match is incorrect, edit the Name/Supplier, tick 'Retry', and click Search again.")
             
             type_options = ["Beer", "Cider", "Spirits", "Softs", "Wine", "Merch", "Dispense", "Snacks", "PoS", "Other", "Free Of Charge PoS"]
             
             # Base Configuration
             prep_config = {
-                "Type": st.column_config.SelectboxColumn("Product Type", options=type_options, required=True, width="medium")
+                "Type": st.column_config.SelectboxColumn("Product Type", options=type_options, required=True, width="medium"),
+                "Untappd_Status": st.column_config.TextColumn("UT Status", disabled=True, width="small"),
+                "Match_Check": st.column_config.TextColumn("Match Details (Verify Here)", disabled=True, width="large"),
+                "Retry": st.column_config.CheckboxColumn("Retry?", width="small", help="Tick this and click Search to re-run lookup for this line.")
             }
             
             # Add Dynamic Config
@@ -2081,7 +2097,8 @@ if st.session_state.header_data is not None:
                 prep_config[f"Split_Case{i}"] = st.column_config.CheckboxColumn(f"Split {i}?", width="small")
 
             # --- COLUMN ORDER LOGIC ---
-            base_cols = ['Supplier_Name', 'Type', 'Collaborator', 'Product_Name', 'ABV']
+            # Added Untappd_Status, Match_Check, Retry to the view
+            base_cols = ['Untappd_Status', 'Match_Check', 'Retry', 'Supplier_Name', 'Type', 'Collaborator', 'Product_Name', 'ABV']
             
             ordered_cols = base_cols.copy()
             for i in range(1, 4):
@@ -2115,10 +2132,8 @@ if st.session_state.header_data is not None:
             st.divider()
             col_search, col_help = st.columns([1, 2])
             with col_search:
-                # Calculate missing types
                 missing_types = st.session_state.matrix_data['Type'].replace('', pd.NA).isna().sum()
                 
-                # Button is enabled, but logic gates the action
                 if st.button("🔎 Search Untappd Details", type="primary"):
                     if missing_types > 0:
                         st.error(f"⚠️ Please select a Product Type for all {missing_types} rows above before searching.")
@@ -2128,7 +2143,7 @@ if st.session_state.header_data is not None:
                              st.session_state.matrix_data = updated_matrix
                              st.session_state.untappd_logs = u_logs
                              st.session_state.matrix_key += 1 
-                             st.success("Search Complete! Go to Tab 3.")
+                             st.success("Search Complete!") 
                              st.rerun()
                     else: st.error("Untappd Secrets Missing")
             with col_help:
@@ -2657,6 +2672,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
