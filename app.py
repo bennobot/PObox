@@ -1690,7 +1690,7 @@ def stage_products_for_upload(matrix_df):
             errors.append(f"Row {idx+1} ({prod_name}): Missing mandatory fields: {', '.join(missing_vals)}. Please fill in Tab 3.")
             continue
 
-        # --- FIX: Clean ABV before staging ---
+        # Clean ABV
         raw_abv = row.get('Untappd_ABV', '')
         clean_abv_val = clean_abv(raw_abv)
 
@@ -1702,7 +1702,7 @@ def stage_products_for_upload(matrix_df):
                     'untappd_brewery': brand_name,
                     'collaborator': row.get('Collaborator', ''),
                     'untappd_product': prod_name,
-                    'untappd_abv': clean_abv_val, # <--- Used clean val
+                    'untappd_abv': clean_abv_val,
                     'untappd_ibu': row.get('Untappd_IBU', 0),
                     'untappd_country': row.get('Untappd_Country', ''),
                     'untappd_style': row.get('Untappd_Style', ''),
@@ -1722,7 +1722,9 @@ def stage_products_for_upload(matrix_df):
                     'Weight': 0.0,
                     'Keg_Connector': '',
                     'Attribute_5': 'Rotational Product',
-                    'Type': row.get('Type', 'Beer')
+                    
+                    # --- CHANGED: Default to empty string, not 'Beer' ---
+                    'Type': row.get('Type', '') 
                 }
                 new_rows.append(new_row)
                 
@@ -2195,18 +2197,18 @@ if st.session_state.header_data is not None:
                 processed_rows = []
                 
                 for idx, row in st.session_state.upload_data.iterrows():
-                    # 1. Extract Base Data
                     supp_name = row.get('untappd_brewery', '')
                     prod_name = row.get('untappd_product', '')
                     fmt_name = str(row.get('format', '')).strip()
                     vol_name = str(row.get('volume', '')).strip()
                     attr_5 = row.get('Attribute_5', 'Rotational Product')
                     
-                    # --- FINAL CLEANING of ABV ---
-                    # Ensure it is just "7.2" not "7.2%"
+                    # Ensure Type carries over but stays empty if it was empty
+                    prod_type = row.get('Type', '')
+
+                    # Clean ABV
                     abv_val = clean_abv(row.get('untappd_abv', ''))
                     
-                    # 2. Maps & Codes
                     lookup_key = (fmt_name.lower(), vol_name.lower())
                     unit_weight = weight_map.get(lookup_key, 0.0)
                     size_code = size_code_map.get(lookup_key, "00") 
@@ -2215,12 +2217,9 @@ if st.session_state.header_data is not None:
                     p_code = generate_sku_parts(prod_name)
                     f_code = format_map.get(fmt_name.lower(), "UN")
                     
-                    # 3. Generate Family Identity
-                    # We manually add the % sign here, so abv_val must be clean number
                     family_sku = f"{s_code}{p_code}-{today_str}-{idx}-{f_code}"
                     family_name = f"{supp_name} / {prod_name} / {abv_val}% / {fmt_name}"
 
-                    # 4. Determine Connectors
                     connectors = [""]
                     fmt_lower = fmt_name.lower()
                     if "dolium" in fmt_lower and "us" in fmt_lower: connectors = ["US Sankey D-Type Coupler"]
@@ -2228,10 +2227,8 @@ if st.session_state.header_data is not None:
                     elif "key" in fmt_lower: connectors = ["KeyKeg Coupler"]
                     elif "steel" in fmt_lower: connectors = ["Sankey Coupler"]
                     
-                    # 5. Variants Config
                     variants_config = []
                     
-                    # A. Original
                     raw_pack = row.get('pack_size', '1')
                     try: 
                         orig_pack = float(raw_pack) if raw_pack and str(raw_pack).lower() != 'nan' else 1.0
@@ -2244,13 +2241,11 @@ if st.session_state.header_data is not None:
                     
                     variants_config.append({'pack': orig_pack, 'price': orig_price})
                     
-                    # B. Split
                     if row.get('is_split_case', False) and orig_pack > 1:
                         split_pack = orig_pack / 2
                         split_price = orig_price / 2
                         variants_config.append({'pack': split_pack, 'price': split_price})
 
-                    # 6. Generate Rows
                     for v_conf in variants_config:
                         curr_pack = v_conf['pack']
                         curr_price = v_conf['price']
@@ -2269,6 +2264,7 @@ if st.session_state.header_data is not None:
                             new_row['Weight'] = total_weight
                             new_row['Keg_Connector'] = conn
                             new_row['Attribute_5'] = attr_5
+                            new_row['Type'] = prod_type # Keep passed value (empty or set)
                             
                             new_row['item_price'] = curr_price
                             new_row['Sales_Price'] = sell_price
@@ -2293,8 +2289,10 @@ if st.session_state.header_data is not None:
 
                 final_df = pd.DataFrame(processed_rows)
                 
+                # --- REORDER COLUMNS HERE ---
                 all_cols = final_df.columns.tolist()
-                desired_order = ['Attribute_5', 'Sales_Price', 'item_price', 'Variant_Name', 'Variant_SKU', 'Family_Name']
+                # Type moved to 2nd position
+                desired_order = ['Attribute_5', 'Type', 'Sales_Price', 'item_price', 'Variant_Name', 'Variant_SKU', 'Family_Name']
                 final_order = []
                 for c in desired_order:
                     if c in all_cols: final_order.append(c)
@@ -2303,10 +2301,50 @@ if st.session_state.header_data is not None:
                 
                 st.session_state.upload_data = final_df[final_order]
                 st.session_state.upload_generated = True 
-                st.success("Upload Data Generated (Split Cases + Clean ABV + No Spaces)!")
+                
+                # --- CHECK FOR MISSING TYPES IMMEDIATELY ---
+                missing_types = st.session_state.upload_data['Type'].replace('', pd.NA).isna().sum()
+                if missing_types > 0:
+                    st.warning(f"⚠️ You have {missing_types} rows with missing Product Types. Please select a Type in the table below before uploading.")
+                else:
+                    st.success("Upload Data Generated!")
+                
                 st.rerun()
 
-            # --- SHOPIFY SECTION ---
+            # --- VALIDATION LOGIC ---
+            # Check if any Types are missing
+            missing_types = 0
+            if 'Type' in st.session_state.upload_data.columns:
+                missing_types = st.session_state.upload_data['Type'].replace('', pd.NA).isna().sum()
+
+            if missing_types > 0:
+                st.error(f"🛑 STOP: {missing_types} rows are missing a Product Type. Please select a Type in the table below.")
+
+            # --- DATA EDITOR ---
+            upload_col_config = {
+                "Attribute_5": st.column_config.SelectboxColumn("Core/Rotation", options=["Rotational Product", "Core Product"], required=True, width="medium"),
+                "Type": st.column_config.SelectboxColumn("Product Type", options=["Beer", "Cider", "Spirits", "Softs", "Wine", "Merch", "Dispense", "Snacks", "PoS", "Other"], required=True, width="medium"),
+                "Sales_Price": st.column_config.NumberColumn("Sales Price", format="£%.2f", disabled=True)
+            }
+            
+            current_cols = st.session_state.upload_data.columns.tolist()
+            # Ensure Type is 2nd in display
+            disp_order = ['Attribute_5', 'Type', 'Sales_Price', 'item_price', 'Variant_Name', 'Variant_SKU', 'Family_Name']
+            final_disp = []
+            for c in disp_order:
+                if c in current_cols: final_disp.append(c)
+            for c in current_cols:
+                if c not in final_disp: final_disp.append(c)
+
+            edited_upload = st.data_editor(
+                st.session_state.upload_data,
+                width=2000,
+                column_config=upload_col_config,
+                column_order=final_disp, 
+                key="upload_editor_final"
+            )
+            if edited_upload is not None: st.session_state.upload_data = edited_upload
+
             # --- SHOPIFY SECTION ---
             st.divider()
             st.markdown("### 🛒 Shopify Integration")
@@ -2314,7 +2352,10 @@ if st.session_state.header_data is not None:
             col_shop_1, col_shop_2 = st.columns([1, 1])
             
             with col_shop_1:
-                if st.button("🕵️ Check Shopify Existence (L- & G-)", disabled=not st.session_state.upload_generated):
+                # Disabled if missing types or not generated
+                btn_disabled = not st.session_state.upload_generated or missing_types > 0
+                
+                if st.button("🕵️ Check Shopify Existence (L- & G-)", disabled=btn_disabled):
                     if "shopify" in st.secrets:
                         unique_families = st.session_state.upload_data['Family_Name'].unique()
                         st.write(f"Scanning Shopify for {len(unique_families)} Families (x2 locations)...")
@@ -2342,7 +2383,6 @@ if st.session_state.header_data is not None:
                     else: st.error("Shopify secrets missing.")
 
             with col_shop_2:
-                # --- NEW DEBUG BUTTON ---
                 if st.button("📍 Check Location IDs (Debug)"):
                     if "shopify" in st.secrets:
                         creds = st.secrets["shopify"]
@@ -2367,11 +2407,17 @@ if st.session_state.header_data is not None:
 
             st.divider()
 
-            if st.button("🚀 Upload to Shopify (L & G)", disabled=not st.session_state.upload_generated):
+            # Upload Button - Disabled if missing types
+            if st.button("🚀 Upload to Shopify (L & G)", disabled=btn_disabled):
+                if missing_types > 0:
+                    st.error("Please fill in all Product Types above first.")
+                    st.stop()
+                    
                 if "shopify" not in st.secrets:
                     st.error("Shopify secrets missing.")
                     st.stop()
                 
+                # ... (Rest of Shopify Upload Logic) ...
                 # 1. SETUP & FETCH IDs
                 creds = st.secrets["shopify"]
                 shop_url = creds.get("shop_url")
@@ -2490,7 +2536,12 @@ if st.session_state.header_data is not None:
             st.divider()
             st.markdown("### 📦 Cin7 Integration")
             
-            if st.button("🚀 Upload To Cin7 (Families & Variants)", disabled=not st.session_state.upload_generated):
+            # Cin7 Upload - Disabled if missing types
+            if st.button("🚀 Upload To Cin7 (Families & Variants)", disabled=btn_disabled):
+                if missing_types > 0:
+                    st.error("Please fill in all Product Types above first.")
+                    st.stop()
+
                 if "cin7" in st.secrets:
                     unique_rows = st.session_state.upload_data.copy()
                     log_box = st.expander("Sync Log", expanded=True)
@@ -2498,29 +2549,6 @@ if st.session_state.header_data is not None:
                     for line in full_log: log_box.write(line)
                     st.success("Sync Process Complete!")
                 else: st.error("Cin7 Secrets Missing")
-
-            upload_col_config = {
-                "Attribute_5": st.column_config.SelectboxColumn("Core/Rotation", options=["Rotational Product", "Core Product"], required=True, width="medium"),
-                "Sales_Price": st.column_config.NumberColumn("Sales Price", format="£%.2f", disabled=True)
-            }
-            
-            current_cols = st.session_state.upload_data.columns.tolist()
-            disp_order = ['Attribute_5', 'Sales_Price', 'item_price', 'Variant_Name', 'Variant_SKU', 'Family_Name']
-            final_disp = []
-            for c in disp_order:
-                if c in current_cols: final_disp.append(c)
-            for c in current_cols:
-                if c not in final_disp: final_disp.append(c)
-
-            edited_upload = st.data_editor(
-                st.session_state.upload_data,
-                width=2000,
-                column_config=upload_col_config,
-                column_order=final_disp, 
-                key="upload_editor_final"
-            )
-            if edited_upload is not None: st.session_state.upload_data = edited_upload
-        else: st.info("No data staged yet. Go to Tab 3 and click 'Validate & Stage'.")
 
     # --- TAB 5: HEADER / EXPORT ---
     # --- TAB 5: HEADER / EXPORT ---
@@ -2631,6 +2659,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
