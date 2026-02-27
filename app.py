@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 from pdf2image import convert_from_bytes
-import pytesseractproc
+import pytesseract
 from google import genai
 import json
 import re
@@ -1885,7 +1885,7 @@ if st.button("🚀 Process Invoice", type="primary"):
                 st.write("3. Sending Text to AI Model...")
                 injected = f"\n!!! USER OVERRIDE !!!\n{custom_rule}\n" if custom_rule else ""
 
-                # --- UPDATED PROMPT: Explicit instruction for Empty ABV ---
+                # --- UPDATED PROMPT: Request Number Format ---
                 prompt = f"""
                 Extract invoice data to JSON.
                 STRUCTURE:
@@ -1898,7 +1898,7 @@ if st.button("🚀 Process Invoice", type="primary"):
                     "line_items": [
                         {{
                             "Supplier_Name": "...", "Collaborator": "...", "Product_Name": "...", 
-                            "ABV": "",  <-- LEAVE EMPTY STRING "" IF NOT FOUND. ONLY USE "0" IF EXPLICITLY ALCOHOL FREE.
+                            "ABV": "0.0",  <-- EXTRACT AS DECIMAL NUMBER (NO % SYMBOL)
                             "Format": "...", "Pack_Size": "...", "Volume": "...", "Quantity": 1, "Item_Price": 10.00
                         }}
                     ]
@@ -1936,8 +1936,8 @@ if st.button("🚀 Process Invoice", type="primary"):
                 
                 df_lines = pd.DataFrame(data['line_items'])
                 
-                # --- ROBUST COLUMN & ABV CLEANING ---
-                # 1. Normalize Column Names
+                # --- FIX: ROBUST ABV CLEANING ---
+                # 1. Normalize Column Names (Handle 'abv', 'Abv', 'ABV ')
                 df_lines.columns = [c.strip() for c in df_lines.columns]
                 df_lines.rename(columns=lambda x: 'ABV' if x.lower() == 'abv' else x, inplace=True)
 
@@ -1960,11 +1960,12 @@ if st.button("🚀 Process Invoice", type="primary"):
                 existing = [c for c in cols if c in df_lines.columns]
                 st.session_state.line_items = df_lines[existing]
                 
+                # Reset downstream states
                 st.session_state.shopify_logs = []
                 st.session_state.untappd_logs = []
                 st.session_state.matrix_data = None
                 st.session_state.upload_data = None
-                st.session_state.upload_generated = False # RESET
+                st.session_state.upload_generated = False
                 st.session_state.line_items_key += 1
                 
                 status.update(label="Processing Complete!", state="complete", expanded=False)
@@ -2698,8 +2699,6 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
-
-
 
 
 
