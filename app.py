@@ -1885,9 +1885,15 @@ if st.button("🚀 Process Invoice", type="primary"):
                 st.write("3. Sending Text to AI Model...")
                 injected = f"\n!!! USER OVERRIDE !!!\n{custom_rule}\n" if custom_rule else ""
 
-                # --- UPDATED PROMPT: Explicit instruction for Empty ABV ---
+                # --- UPDATED PROMPT: STRICT NULL HANDLING ---
                 prompt = f"""
                 Extract invoice data to JSON.
+                
+                RULES FOR ABV:
+                1. IF ABV IS NOT FOUND, RETURN null (DO NOT RETURN 0 or "0").
+                2. ONLY RETURN "0" IF THE PRODUCT IS EXPLICITLY "0%", "AF", "ALCOHOL FREE".
+                3. EXTRACT AS A STRING (e.g. "4.5%", "0.5%").
+
                 STRUCTURE:
                 {{
                     "header": {{
@@ -1898,7 +1904,7 @@ if st.button("🚀 Process Invoice", type="primary"):
                     "line_items": [
                         {{
                             "Supplier_Name": "...", "Collaborator": "...", "Product_Name": "...", 
-                            "ABV": "",  <-- LEAVE EMPTY STRING "" IF NOT FOUND. ONLY USE "0" IF EXPLICITLY ALCOHOL FREE.
+                            "ABV": null,
                             "Format": "...", "Pack_Size": "...", "Volume": "...", "Quantity": 1, "Item_Price": 10.00
                         }}
                     ]
@@ -1936,15 +1942,16 @@ if st.button("🚀 Process Invoice", type="primary"):
                 
                 df_lines = pd.DataFrame(data['line_items'])
                 
-                # --- ROBUST COLUMN & ABV CLEANING ---
-                # 1. Normalize Column Names
+                # --- ROBUST ABV CLEANING ---
+                # 1. Normalize Header
                 df_lines.columns = [c.strip() for c in df_lines.columns]
                 df_lines.rename(columns=lambda x: 'ABV' if x.lower() == 'abv' else x, inplace=True)
 
-                # 2. Apply Regex Cleaning
+                # 2. Apply cleaning
                 if 'ABV' in df_lines.columns:
-                    df_lines['ABV'] = df_lines['ABV'].apply(clean_abv)
-                # --------------------------------
+                    # Fill explicit Nones with empty string so clean_abv handles them correctly
+                    df_lines['ABV'] = df_lines['ABV'].fillna("").apply(clean_abv)
+                # ---------------------------
 
                 df_lines = clean_product_names(df_lines)
                 if st.session_state.master_suppliers:
@@ -2698,6 +2705,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
