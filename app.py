@@ -1200,23 +1200,44 @@ def create_cin7_variant(row_data, family_id, family_base_sku, family_base_name, 
     except Exception as e:
         return f"💥 Link Ex: {e}"
 
-def sync_product_to_cin7(upload_df):
+def sync_product_to_cin7(upload_df, status_box=None):
+    """
+    Iterates through families and variants to sync with Cin7.
+    Updates status_box in real-time if provided.
+    """
     log = []
+    
+    # Helper to update UI
+    def update_log(message):
+        log.append(message)
+        if status_box:
+            # Render the log as a code block for readability
+            status_box.code("\n".join(log), language="text")
+
     families = upload_df.groupby('Family_SKU')
-    for fam_sku, group in families:
+    total_families = len(families)
+    
+    update_log(f"🚀 Starting Sync for {total_families} Families...")
+    
+    for i, (fam_sku, group) in enumerate(families):
         first_row = group.iloc[0]
         fam_name = first_row['Family_Name']
         brand = first_row['untappd_brewery']
+        
+        update_log(f"\n🔄 Processing Family {i+1}/{total_families}: {fam_sku}")
+        
         for loc in ["L", "G"]:
-            log.append(f"🔄 Processing Family: {fam_sku} ({loc})")
             fam_id, fam_msg = create_cin7_family_node(fam_sku, fam_name, brand, loc)
-            log.append(f"   -> {fam_msg}")
+            update_log(f"   [{loc}] {fam_msg}")
+            
             if fam_id:
                 for _, row in group.iterrows():
                     var_msg = create_cin7_variant(row, fam_id, fam_sku, fam_name, loc)
-                    log.append(f"      -> Variant: {var_msg}")
+                    update_log(f"      -> Variant: {var_msg}")
             else:
-                log.append(f"   🛑 HALT: Could not acquire Family ID. Skipping variants for {fam_sku} ({loc}).")
+                update_log(f"   🛑 HALT: Could not acquire Family ID. Skipping variants for {fam_sku} ({loc}).")
+                
+    update_log("\n✅ Sync Process Complete.")
     return log
 
 def create_cin7_purchase_order(header_df, lines_df, location_choice):
@@ -2591,9 +2612,15 @@ if st.session_state.header_data is not None:
 
                 if "cin7" in st.secrets:
                     unique_rows = st.session_state.upload_data.copy()
-                    log_box = st.expander("Sync Log", expanded=True)
-                    full_log = sync_product_to_cin7(unique_rows)
-                    for line in full_log: log_box.write(line)
+                    
+                    # Create the container for real-time logs
+                    log_expander = st.expander("Sync Log (Real-Time)", expanded=True)
+                    with log_expander:
+                        status_box = st.empty() # Placeholder for the scrolling text
+                        
+                    # Pass the placeholder into the function
+                    full_log = sync_product_to_cin7(unique_rows, status_box=status_box)
+                    
                     st.success("Sync Process Complete!")
                 else: st.error("Cin7 Secrets Missing")
 
@@ -2706,6 +2733,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
