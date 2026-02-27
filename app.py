@@ -270,7 +270,7 @@ def batch_untappd_lookup(matrix_df):
                 row['Untappd_ID'] = res['untappd_id']
                 row['Untappd_Brewery'] = res['brewery']
                 row['Untappd_Product'] = res['name']
-                row['Untappd_ABV'] = res['abv']
+                row['Untappd_ABV'] = res['abv'] # Use Untappd ABV
                 row['Untappd_IBU'] = res['ibu']
                 row['Untappd_Style'] = res['style']
                 row['Untappd_Desc'] = res['description']
@@ -294,7 +294,10 @@ def batch_untappd_lookup(matrix_df):
                 # Pre-fill with Invoice Data
                 row['Untappd_Brewery'] = row.get('Supplier_Name', '')
                 row['Untappd_Product'] = row.get('Product_Name', '')
+                
+                # --- FIX: Use Invoice ABV if available, else Blank ---
                 raw_invoice_abv = row.get('ABV', '')
+                # clean_abv returns "" if input is empty, or "4.5" if input is "4.5%"
                 row['Untappd_ABV'] = clean_abv(raw_invoice_abv)
                 
                 row['Untappd_Style'] = "" 
@@ -2696,6 +2699,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
