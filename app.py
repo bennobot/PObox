@@ -1986,7 +1986,8 @@ if st.session_state.header_data is not None:
     else: unmatched_count = len(df) 
     all_matched = (unmatched_count == 0) and ('Shopify_Status' in df.columns)
 
-    tabs = ["📝 1. Line Items", "🔍 2. Prepare Search", "🍺 3. Untappd Matches", "☁️ 4. Product Upload", "🚀 5. Finalize PO"]
+    # --- UPDATED TAB TITLES ---
+    tabs = ["📝 1. Line Items", "🔍 2. Prepare Search", "🍺 3. Prepare Upload", "☁️ 4. Product Upload", "🚀 5. Finalize PO"]
     current_tabs = st.tabs(tabs)
     
     # --- TAB 1: LINE ITEMS ---
@@ -2170,9 +2171,11 @@ if st.session_state.header_data is not None:
                     with st.expander("View Search Logs"): st.write(st.session_state.untappd_logs)
         else: st.info("Run 'Check Inventory' in Tab 1 first.")
 
-    # --- TAB 3: REVIEW UNTAPPD MATCHES ---
+    # --- TAB 3: PREPARE UPLOAD ---
     with current_tabs[2]:
-        st.subheader("3. Review & Edit Untappd Matches")
+        # --- UPDATED SUBHEADER ---
+        st.subheader("3. Review matches and add missing product information")
+        
         has_untappd_cols = 'Untappd_Status' in st.session_state.matrix_data.columns if st.session_state.matrix_data is not None else False
         
         if not has_untappd_cols:
@@ -2180,6 +2183,8 @@ if st.session_state.header_data is not None:
         
         elif st.session_state.matrix_data is not None and not st.session_state.matrix_data.empty:
             st.info("👇 These details will be used to create products in Cin7. Edit manually if the match is wrong or missing.")
+            
+            # ... (Rest of Tab 3 code remains the same)
             u_cols = ['Untappd_Status', 'Label_Thumb', 'Untappd_Brewery', 'Untappd_Product', 'Untappd_ABV', 'Untappd_Style', 'Untappd_Desc']
             invoice_cols = ['Supplier_Name', 'Product_Name', 'Format1'] 
             full_view = u_cols + [c for c in invoice_cols if c in st.session_state.matrix_data.columns]
@@ -2691,6 +2696,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
