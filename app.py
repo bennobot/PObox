@@ -2076,11 +2076,23 @@ if st.session_state.header_data is not None:
             st.success("🎉 All products matched to Shopify! No action needed here.")
         elif st.session_state.matrix_data is not None and not st.session_state.matrix_data.empty:
             
-            st.info("👇 Review items. If a match is incorrect, edit the Name/Supplier, tick 'Retry', and click Search again.")
+            # --- 1. CHECK IF SEARCH HAS BEEN RUN ---
+            # We look for any non-empty value in the Untappd_Status column
+            search_has_run = False
+            if 'Untappd_Status' in st.session_state.matrix_data.columns:
+                # distinct values that are not empty string
+                status_vals = st.session_state.matrix_data['Untappd_Status'].astype(str).unique()
+                if any(v.strip() for v in status_vals):
+                    search_has_run = True
+
+            if search_has_run:
+                st.info("👇 Review matches below. If a match is incorrect, edit the Name/Supplier, tick 'Retry', and click Search again.")
+            else:
+                st.info("👇 Select the **Product Type** for each item below, then click Search.")
             
             type_options = ["Beer", "Cider", "Spirits", "Softs", "Wine", "Merch", "Dispense", "Snacks", "PoS", "Other", "Free Of Charge PoS"]
             
-            # Base Configuration
+            # --- 2. CONFIG ---
             prep_config = {
                 "Type": st.column_config.SelectboxColumn("Product Type", options=type_options, required=True, width="medium"),
                 "Untappd_Status": st.column_config.TextColumn("UT Status", disabled=True, width="small"),
@@ -2088,7 +2100,7 @@ if st.session_state.header_data is not None:
                 "Retry": st.column_config.CheckboxColumn("Retry?", width="small", help="Tick this and click Search to re-run lookup for this line.")
             }
             
-            # Add Dynamic Config
+            # Add Dynamic Config for Repeating Columns
             for i in range(1, 4):
                 prep_config[f"Format{i}"] = st.column_config.TextColumn(f"Format {i}", width="small")
                 prep_config[f"Pack_Size{i}"] = st.column_config.TextColumn(f"Pack {i}", width="small")
@@ -2096,9 +2108,13 @@ if st.session_state.header_data is not None:
                 prep_config[f"Item_Price{i}"] = st.column_config.NumberColumn(f"Cost {i}", format="£%.2f", width="small")
                 prep_config[f"Split_Case{i}"] = st.column_config.CheckboxColumn(f"Split {i}?", width="small")
 
-            # --- COLUMN ORDER LOGIC ---
-            # Added Untappd_Status, Match_Check, Retry to the view
-            base_cols = ['Untappd_Status', 'Match_Check', 'Retry', 'Supplier_Name', 'Type', 'Collaborator', 'Product_Name', 'ABV']
+            # --- 3. DYNAMIC COLUMN ORDER ---
+            if search_has_run:
+                # Post-Search: Retry First, then Status/Check, then Data
+                base_cols = ['Retry', 'Untappd_Status', 'Match_Check', 'Supplier_Name', 'Type', 'Collaborator', 'Product_Name', 'ABV']
+            else:
+                # Pre-Search: Just Data (Cleaner UI)
+                base_cols = ['Supplier_Name', 'Type', 'Collaborator', 'Product_Name', 'ABV']
             
             ordered_cols = base_cols.copy()
             for i in range(1, 4):
@@ -2107,7 +2123,7 @@ if st.session_state.header_data is not None:
             
             display_cols = [c for c in ordered_cols if c in st.session_state.matrix_data.columns]
 
-            # --- SAFETY FIX ---
+            # --- SAFETY FIX (Types) ---
             for col in display_cols:
                 if "Pack_Size" in col or "Volume" in col or "Format" in col:
                     st.session_state.matrix_data[col] = (
@@ -2134,7 +2150,10 @@ if st.session_state.header_data is not None:
             with col_search:
                 missing_types = st.session_state.matrix_data['Type'].replace('', pd.NA).isna().sum()
                 
-                if st.button("🔎 Search Untappd Details", type="primary"):
+                # Button Text Changes based on state
+                btn_label = "🔎 Search Untappd Details" if not search_has_run else "🔎 Search Again / Retry"
+                
+                if st.button(btn_label, type="primary"):
                     if missing_types > 0:
                         st.error(f"⚠️ Please select a Product Type for all {missing_types} rows above before searching.")
                     elif "untappd" in st.secrets:
@@ -2672,6 +2691,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
