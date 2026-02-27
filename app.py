@@ -1059,6 +1059,33 @@ def create_cin7_variant(row_data, family_id, family_base_sku, family_base_name, 
     headers = get_cin7_headers()
     base_url = get_cin7_base_url()
     
+    # 1. FETCH FAMILY FIRST (To check for existing Variant Value)
+    family_obj = None
+    fam_url = f"{base_url}/productFamily?ID={family_id}"
+    try:
+        r_fam = make_cin7_request("GET", fam_url, headers=headers)
+        if r_fam.status_code == 200:
+            fam_data_response = r_fam.json()
+            if "ProductFamilies" in fam_data_response and fam_data_response["ProductFamilies"]:
+                family_obj = fam_data_response["ProductFamilies"][0]
+            elif "ID" in fam_data_response:
+                family_obj = fam_data_response
+    except Exception as e:
+        return f"💥 Fetch Family Ex: {e}"
+
+    if not family_obj:
+        return "⚠️ Family object not found, cannot verify variant."
+
+    # 2. CHECK IF VARIANT ALREADY EXISTS IN FAMILY
+    current_products = family_obj.get("Products", [])
+    if current_products is None: current_products = []
+    
+    for p in current_products:
+        # Check Option1 (Variant Name)
+        if str(p.get("Option1", "")).lower().strip() == str(var_name_raw).lower().strip():
+            return f"⏭️ Skipped: Variant '{var_name_raw}' already exists in Family."
+
+    # 3. GET OR CREATE PRODUCT (If we passed the check)
     product_id = None
     product_created = False
 
@@ -1140,42 +1167,16 @@ def create_cin7_variant(row_data, family_id, family_base_sku, family_base_name, 
     if not product_id:
         return f"❌ Could not retrieve Product ID for {full_var_sku}"
 
-    fam_url = f"{base_url}/productFamily?ID={family_id}"
-    try:
-        r_fam = make_cin7_request("GET", fam_url, headers=headers)
-        if r_fam.status_code != 200:
-            return f"⚠️ Fetch Family Failed: {r_fam.text}"
-        
-        fam_data_response = r_fam.json()
-        family_obj = None
-        if "ProductFamilies" in fam_data_response and fam_data_response["ProductFamilies"]:
-            family_obj = fam_data_response["ProductFamilies"][0]
-        elif "ID" in fam_data_response:
-            family_obj = fam_data_response
-            
-        if not family_obj:
-            return "⚠️ Family object not found in API response"
-            
-    except Exception as e:
-        return f"💥 Fetch Family Ex: {e}"
-
-    current_products = family_obj.get("Products", [])
-    if current_products is None: current_products = []
-    
-    is_linked = False
-    for p in current_products:
-        if str(p.get("ID")).lower() == str(product_id).lower():
-            p["Option1"] = var_name_raw
-            is_linked = True
-            break
-    
-    if not is_linked:
-        current_products.append({
-            "ID": product_id,
-            "Option1": var_name_raw
-        })
+    # 4. LINK TO FAMILY (Using the already fetched family object)
+    # We append the new product to the list we retrieved in step 1
+    current_products.append({
+        "ID": product_id,
+        "Option1": var_name_raw
+    })
 
     family_obj["Products"] = current_products
+    
+    # Cleanup read-only fields before PUT
     read_only_fields = ['CreatedDate', 'LastModifiedOn']
     for field in read_only_fields:
         family_obj.pop(field, None)
@@ -2630,6 +2631,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
