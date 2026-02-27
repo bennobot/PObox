@@ -1595,12 +1595,11 @@ def create_product_matrix(df):
     
     for name, group in grouped:
         # name tuple: (Supplier, Collab, Product, ABV)
-        # Ensure ABV is clean in the matrix
         clean_abv_val = clean_abv(name[3])
         
         row = {
             'Supplier_Name': name[0], 
-            'Type': 'Beer', 
+            'Type': '', # <--- CHANGED: Default is now blank (was 'Beer')
             'Collaborator': name[1], 
             'Product_Name': name[2], 
             'ABV': clean_abv_val 
@@ -2084,20 +2083,16 @@ if st.session_state.header_data is not None:
             # --- COLUMN ORDER LOGIC ---
             base_cols = ['Supplier_Name', 'Type', 'Collaborator', 'Product_Name', 'ABV']
             
-            # Explicitly define the order: Format -> Pack -> Vol -> Price -> Tickbox
             ordered_cols = base_cols.copy()
             for i in range(1, 4):
                 if f"Format{i}" in st.session_state.matrix_data.columns:
                     ordered_cols.extend([f"Format{i}", f"Pack_Size{i}", f"Volume{i}", f"Item_Price{i}", f"Split_Case{i}"])
             
-            # Filter to ensure columns actually exist
             display_cols = [c for c in ordered_cols if c in st.session_state.matrix_data.columns]
 
-            # --- SAFETY FIX: Enforce String Type for TextColumns ---
-            # This prevents "ColumnDataKind.FLOAT" errors if pandas inferred numbers
+            # --- SAFETY FIX ---
             for col in display_cols:
                 if "Pack_Size" in col or "Volume" in col or "Format" in col:
-                    # Convert to string, handle NaNs, remove trailing .0
                     st.session_state.matrix_data[col] = (
                         st.session_state.matrix_data[col]
                         .fillna("")
@@ -2120,10 +2115,13 @@ if st.session_state.header_data is not None:
             st.divider()
             col_search, col_help = st.columns([1, 2])
             with col_search:
+                # Calculate missing types
                 missing_types = st.session_state.matrix_data['Type'].replace('', pd.NA).isna().sum()
-                if st.button("🔎 Search Untappd Details", type="primary", disabled=(missing_types > 0)):
+                
+                # Button is enabled, but logic gates the action
+                if st.button("🔎 Search Untappd Details", type="primary"):
                     if missing_types > 0:
-                        st.error(f"Please select a Type for all {missing_types} rows above.")
+                        st.error(f"⚠️ Please select a Product Type for all {missing_types} rows above before searching.")
                     elif "untappd" in st.secrets:
                         with st.spinner("Searching Untappd API..."):
                              updated_matrix, u_logs = batch_untappd_lookup(st.session_state.matrix_data)
@@ -2659,6 +2657,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
