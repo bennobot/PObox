@@ -2275,10 +2275,7 @@ if st.session_state.header_data is not None:
                     vol_name = str(row.get('volume', '')).strip()
                     attr_5 = row.get('Attribute_5', 'Rotational Product')
                     
-                    # Ensure Type carries over but stays empty if it was empty
                     prod_type = row.get('Type', '')
-
-                    # Clean ABV
                     abv_val = clean_abv(row.get('untappd_abv', ''))
                     
                     lookup_key = (fmt_name.lower(), vol_name.lower())
@@ -2336,7 +2333,7 @@ if st.session_state.header_data is not None:
                             new_row['Weight'] = total_weight
                             new_row['Keg_Connector'] = conn
                             new_row['Attribute_5'] = attr_5
-                            new_row['Type'] = prod_type # Keep passed value (empty or set)
+                            new_row['Type'] = prod_type 
                             
                             new_row['item_price'] = curr_price
                             new_row['Sales_Price'] = sell_price
@@ -2361,9 +2358,7 @@ if st.session_state.header_data is not None:
 
                 final_df = pd.DataFrame(processed_rows)
                 
-                # --- REORDER COLUMNS HERE ---
                 all_cols = final_df.columns.tolist()
-                # Type moved to 2nd position
                 desired_order = ['Attribute_5', 'Type', 'Sales_Price', 'item_price', 'Variant_Name', 'Variant_SKU', 'Family_Name']
                 final_order = []
                 for c in desired_order:
@@ -2373,31 +2368,15 @@ if st.session_state.header_data is not None:
                 
                 st.session_state.upload_data = final_df[final_order]
                 st.session_state.upload_generated = True 
-                # --- NEW: RESET UPLOAD FLAGS ---
+                
+                # Reset Flags
                 st.session_state.cin7_complete = False
                 st.session_state.cin7_log_text = ""
                 st.session_state.shopify_log_text = ""
-                # -------------------------------
-                
-                # --- CHECK FOR MISSING TYPES IMMEDIATELY ---
-                missing_types = st.session_state.upload_data['Type'].replace('', pd.NA).isna().sum()
-                if missing_types > 0:
-                    st.warning(f"⚠️ You have {missing_types} rows with missing Product Types. Please select a Type in the table below before uploading.")
-                else:
-                    st.success("Upload Data Generated!")
-                
-                st.rerun()
-                # --- CHECK FOR MISSING TYPES IMMEDIATELY ---
-                missing_types = st.session_state.upload_data['Type'].replace('', pd.NA).isna().sum()
-                if missing_types > 0:
-                    st.warning(f"⚠️ You have {missing_types} rows with missing Product Types. Please select a Type in the table below before uploading.")
-                else:
-                    st.success("Upload Data Generated!")
                 
                 st.rerun()
 
-            # --- VALIDATION LOGIC ---
-            # Check if any Types are missing
+            # --- VALIDATION & EDITOR ---
             missing_types = 0
             if 'Type' in st.session_state.upload_data.columns:
                 missing_types = st.session_state.upload_data['Type'].replace('', pd.NA).isna().sum()
@@ -2405,7 +2384,6 @@ if st.session_state.header_data is not None:
             if missing_types > 0:
                 st.error(f"🛑 STOP: {missing_types} rows are missing a Product Type. Please select a Type in the table below.")
 
-            # --- DATA EDITOR ---
             upload_col_config = {
                 "Attribute_5": st.column_config.SelectboxColumn("Core/Rotation", options=["Rotational Product", "Core Product"], required=True, width="medium"),
                 "Type": st.column_config.SelectboxColumn("Product Type", options=["Beer", "Cider", "Spirits", "Softs", "Wine", "Merch", "Dispense", "Snacks", "PoS", "Other"], required=True, width="medium"),
@@ -2413,7 +2391,6 @@ if st.session_state.header_data is not None:
             }
             
             current_cols = st.session_state.upload_data.columns.tolist()
-            # Ensure Type is 2nd in display
             disp_order = ['Attribute_5', 'Type', 'Sales_Price', 'item_price', 'Variant_Name', 'Variant_SKU', 'Family_Name']
             final_disp = []
             for c in disp_order:
@@ -2430,45 +2407,28 @@ if st.session_state.header_data is not None:
             )
             if edited_upload is not None: st.session_state.upload_data = edited_upload
 
-            # ... (Existing Data Editor code above remains the same) ...
-            
             # --- SEQUENTIAL UPLOAD LAYOUT ---
             st.divider()
             st.markdown("### 🚀 Step 2: Execute Uploads")
             st.caption("These must be run in order. Cin7 acts as the master record.")
             
-            # Create two equal columns: Cin7 (1st) -> Shopify (2nd)
             col_cin7, col_shopify = st.columns(2)
-            
-            # Common disable logic (e.g. missing types)
             base_disabled = not st.session_state.upload_generated or missing_types > 0
 
-            # ---------------------------------------------------------
-            # LEFT COLUMN: CIN7 (MUST RUN FIRST)
-            # ---------------------------------------------------------
+            # --- LEFT: CIN7 (1st) ---
             with col_cin7:
                 st.markdown("#### 1️⃣ Cin7 Upload")
-                
-                # Button
                 if st.button("🚀 Upload To Cin7", disabled=base_disabled, use_container_width=True):
                     if "cin7" in st.secrets:
                         unique_rows = st.session_state.upload_data.copy()
-                        
-                        # Active Log Container
                         log_container = st.empty()
-                        
-                        # Run Process
                         full_log = sync_product_to_cin7(unique_rows, status_box=log_container)
-                        
-                        # Save State
                         st.session_state.cin7_complete = True
                         st.session_state.cin7_log_text = "\n".join(full_log)
-                        
                         st.success("Cin7 Sync Complete! You can now proceed to Shopify.")
                         st.rerun()
                     else: st.error("Cin7 Secrets Missing")
 
-                # Persistent Log Render
                 if st.session_state.cin7_log_text:
                     with st.expander("✅ Cin7 Log (Completed)", expanded=False):
                         st.code(st.session_state.cin7_log_text, language="text")
@@ -2477,13 +2437,9 @@ if st.session_state.header_data is not None:
                 else:
                     st.info("Ready to upload.")
 
-            # ---------------------------------------------------------
-            # RIGHT COLUMN: SHOPIFY (DEPENDS ON CIN7)
-            # ---------------------------------------------------------
+            # --- RIGHT: SHOPIFY (2nd) ---
             with col_shopify:
                 st.markdown("#### 2️⃣ Shopify Upload")
-                
-                # Logic: Disabled if base issues OR Cin7 not done
                 shop_disabled = base_disabled or not st.session_state.cin7_complete
                 
                 if st.button("🚀 Upload to Shopify (L & G)", disabled=shop_disabled, use_container_width=True):
@@ -2491,7 +2447,6 @@ if st.session_state.header_data is not None:
                         st.error("Shopify secrets missing.")
                         st.stop()
                     
-                    # Setup IDs
                     creds = st.secrets["shopify"]
                     shop_url = creds.get("shop_url")
                     token = creds.get("access_token")
@@ -2502,14 +2457,12 @@ if st.session_state.header_data is not None:
                     status_ph = st.empty()
                     status_ph.info("Fetching Configuration...")
                     
-                    # Fetch Config
                     loc_data = fetch_shopify_location_ids()
                     if not loc_data or not loc_data['london'] or not loc_data['gloucester']:
                         status_ph.error("❌ Location Error.")
                         st.stop()
 
                     pub_data = fetch_publication_ids()
-                    
                     if not pub_data or not pub_data['london'] or not pub_data['gloucester']:
                         status_ph.warning("⚠️ Catalogs not found. Publishing skipped.")
                     else:
@@ -2518,10 +2471,7 @@ if st.session_state.header_data is not None:
                     time.sleep(1)
                     status_ph.empty() 
 
-                    # Active Log Container
                     log_container = st.empty()
-                    
-                    # Run Process
                     logs = []
                     def log_s(msg):
                         logs.append(msg)
@@ -2541,15 +2491,11 @@ if st.session_state.header_data is not None:
                             target_pub_id = pub_data['london'] if loc_prefix == "L" else pub_data['gloucester']
                             
                             if pid:
-                                # --- EXISTING PRODUCT ---
                                 log_s(f"   🔹 {loc_prefix}: Found ID {pid}. Checking variants...")
-                                
-                                # 1. Verify Catalog
                                 if target_pub_id:
                                     published = publish_product_to_app(pid, target_pub_id)
                                     if published: log_s(f"      📖 Verified in Catalog")
 
-                                # 2. Add Variants
                                 for _, row in group.iterrows():
                                     var_payload = {"variant": create_shopify_variant_payload(row, loc_prefix)}
                                     url = f"{base_url}/products/{pid}/variants.json"
@@ -2559,13 +2505,11 @@ if st.session_state.header_data is not None:
                                             v_data = r.json().get('variant', {})
                                             inv_item_id = v_data.get('inventory_item_id')
                                             var_title = row['Variant_Name']
-                                            
                                             if inv_item_id:
                                                 set_variant_location(inv_item_id, target_loc_id, loc_data['all_ids'])
                                                 log_s(f"      ✅ Added Variant & Set Loc: {var_title}")
                                             else:
                                                 log_s(f"      ⚠️ Added {var_title} but missed inventory ID.")
-                                                
                                         elif r.status_code == 422 and "already exists" in r.text:
                                              log_s(f"      ⚠️ Variant Exists: {row['Variant_Name']}")
                                         else:
@@ -2573,7 +2517,6 @@ if st.session_state.header_data is not None:
                                     except Exception as e:
                                         log_s(f"      💥 Exception: {e}")     
                             else:
-                                # --- NEW PRODUCT ---
                                 log_s(f"   🆕 {loc_prefix}: Creating New Product...")
                                 variants_list = []
                                 for _, row in group.iterrows():
@@ -2591,8 +2534,36 @@ if st.session_state.header_data is not None:
                                         new_id = p_resp['id']
                                         log_s(f"      ✅ Created Product! ID: {new_id}")
                                         
-                                        # 1. Update Inventory Locations
                                         created_variants = p_resp.get('variants', [])
+                                        for cv in created_variants:
+                                            inv_id = cv.get('inventory_item_id')
+                                            if inv_id:
+                                                set_variant_location(inv_id, target_loc_id, loc_data['all_ids'])
+                                        log_s(f"      📍 Location set to {'London' if loc_prefix=='L' else 'Gloucester'}")
+                                        
+                                        if target_pub_id:
+                                            published = publish_product_to_app(new_id, target_pub_id)
+                                            if published: log_s(f"      📖 Published to Catalog")
+                                            else: log_s(f"      ⚠️ Catalog Publish Failed")
+                                    else:
+                                        log_s(f"      ❌ Create Error: {r.text}")
+                                        log_s(json.dumps(prod_payload))
+                                except Exception as e:
+                                    log_s(f"      💥 Exception: {e}")
+                            time.sleep(0.5)
+                    
+                    st.session_state.shopify_log_text = "\n".join(logs)
+                    st.success("Shopify Process Complete!")
+                    st.rerun()
+
+                if st.session_state.shopify_log_text:
+                    with st.expander("✅ Shopify Log (Completed)", expanded=False):
+                        st.code(st.session_state.shopify_log_text, language="text")
+                elif shop_disabled:
+                    if not st.session_state.cin7_complete:
+                        st.warning("⏳ Waiting for Cin7 Upload to complete...")
+                    else:
+                        st.info("Waiting for data generation...")
 
     # --- TAB 5: HEADER / EXPORT ---
     # --- TAB 5: HEADER / EXPORT ---
@@ -2703,6 +2674,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
