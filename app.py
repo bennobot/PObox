@@ -2167,21 +2167,15 @@ if st.session_state.header_data is not None:
                         .replace("nan", "")
                     )
 
-            # --- FIX: ROBUST SAVE CALLBACK ---
+            # --- FIX: ROBUST DATA SYNC ---
             key_prep = f"prep_editor_{st.session_state.matrix_key}"
             
+            # We use an empty callback to satisfy Streamlit requirements, 
+            # but we perform the actual sync explicitly below.
             def save_prep():
-                # Get the edited subset dataframe
-                edited_subset = st.session_state[key_prep]
-                
-                # Check if it's a valid DataFrame before accessing columns
-                if hasattr(edited_subset, 'columns'):
-                    # Manually update the master dataframe column by column
-                    # This bypasses 'df.update()' errors with mixed types
-                    for col in edited_subset.columns:
-                        st.session_state.matrix_data[col] = edited_subset[col]
+                pass 
 
-            st.data_editor(
+            edited_prep = st.data_editor(
                 st.session_state.matrix_data[display_cols],
                 num_rows="fixed",
                 width='stretch',
@@ -2189,6 +2183,12 @@ if st.session_state.header_data is not None:
                 key=key_prep,
                 on_change=save_prep
             )
+            
+            # Force Sync: Update master dataframe with edited values IMMEDIATELY
+            if edited_prep is not None:
+                # Iterate columns manually to safely update the session state df
+                for col in edited_prep.columns:
+                    st.session_state.matrix_data[col] = edited_prep[col]
 
             st.divider()
             col_search, col_help = st.columns([1, 2])
@@ -2214,6 +2214,7 @@ if st.session_state.header_data is not None:
                     elif "untappd" in st.secrets:
                         log_placeholder.empty()
                         with st.spinner("Searching Untappd API..."):
+                             # Pass the now-synced matrix_data
                              updated_matrix, u_logs = batch_untappd_lookup(
                                  st.session_state.matrix_data, 
                                  status_box=log_placeholder
@@ -2707,6 +2708,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
