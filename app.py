@@ -2413,216 +2413,182 @@ if st.session_state.header_data is not None:
             )
             if edited_upload is not None: st.session_state.upload_data = edited_upload
 
-            # --- SHOPIFY SECTION ---
-            st.divider()
-            st.markdown("### 🛒 Shopify Integration")
-
-            col_shop_1, col_shop_2 = st.columns([1, 1])
+            # ... (Existing Data Editor code above remains the same) ...
             
-            with col_shop_1:
-                # Disabled if missing types or not generated
-                btn_disabled = not st.session_state.upload_generated or missing_types > 0
-                
-                if st.button("🕵️ Check Shopify Existence (L- & G-)", disabled=btn_disabled):
-                    if "shopify" in st.secrets:
-                        unique_families = st.session_state.upload_data['Family_Name'].unique()
-                        st.write(f"Scanning Shopify for {len(unique_families)} Families (x2 locations)...")
-                        results = []
-                        prog_bar = st.progress(0)
-                        for i, base_name in enumerate(unique_families):
-                            prog_bar.progress((i + 1) / len(unique_families))
-                            l_title = f"L-{base_name}"
-                            g_title = f"G-{base_name}"
-                            l_pid, _ = check_shopify_title(l_title)
-                            g_pid, _ = check_shopify_title(g_title)
-                            l_status = f"✅ ({l_pid})" if l_pid else "🆕 Create"
-                            g_status = f"✅ ({g_pid})" if g_pid else "🆕 Create"
-                            results.append({
-                                "Family Base Name": base_name,
-                                "L- Prefix": l_status, "G- Prefix": g_status,
-                                "L_ID": l_pid, "G_ID": g_pid  
-                            })
-                            time.sleep(0.2) 
-
-                        st.success("Scan Complete")
-                        results_df = pd.DataFrame(results)
-                        st.dataframe(results_df[["Family Base Name", "L- Prefix", "G- Prefix"]], use_container_width=True)
-                        st.session_state.shopify_check_results = results_df
-                    else: st.error("Shopify secrets missing.")
-
-            with col_shop_2:
-                if st.button("📍 Check Location IDs (Debug)"):
-                    if "shopify" in st.secrets:
-                        creds = st.secrets["shopify"]
-                        shop_url = creds.get("shop_url")
-                        token = creds.get("access_token")
-                        version = creds.get("api_version", "2024-04")
-                        url = f"https://{shop_url}/admin/api/{version}/locations.json"
-                        headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
-                        
-                        try:
-                            r = requests.get(url, headers=headers)
-                            if r.status_code == 200:
-                                locs = r.json().get('locations', [])
-                                st.write("### 🏢 Available Locations")
-                                for l in locs:
-                                    st.code(f"Name: {l['name']}\nID:   {l['id']}")
-                                st.info("If auto-detection fails, add these IDs to secrets.toml:\n\n[shopify]\nlocation_id_london = 123...\nlocation_id_gloucester = 456...")
-                            else:
-                                st.error(f"API Error: {r.status_code} - {r.text}")
-                        except Exception as e:
-                            st.error(f"Connection Error: {e}")
-
+            # --- SPLIT LAYOUT FOR INTEGRATIONS ---
             st.divider()
-
-            # Upload Button - Disabled if missing types
-            if st.button("🚀 Upload to Shopify (L & G)", disabled=btn_disabled):
-                if missing_types > 0:
-                    st.error("Please fill in all Product Types above first.")
-                    st.stop()
-                    
-                if "shopify" not in st.secrets:
-                    st.error("Shopify secrets missing.")
-                    st.stop()
-                
-                # ... (Rest of Shopify Upload Logic) ...
-                # 1. SETUP & FETCH IDs
-                creds = st.secrets["shopify"]
-                shop_url = creds.get("shop_url")
-                token = creds.get("access_token")
-                version = creds.get("api_version", "2023-04") 
-                base_url = f"https://{shop_url}/admin/api/{version}"
-                headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
-                
-                st.write("Fetching Configuration (Locations & Catalogs)...")
-                
-                # A. Locations
-                loc_data = fetch_shopify_location_ids()
-                if not loc_data or not loc_data['london'] or not loc_data['gloucester']:
-                    st.error("❌ Location Error: Could not find 'London' or 'Gloucester' Location IDs.")
-                    st.stop()
-
-                # B. Publications/Catalogs
-                pub_data = fetch_publication_ids()
-                if not pub_data or not pub_data['london'] or not pub_data['gloucester']:
-                    st.warning("⚠️ Catalog Warning: Could not find 'London' or 'Gloucester' Catalogs/Publications. Products will be created but NOT added to B2B catalogs.")
-                else:
-                    st.success("✅ Found Catalogs: London & Gloucester")
-
-                log_box = st.expander("Shopify Upload Logs", expanded=True)
-                grouped = st.session_state.upload_data.groupby('Family_Name')
-                prog_bar = st.progress(0)
-                total_groups = len(grouped)
-                
-                for i, (fam_name, group) in enumerate(grouped):
-                    prog_bar.progress((i)/total_groups)
-                    log_box.write(f"**Processing: {fam_name}**")
-                    
-                    for loc_prefix in ["L", "G"]:
-                        full_title = f"{loc_prefix}-{fam_name}"
-                        pid, existing_vid = check_shopify_title(full_title)
-                        
-                        target_loc_id = loc_data['london'] if loc_prefix == "L" else loc_data['gloucester']
-                        target_pub_id = pub_data['london'] if loc_prefix == "L" else pub_data['gloucester']
-                        
-                        if pid:
-                            # --- EXISTING PRODUCT ---
-                            log_box.write(f"   🔹 {loc_prefix}: Found ID {pid}. Checking variants...")
-                            
-                            # Ensure existing product is published to the catalog
-                            if target_pub_id:
-                                published = publish_product_to_app(pid, target_pub_id)
-                                if published: log_box.write(f"      📖 Verified in Catalog")
-
-                            for _, row in group.iterrows():
-                                var_payload = {"variant": create_shopify_variant_payload(row, loc_prefix)}
-                                url = f"{base_url}/products/{pid}/variants.json"
-                                try:
-                                    r = requests.post(url, json=var_payload, headers=headers)
-                                    if r.status_code in [200, 201]:
-                                        v_data = r.json().get('variant', {})
-                                        inv_item_id = v_data.get('inventory_item_id')
-                                        var_title = row['Variant_Name']
-                                        
-                                        if inv_item_id:
-                                            set_variant_location(inv_item_id, target_loc_id, loc_data['all_ids'])
-                                            log_box.write(f"      ✅ Added Variant & Set Loc: {var_title}")
-                                        else:
-                                            log_box.write(f"      ⚠️ Added {var_title} but missed inventory ID.")
-                                            
-                                    elif r.status_code == 422 and "already exists" in r.text:
-                                         log_box.write(f"      ⚠️ Variant SKU Exists: {row['Variant_Name']}")
-                                    else:
-                                        log_box.write(f"      ❌ Variant Error: {r.text}")
-                                        log_box.code(json.dumps(var_payload, indent=2))
-                                except Exception as e:
-                                    log_box.write(f"      💥 Variant Exception: {e}")
-                                    
-                        else:
-                            # --- NEW PRODUCT ---
-                            log_box.write(f"   🆕 {loc_prefix}: Creating New Product...")
-                            variants_list = []
-                            for _, row in group.iterrows():
-                                v_data = create_shopify_variant_payload(row, loc_prefix)
-                                variants_list.append(v_data)
-                            
-                            first_row = group.iloc[0]
-                            prod_payload = create_shopify_product_payload(first_row, loc_prefix, variants_list)
-                            
-                            url = f"{base_url}/products.json"
-                            try:
-                                r = requests.post(url, json=prod_payload, headers=headers)
-                                if r.status_code in [200, 201]:
-                                    p_resp = r.json()['product']
-                                    new_id = p_resp['id']
-                                    log_box.write(f"      ✅ Created Product! ID: {new_id}")
-                                    
-                                    # 1. Update Inventory Locations
-                                    created_variants = p_resp.get('variants', [])
-                                    for cv in created_variants:
-                                        inv_id = cv.get('inventory_item_id')
-                                        if inv_id:
-                                            set_variant_location(inv_id, target_loc_id, loc_data['all_ids'])
-                                    log_box.write(f"      📍 Location set to {'London' if loc_prefix=='L' else 'Gloucester'}")
-                                    
-                                    # 2. Publish to Catalog
-                                    if target_pub_id:
-                                        published = publish_product_to_app(new_id, target_pub_id)
-                                        if published: log_box.write(f"      📖 Published to Catalog")
-                                        else: log_box.write(f"      ⚠️ Catalog Publish Failed")
-
-                                else:
-                                    log_box.write(f"      ❌ Create Error: {r.text}")
-                                    log_box.code(json.dumps(prod_payload, indent=2))
-                            except Exception as e:
-                                log_box.write(f"      💥 Create Exception: {e}")
-                        time.sleep(0.5)
-                prog_bar.progress(1.0)
-                st.success("Shopify Process Complete!")
-
-            # --- CIN7 SECTION ---
-            st.divider()
-            st.markdown("### 📦 Cin7 Integration")
             
-            # Cin7 Upload - Disabled if missing types
-            if st.button("🚀 Upload To Cin7 (Families & Variants)", disabled=btn_disabled):
-                if missing_types > 0:
-                    st.error("Please fill in all Product Types above first.")
-                    st.stop()
+            # Create two equal columns
+            col_shopify, col_cin7 = st.columns(2)
+            
+            # Define disable state for both buttons
+            btn_disabled = not st.session_state.upload_generated or missing_types > 0
 
-                if "cin7" in st.secrets:
-                    unique_rows = st.session_state.upload_data.copy()
+            # ---------------------------------------------------------
+            # LEFT COLUMN: SHOPIFY
+            # ---------------------------------------------------------
+            with col_shopify:
+                st.markdown("### 🛒 Shopify Upload")
+                
+                if st.button("🚀 Upload to Shopify (L & G)", disabled=btn_disabled, use_container_width=True):
+                    if missing_types > 0:
+                        st.error("Please fill in all Product Types above first.")
+                        st.stop()
+                        
+                    if "shopify" not in st.secrets:
+                        st.error("Shopify secrets missing.")
+                        st.stop()
                     
-                    # Create the container for real-time logs
-                    log_expander = st.expander("Sync Log (Real-Time)", expanded=True)
+                    # 1. SETUP & FETCH IDs
+                    creds = st.secrets["shopify"]
+                    shop_url = creds.get("shop_url")
+                    token = creds.get("access_token")
+                    version = creds.get("api_version", "2023-04") 
+                    base_url = f"https://{shop_url}/admin/api/{version}"
+                    headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
+                    
+                    status_ph = st.empty()
+                    status_ph.info("Fetching Configuration (Locations & Catalogs)...")
+                    
+                    # A. Locations
+                    loc_data = fetch_shopify_location_ids()
+                    if not loc_data or not loc_data['london'] or not loc_data['gloucester']:
+                        status_ph.error("❌ Location Error: Could not find 'London' or 'Gloucester' Location IDs.")
+                        st.stop()
+
+                    # B. Publications/Catalogs
+                    pub_data = fetch_publication_ids()
+                    if not pub_data or not pub_data['london'] or not pub_data['gloucester']:
+                        status_ph.warning("⚠️ Catalog Warning: Could not find 'London' or 'Gloucester' Catalogs. Products will create but NOT publish to B2B.")
+                        time.sleep(2)
+                    else:
+                        status_ph.success("✅ Found Catalogs: London & Gloucester")
+                        time.sleep(1)
+
+                    status_ph.empty() # Clear status to make room for logs
+                    
+                    # Real-time Log Container
+                    log_expander = st.expander("Shopify Log (Real-Time)", expanded=True)
                     with log_expander:
-                        status_box = st.empty() # Placeholder for the scrolling text
+                        log_box = st.empty()
                         
-                    # Pass the placeholder into the function
-                    full_log = sync_product_to_cin7(unique_rows, status_box=status_box)
+                    logs = []
+                    def log_s(msg):
+                        logs.append(msg)
+                        log_box.code("\n".join(logs))
+
+                    grouped = st.session_state.upload_data.groupby('Family_Name')
+                    total_groups = len(grouped)
+                    prog_bar = st.progress(0)
                     
-                    st.success("Sync Process Complete!")
-                else: st.error("Cin7 Secrets Missing")
+                    for i, (fam_name, group) in enumerate(grouped):
+                        prog_bar.progress((i)/total_groups)
+                        log_s(f"**Processing: {fam_name}**")
+                        
+                        for loc_prefix in ["L", "G"]:
+                            full_title = f"{loc_prefix}-{fam_name}"
+                            pid, existing_vid = check_shopify_title(full_title)
+                            
+                            target_loc_id = loc_data['london'] if loc_prefix == "L" else loc_data['gloucester']
+                            target_pub_id = pub_data['london'] if loc_prefix == "L" else pub_data['gloucester']
+                            
+                            if pid:
+                                # --- EXISTING PRODUCT ---
+                                log_s(f"   🔹 {loc_prefix}: Found ID {pid}. Checking variants...")
+                                
+                                if target_pub_id:
+                                    published = publish_product_to_app(pid, target_pub_id)
+                                    if published: log_s(f"      📖 Verified in Catalog")
+
+                                for _, row in group.iterrows():
+                                    var_payload = {"variant": create_shopify_variant_payload(row, loc_prefix)}
+                                    url = f"{base_url}/products/{pid}/variants.json"
+                                    try:
+                                        r = requests.post(url, json=var_payload, headers=headers)
+                                        if r.status_code in [200, 201]:
+                                            v_data = r.json().get('variant', {})
+                                            inv_item_id = v_data.get('inventory_item_id')
+                                            var_title = row['Variant_Name']
+                                            
+                                            if inv_item_id:
+                                                set_variant_location(inv_item_id, target_loc_id, loc_data['all_ids'])
+                                                log_s(f"      ✅ Added Variant & Set Loc: {var_title}")
+                                            else:
+                                                log_s(f"      ⚠️ Added {var_title} but missed inventory ID.")
+                                                
+                                        elif r.status_code == 422 and "already exists" in r.text:
+                                             log_s(f"      ⚠️ Variant SKU Exists: {row['Variant_Name']}")
+                                        else:
+                                            log_s(f"      ❌ Variant Error: {r.text}")
+                                    except Exception as e:
+                                        log_s(f"      💥 Variant Exception: {e}")
+                                        
+                            else:
+                                # --- NEW PRODUCT ---
+                                log_s(f"   🆕 {loc_prefix}: Creating New Product...")
+                                variants_list = []
+                                for _, row in group.iterrows():
+                                    v_data = create_shopify_variant_payload(row, loc_prefix)
+                                    variants_list.append(v_data)
+                                
+                                first_row = group.iloc[0]
+                                prod_payload = create_shopify_product_payload(first_row, loc_prefix, variants_list)
+                                
+                                url = f"{base_url}/products.json"
+                                try:
+                                    r = requests.post(url, json=prod_payload, headers=headers)
+                                    if r.status_code in [200, 201]:
+                                        p_resp = r.json()['product']
+                                        new_id = p_resp['id']
+                                        log_s(f"      ✅ Created Product! ID: {new_id}")
+                                        
+                                        # 1. Update Inventory Locations
+                                        created_variants = p_resp.get('variants', [])
+                                        for cv in created_variants:
+                                            inv_id = cv.get('inventory_item_id')
+                                            if inv_id:
+                                                set_variant_location(inv_id, target_loc_id, loc_data['all_ids'])
+                                        log_s(f"      📍 Location set to {'London' if loc_prefix=='L' else 'Gloucester'}")
+                                        
+                                        # 2. Publish to Catalog
+                                        if target_pub_id:
+                                            published = publish_product_to_app(new_id, target_pub_id)
+                                            if published: log_s(f"      📖 Published to Catalog")
+                                            else: log_s(f"      ⚠️ Catalog Publish Failed")
+
+                                    else:
+                                        log_s(f"      ❌ Create Error: {r.text}")
+                                except Exception as e:
+                                    log_s(f"      💥 Create Exception: {e}")
+                            time.sleep(0.5)
+                    
+                    prog_bar.progress(1.0)
+                    st.success("Shopify Process Complete!")
+
+            # ---------------------------------------------------------
+            # RIGHT COLUMN: CIN7
+            # ---------------------------------------------------------
+            with col_cin7:
+                st.markdown("### 📦 Cin7 Upload")
+                
+                if st.button("🚀 Upload To Cin7", disabled=btn_disabled, use_container_width=True):
+                    if missing_types > 0:
+                        st.error("Please fill in all Product Types above first.")
+                        st.stop()
+
+                    if "cin7" in st.secrets:
+                        unique_rows = st.session_state.upload_data.copy()
+                        
+                        # Real-time Log Container
+                        log_expander = st.expander("Cin7 Log (Real-Time)", expanded=True)
+                        with log_expander:
+                            status_box = st.empty()
+                            
+                        # Pass the placeholder into the function
+                        full_log = sync_product_to_cin7(unique_rows, status_box=status_box)
+                        
+                        st.success("Cin7 Sync Complete!")
+                    else: st.error("Cin7 Secrets Missing")
 
     # --- TAB 5: HEADER / EXPORT ---
     # --- TAB 5: HEADER / EXPORT ---
@@ -2733,6 +2699,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
