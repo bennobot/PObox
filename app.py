@@ -2018,6 +2018,7 @@ if st.button("🚀 Process Invoice", type="primary"):
         st.warning("Please upload a file or select one from Google Drive first.")
 
 # ==========================================
+# ==========================================
 # 4. RESULTS DISPLAY
 # ==========================================
 
@@ -2026,6 +2027,18 @@ if st.session_state.header_data is not None:
     st.divider()
     
     df = st.session_state.line_items
+    
+    # --- SAFETY FIX: Handle Dictionary Corruption ---
+    # If the state became a dict, force it back to a DataFrame
+    if isinstance(df, dict):
+        try:
+            df = pd.DataFrame.from_dict(df)
+            st.session_state.line_items = df
+        except Exception:
+            st.error("⚠️ Data Error: Session state corrupted. Please click 'Reset / New Invoice'.")
+            st.stop()
+    # -----------------------------------------------
+
     if 'Shopify_Status' in df.columns:
         unmatched_count = len(df[df['Shopify_Status'] != "✅ Match"])
     else: unmatched_count = len(df) 
@@ -2067,21 +2080,20 @@ if st.session_state.header_data is not None:
             "Strict_Search": st.column_config.CheckboxColumn("Strict?", width="small", help="Tick to force exact name matching (prevents Vol 1 matching Vol 2)")
         }
 
-        # --- FIX: CALLBACK SAVE ---
+        # --- FIX: DIRECT SYNC (No Callback) ---
         key_lines = f"line_editor_{st.session_state.line_items_key}"
         
-        def save_lines():
-            # Save the editor state back to the main session variable
-            st.session_state.line_items = st.session_state[key_lines]
-
-        st.data_editor(
+        edited_lines = st.data_editor(
             display_df, 
             num_rows="dynamic", 
             width='stretch',
             key=key_lines,
-            column_config=column_config,
-            on_change=save_lines
+            column_config=column_config
         )
+        
+        # Immediately update session state with edits
+        if edited_lines is not None:
+            st.session_state.line_items = edited_lines
 
         col1, col2 = st.columns([1, 4])
         with col1:
@@ -2708,6 +2720,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
