@@ -238,9 +238,10 @@ def search_untappd_item(supplier, product):
     except: pass
     return {"query_used": query_str}
 
-def batch_untappd_lookup(matrix_df):
+def batch_untappd_lookup(matrix_df, status_box=None):
     if matrix_df.empty: return matrix_df, ["Matrix Empty"]
     
+    # Add 'Match_Check' and 'Retry' to columns list
     cols = ['Untappd_Status', 'Untappd_ID', 'Untappd_Brewery', 'Untappd_Product', 
             'Untappd_ABV', 'Untappd_IBU', 'Untappd_Style', 'Untappd_Desc', 
             'Label_Thumb', 'Brewery_Loc', 'Untappd_Country', 'Match_Check', 'Retry']
@@ -250,6 +251,14 @@ def batch_untappd_lookup(matrix_df):
             
     updated_rows = []
     logs = []
+    
+    # Helper for Real-Time Logging
+    def log_msg(msg):
+        logs.append(msg)
+        if status_box:
+            # Update the UI container immediately
+            status_box.code("\n".join(logs), language="text")
+
     prog_bar = st.progress(0)
     
     for idx, row in matrix_df.iterrows():
@@ -258,17 +267,18 @@ def batch_untappd_lookup(matrix_df):
         current_status = str(row.get('Untappd_Status', ''))
         retry_flag = row.get('Retry', False)
         
+        # Search if not found OR if user requested retry
         if current_status != "✅ Found" or retry_flag:
             res = search_untappd_item(row['Supplier_Name'], row['Product_Name'])
             
             if res and "untappd_id" in res:
                 # --- MATCH FOUND ---
-                logs.append(f"✅ Found: {res['name']}")
+                log_msg(f"✅ Found: {res['name']}")
                 row['Untappd_Status'] = "✅ Found"
                 row['Untappd_ID'] = res['untappd_id']
                 row['Untappd_Brewery'] = res['brewery']
                 row['Untappd_Product'] = res['name']
-                row['Untappd_ABV'] = res['abv'] # Keep Untappd's 0 if found
+                row['Untappd_ABV'] = res['abv'] 
                 row['Untappd_IBU'] = res['ibu']
                 row['Untappd_Style'] = res['style']
                 row['Untappd_Desc'] = res['description']
@@ -276,33 +286,33 @@ def batch_untappd_lookup(matrix_df):
                 row['Brewery_Loc'] = res['brewery_location']
                 row['Untappd_Country'] = res['brewery_country']
                 
+                # Create Readable Match Summary
                 clean_res_abv = clean_abv(res['abv'])
                 row['Match_Check'] = f"{res['brewery']} / {res['name']} / {clean_res_abv}%"
                 
             else:
                 # --- NO MATCH ---
                 used_q = res.get('query_used', 'Unknown') if res else 'Error'
-                logs.append(f"❌ No match: {row['Product_Name']} | Query Sent: [{used_q}]")
+                log_msg(f"❌ No match: {row['Product_Name']} | Query: [{used_q}]")
                 
                 row['Untappd_Status'] = "❌ Not Found"
                 row['Match_Check'] = "No Match Found"
                 row['Untappd_ID'] = "" 
                 
+                # Pre-fill with Invoice Data
                 row['Untappd_Brewery'] = row.get('Supplier_Name', '')
                 row['Untappd_Product'] = row.get('Product_Name', '')
                 
-                # --- FIX: FALLBACK WITH 0 WIPE ---
+                # Use Invoice ABV if available, else Blank (force manual entry)
                 raw_invoice_abv = row.get('ABV', '')
-                clean_fallback = clean_abv(raw_invoice_abv)
-                if clean_fallback in ["0", "0.0"]:
-                    clean_fallback = "" # Force blank
-                row['Untappd_ABV'] = clean_fallback
-                # ---------------------------------
+                # clean_abv returns "" if input is empty/0, or "4.5" if "4.5%"
+                row['Untappd_ABV'] = clean_abv(raw_invoice_abv)
                 
                 row['Untappd_Style'] = "" 
                 row['Untappd_Desc'] = ""
                 row['Label_Thumb'] = ""
             
+            # Reset Retry Flag
             row['Retry'] = False
         
         updated_rows.append(row)
@@ -2183,28 +2193,47 @@ if st.session_state.header_data is not None:
 
             st.divider()
             col_search, col_help = st.columns([1, 2])
+            
+            # -- Right Column: Log Placeholder --
+            with col_help:
+                st.markdown("**Search Logs:**")
+                log_placeholder = st.empty()
+                
+                # If logs exist in state (and we aren't currently running), show them
+                if st.session_state.untappd_logs:
+                    # Join list into string for code block display
+                    log_text = "\n".join(st.session_state.untappd_logs)
+                    log_placeholder.code(log_text, language="text")
+                else:
+                    log_placeholder.info("Ready to search.")
+
+            # -- Left Column: Button Logic --
             with col_search:
                 missing_types = st.session_state.matrix_data['Type'].replace('', pd.NA).isna().sum()
                 
-                # Button Text Changes based on state
                 btn_label = "🔎 Search Untappd Details" if not search_has_run else "🔎 Search Again / Retry"
                 
                 if st.button(btn_label, type="primary"):
                     if missing_types > 0:
                         st.error(f"⚠️ Please select a Product Type for all {missing_types} rows above before searching.")
                     elif "untappd" in st.secrets:
+                        # Clear previous logs visually before starting
+                        log_placeholder.empty()
+                        
                         with st.spinner("Searching Untappd API..."):
-                             updated_matrix, u_logs = batch_untappd_lookup(st.session_state.matrix_data)
+                             # Pass the placeholder to the function for real-time updates
+                             updated_matrix, u_logs = batch_untappd_lookup(
+                                 st.session_state.matrix_data, 
+                                 status_box=log_placeholder
+                             )
+                             
                              st.session_state.matrix_data = updated_matrix
                              st.session_state.untappd_logs = u_logs
                              st.session_state.matrix_key += 1 
+                             
                              st.success("Search Complete!") 
                              st.rerun()
                     else: st.error("Untappd Secrets Missing")
-            with col_help:
-                if st.session_state.untappd_logs:
-                    with st.expander("View Search Logs"): st.write(st.session_state.untappd_logs)
-        else: st.info("Run 'Check Inventory' in Tab 1 first.")
 
     # --- TAB 3: PREPARE UPLOAD ---
     with current_tabs[2]:
@@ -2674,6 +2703,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
