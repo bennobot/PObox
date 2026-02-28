@@ -2131,10 +2131,8 @@ if st.session_state.header_data is not None:
         elif st.session_state.matrix_data is not None and not st.session_state.matrix_data.empty:
             
             # --- 1. CHECK IF SEARCH HAS BEEN RUN ---
-            # We look for any non-empty value in the Untappd_Status column
             search_has_run = False
             if 'Untappd_Status' in st.session_state.matrix_data.columns:
-                # distinct values that are not empty string
                 status_vals = st.session_state.matrix_data['Untappd_Status'].astype(str).unique()
                 if any(v.strip() for v in status_vals):
                     search_has_run = True
@@ -2144,7 +2142,7 @@ if st.session_state.header_data is not None:
             else:
                 st.info("👇 Select the **Product Type** for each item below, then click Search.")
             
-            type_options = ["Beer", "Cider", "Spirits", "Softs", "Wine", "Merch", "Dispense", "Snacks", "PoS", "Other", "Free Of Charge PoS"]
+            type_options =["Beer", "Cider", "Spirits", "Softs", "Wine", "Merch", "Dispense", "Snacks", "PoS", "Other", "Free Of Charge PoS"]
             
             # --- 2. CONFIG ---
             prep_config = {
@@ -2154,7 +2152,6 @@ if st.session_state.header_data is not None:
                 "Retry": st.column_config.CheckboxColumn("Retry?", width="small", help="Tick this and click Search to re-run lookup for this line.")
             }
             
-            # Add Dynamic Config for Repeating Columns
             for i in range(1, 4):
                 prep_config[f"Format{i}"] = st.column_config.TextColumn(f"Format {i}", width="small")
                 prep_config[f"Pack_Size{i}"] = st.column_config.TextColumn(f"Pack {i}", width="small")
@@ -2164,11 +2161,9 @@ if st.session_state.header_data is not None:
 
             # --- 3. DYNAMIC COLUMN ORDER ---
             if search_has_run:
-                # Post-Search: Retry First, then Status/Check, then Data
-                base_cols = ['Retry', 'Untappd_Status', 'Match_Check', 'Supplier_Name', 'Type', 'Collaborator', 'Product_Name', 'ABV']
+                base_cols =['Retry', 'Untappd_Status', 'Match_Check', 'Supplier_Name', 'Type', 'Collaborator', 'Product_Name', 'ABV']
             else:
-                # Pre-Search: Just Data (Cleaner UI)
-                base_cols = ['Supplier_Name', 'Type', 'Collaborator', 'Product_Name', 'ABV']
+                base_cols =['Supplier_Name', 'Type', 'Collaborator', 'Product_Name', 'ABV']
             
             ordered_cols = base_cols.copy()
             for i in range(1, 4):
@@ -2188,64 +2183,62 @@ if st.session_state.header_data is not None:
                         .replace("nan", "")
                     )
 
-            edited_prep = st.data_editor(
-                st.session_state.matrix_data[display_cols],
-                num_rows="fixed",
-                width='stretch',
-                column_config=prep_config,
-                key=f"prep_editor_{st.session_state.matrix_key}"
-            )
-            
-            if edited_prep is not None:
-                st.session_state.matrix_data.update(edited_prep)
+            # --- 4. RENDER EDITOR INSIDE A FORM ---
+            with st.form(key=f"prep_form_{st.session_state.matrix_key}"):
+                st.caption("✏️ **Make your edits below, then click 'Save Changes' before searching.**")
+                
+                edited_prep = st.data_editor(
+                    st.session_state.matrix_data[display_cols],
+                    num_rows="fixed",
+                    width='stretch',
+                    column_config=prep_config,
+                    key=f"prep_editor_{st.session_state.matrix_key}"
+                )
+                
+                save_prep_clicked = st.form_submit_button("💾 Save Changes", type="primary")
+                
+                if save_prep_clicked:
+                    st.session_state.matrix_data.update(edited_prep)
+                    st.success("✅ Changes saved successfully!")
+                    st.rerun()
 
             st.divider()
+            
+            # --- 5. SEARCH ACTION (Outside the form) ---
             col_search, col_help = st.columns([1, 2])
             
-            # -- Right Column: Log Placeholder --
             with col_help:
                 st.markdown("**Search Logs:**")
                 log_placeholder = st.empty()
-                
-                # If logs exist in state (and we aren't currently running), show them
                 if st.session_state.untappd_logs:
-                    # Join list into string for code block display
                     log_text = "\n".join(st.session_state.untappd_logs)
                     log_placeholder.code(log_text, language="text")
                 else:
                     log_placeholder.info("Ready to search.")
 
-            # -- Left Column: Button Logic --
             with col_search:
                 missing_types = st.session_state.matrix_data['Type'].replace('', pd.NA).isna().sum()
-                
                 btn_label = "🔎 Search Untappd Details" if not search_has_run else "🔎 Search Again / Retry"
                 
-                if st.button(btn_label, type="primary"):
+                if st.button(btn_label):
                     if missing_types > 0:
                         st.error(f"⚠️ Please select a Product Type for all {missing_types} rows above before searching.")
                     elif "untappd" in st.secrets:
-                        # Clear previous logs visually before starting
                         log_placeholder.empty()
-                        
                         with st.spinner("Searching Untappd API..."):
-                             # Pass the placeholder to the function for real-time updates
                              updated_matrix, u_logs = batch_untappd_lookup(
                                  st.session_state.matrix_data, 
                                  status_box=log_placeholder
                              )
-                             
                              st.session_state.matrix_data = updated_matrix
                              st.session_state.untappd_logs = u_logs
                              st.session_state.matrix_key += 1 
-                             
                              st.success("Search Complete!") 
                              st.rerun()
                     else: st.error("Untappd Secrets Missing")
 
     # --- TAB 3: PREPARE UPLOAD ---
     with current_tabs[2]:
-        # --- UPDATED SUBHEADER ---
         st.subheader("3. Review matches and add missing product information")
         
         has_untappd_cols = 'Untappd_Status' in st.session_state.matrix_data.columns if st.session_state.matrix_data is not None else False
@@ -2256,10 +2249,9 @@ if st.session_state.header_data is not None:
         elif st.session_state.matrix_data is not None and not st.session_state.matrix_data.empty:
             st.info("👇 These details will be used to create products in Cin7. Edit manually if the match is wrong or missing.")
             
-            # ... (Rest of Tab 3 code remains the same)
-            u_cols = ['Untappd_Status', 'Label_Thumb', 'Untappd_Brewery', 'Untappd_Product', 'Untappd_ABV', 'Untappd_Style', 'Untappd_Desc']
-            invoice_cols = ['Supplier_Name', 'Product_Name', 'Format1'] 
-            full_view = u_cols + [c for c in invoice_cols if c in st.session_state.matrix_data.columns]
+            u_cols =['Untappd_Status', 'Label_Thumb', 'Untappd_Brewery', 'Untappd_Product', 'Untappd_ABV', 'Untappd_Style', 'Untappd_Desc']
+            invoice_cols =['Supplier_Name', 'Product_Name', 'Format1'] 
+            full_view = u_cols +[c for c in invoice_cols if c in st.session_state.matrix_data.columns]
             
             column_config = {
                 "Label_Thumb": st.column_config.ImageColumn("Label", width="small"),
@@ -2270,19 +2262,30 @@ if st.session_state.header_data is not None:
                 "Untappd_Product": st.column_config.TextColumn("Product Name (Cin7)", width="medium"),
             }
 
-            edited_matches = st.data_editor(
-                st.session_state.matrix_data,
-                column_order=full_view,
-                num_rows="fixed",
-                width='stretch',
-                key=f"match_editor_{st.session_state.matrix_key}",
-                column_config=column_config
-            )
-            
-            if edited_matches is not None: st.session_state.matrix_data = edited_matches
+            # --- RENDER EDITOR INSIDE A FORM ---
+            with st.form(key=f"match_form_{st.session_state.matrix_key}"):
+                st.caption("✏️ **Make your edits below, then click 'Save Changes' before validating.**")
+                
+                edited_matches = st.data_editor(
+                    st.session_state.matrix_data,
+                    column_order=full_view,
+                    num_rows="fixed",
+                    width='stretch',
+                    key=f"match_editor_{st.session_state.matrix_key}",
+                    column_config=column_config
+                )
+                
+                save_match_clicked = st.form_submit_button("💾 Save Changes", type="primary")
+                
+                if save_match_clicked:
+                    st.session_state.matrix_data = edited_matches
+                    st.success("✅ Changes saved successfully!")
+                    st.rerun()
 
             st.divider()
-            if st.button("✨ Validate & Stage for Upload", type="primary"):
+            
+            # --- ACTION BUTTON (Outside the form) ---
+            if st.button("✨ Validate & Stage for Upload"):
                 staged_df, errors = stage_products_for_upload(st.session_state.matrix_data)
                 if errors:
                     for e in errors: st.error(e)
@@ -2711,6 +2714,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
