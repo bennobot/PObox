@@ -2509,6 +2509,13 @@ if st.session_state.header_data is not None:
                         st.stop()
 
                     pub_data = fetch_publication_ids()
+                    
+                    if not pub_data or not pub_data['london'] or not pub_data['gloucester']:
+                        status_ph.warning("⚠️ Catalogs not found. Publishing skipped.")
+                    else:
+                        status_ph.success("✅ Configuration Loaded")
+                        
+                    time.sleep(1)
                     status_ph.empty() 
 
                     # Active Log Container
@@ -2534,11 +2541,15 @@ if st.session_state.header_data is not None:
                             target_pub_id = pub_data['london'] if loc_prefix == "L" else pub_data['gloucester']
                             
                             if pid:
-                                # Update Existing
+                                # --- EXISTING PRODUCT ---
                                 log_s(f"   🔹 {loc_prefix}: Found ID {pid}. Checking variants...")
+                                
+                                # 1. Verify Catalog
                                 if target_pub_id:
-                                    publish_product_to_app(pid, target_pub_id)
+                                    published = publish_product_to_app(pid, target_pub_id)
+                                    if published: log_s(f"      📖 Verified in Catalog")
 
+                                # 2. Add Variants
                                 for _, row in group.iterrows():
                                     var_payload = {"variant": create_shopify_variant_payload(row, loc_prefix)}
                                     url = f"{base_url}/products/{pid}/variants.json"
@@ -2547,9 +2558,14 @@ if st.session_state.header_data is not None:
                                         if r.status_code in [200, 201]:
                                             v_data = r.json().get('variant', {})
                                             inv_item_id = v_data.get('inventory_item_id')
+                                            var_title = row['Variant_Name']
+                                            
                                             if inv_item_id:
                                                 set_variant_location(inv_item_id, target_loc_id, loc_data['all_ids'])
-                                                log_s(f"      ✅ Added Variant: {row['Variant_Name']}")
+                                                log_s(f"      ✅ Added Variant & Set Loc: {var_title}")
+                                            else:
+                                                log_s(f"      ⚠️ Added {var_title} but missed inventory ID.")
+                                                
                                         elif r.status_code == 422 and "already exists" in r.text:
                                              log_s(f"      ⚠️ Variant Exists: {row['Variant_Name']}")
                                         else:
@@ -2557,7 +2573,7 @@ if st.session_state.header_data is not None:
                                     except Exception as e:
                                         log_s(f"      💥 Exception: {e}")     
                             else:
-                                # Create New
+                                # --- NEW PRODUCT ---
                                 log_s(f"   🆕 {loc_prefix}: Creating New Product...")
                                 variants_list = []
                                 for _, row in group.iterrows():
@@ -2575,34 +2591,8 @@ if st.session_state.header_data is not None:
                                         new_id = p_resp['id']
                                         log_s(f"      ✅ Created Product! ID: {new_id}")
                                         
+                                        # 1. Update Inventory Locations
                                         created_variants = p_resp.get('variants', [])
-                                        for cv in created_variants:
-                                            inv_id = cv.get('inventory_item_id')
-                                            if inv_id:
-                                                set_variant_location(inv_id, target_loc_id, loc_data['all_ids'])
-                                        
-                                        if target_pub_id:
-                                            publish_product_to_app(new_id, target_pub_id)
-                                    else:
-                                        log_s(f"      ❌ Create Error: {r.text}")
-                                except Exception as e:
-                                    log_s(f"      💥 Exception: {e}")
-                            time.sleep(0.5)
-                    
-                    # Save State
-                    st.session_state.shopify_log_text = "\n".join(logs)
-                    st.success("Shopify Process Complete!")
-                    st.rerun()
-
-                # Persistent Log Render
-                if st.session_state.shopify_log_text:
-                    with st.expander("✅ Shopify Log (Completed)", expanded=False):
-                        st.code(st.session_state.shopify_log_text, language="text")
-                elif shop_disabled:
-                    if not st.session_state.cin7_complete:
-                        st.warning("⏳ Waiting for Cin7 Upload to complete...")
-                    else:
-                        st.info("Waiting for data generation...")
 
     # --- TAB 5: HEADER / EXPORT ---
     # --- TAB 5: HEADER / EXPORT ---
@@ -2713,6 +2703,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
