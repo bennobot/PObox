@@ -2167,12 +2167,19 @@ if st.session_state.header_data is not None:
                         .replace("nan", "")
                     )
 
-            # --- FIX: CALLBACK SAVE (Subset Update) ---
+            # --- FIX: ROBUST SAVE CALLBACK ---
             key_prep = f"prep_editor_{st.session_state.matrix_key}"
             
             def save_prep():
-                changes = st.session_state[key_prep]
-                st.session_state.matrix_data.update(changes)
+                # Get the edited subset dataframe
+                edited_subset = st.session_state[key_prep]
+                
+                # Check if it's a valid DataFrame before accessing columns
+                if hasattr(edited_subset, 'columns'):
+                    # Manually update the master dataframe column by column
+                    # This bypasses 'df.update()' errors with mixed types
+                    for col in edited_subset.columns:
+                        st.session_state.matrix_data[col] = edited_subset[col]
 
             st.data_editor(
                 st.session_state.matrix_data[display_cols],
@@ -2700,6 +2707,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
