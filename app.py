@@ -2036,7 +2036,6 @@ if st.session_state.header_data is not None:
     current_tabs = st.tabs(tabs)
     
     # --- TAB 1: LINE ITEMS ---
-    # --- TAB 1: LINE ITEMS ---
     with current_tabs[0]:
         st.subheader("1. Review & Edit Lines")
         
@@ -2044,10 +2043,10 @@ if st.session_state.header_data is not None:
         display_df = st.session_state.line_items.copy()
         
         # 2. Define Order (Use ACTUAL column names)
-        ideal_order = [
+        ideal_order =[
             'Use_Split', 
             'Strict_Search', 
-            'Shopify_Status', # <--- Keep original name
+            'Shopify_Status', 
             'Matched_Product', 
             'Matched_Variant', 
             'Image', 
@@ -2067,13 +2066,12 @@ if st.session_state.header_data is not None:
         
         # Filter and Reorder columns safely
         final_cols = [c for c in ideal_order if c in display_df.columns]
-        rem = [c for c in display_df.columns if c not in final_cols]
+        rem =[c for c in display_df.columns if c not in final_cols]
         display_df = display_df[final_cols + rem]
         
         # 3. Configure Columns (Renaming happens VISUALLY here)
         column_config = {
             "Image": st.column_config.ImageColumn("Img"),
-            # Rename header visually, but keep data ID same to prevent bugs
             "Shopify_Status": st.column_config.TextColumn("Status", disabled=True), 
             "Matched_Product": st.column_config.TextColumn("Shopify Match", disabled=True),
             "Matched_Variant": st.column_config.TextColumn("Variant Match", disabled=True),
@@ -2081,19 +2079,29 @@ if st.session_state.header_data is not None:
             "Strict_Search": st.column_config.CheckboxColumn("Strict?", width="small", help="Tick to force exact name matching (prevents Vol 1 matching Vol 2)")
         }
 
-        # 4. Render Editor
-        edited_lines = st.data_editor(
-            display_df, 
-            num_rows="dynamic", 
-            width='stretch',
-            key=f"line_editor_{st.session_state.line_items_key}",
-            column_config=column_config
-        )
+        # 4. Render Editor inside a Form to prevent cell-reverting bugs
+        with st.form(key=f"line_items_form_{st.session_state.line_items_key}"):
+            st.info("✏️ **Make your edits below, then click 'Save Changes' before checking inventory.**")
+            
+            edited_lines = st.data_editor(
+                display_df, 
+                num_rows="dynamic", 
+                width='stretch',
+                key=f"line_editor_{st.session_state.line_items_key}",
+                column_config=column_config
+            )
+            
+            # 5. The Explicit Save Button
+            save_clicked = st.form_submit_button("💾 Save Changes", type="primary")
+            
+            if save_clicked:
+                st.session_state.line_items = edited_lines
+                st.success("✅ Changes saved successfully!")
+                st.rerun()
         
-        # 5. Save Data (Directly, no conversion needed)
-        if edited_lines is not None:
-            st.session_state.line_items = edited_lines
+        st.divider()
 
+        # 6. Action Buttons (Outside the form so they don't trigger the save logic)
         col1, col2 = st.columns([1, 4])
         with col1:
             if "shopify" in st.secrets:
@@ -2703,6 +2711,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
