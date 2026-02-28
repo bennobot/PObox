@@ -2035,45 +2035,31 @@ if st.session_state.header_data is not None:
     tabs = ["📝 1. Line Items", "🔍 2. Prepare Search", "🍺 3. Prepare Upload", "☁️ 4. Product Upload", "🚀 5. Finalize PO"]
     current_tabs = st.tabs(tabs)
     
-    # --- TAB 1: LINE ITEMS ---
-    # --- TAB 1: LINE ITEMS ---
+    # ==========================================
+    # TAB 1: LINE ITEMS
+    # ==========================================
     with current_tabs[0]:
         st.subheader("1. Review & Edit Lines")
         
-        # 1. Prepare Display Data (No Renaming Columns!)
+        # 1. Prepare Display Data
         display_df = st.session_state.line_items.copy()
         
-        # 2. Define Order (Use ACTUAL column names)
+        # 2. Define Order
         ideal_order = [
-            'Use_Split', 
-            'Strict_Search', 
-            'Shopify_Status', # <--- Keep original name
-            'Matched_Product', 
-            'Matched_Variant', 
-            'Image', 
-            'Supplier_Name', 
-            'Product_Name', 
-            'ABV', 
-            'Format', 
-            'Pack_Size', 
-            'Volume', 
-            'Quantity', 
-            'Item_Price', 
-            'Collaborator', 
-            'Shopify_Variant_ID', 
-            'London_SKU', 
-            'Gloucester_SKU'
+            'Use_Split', 'Strict_Search', 'Shopify_Status', 
+            'Matched_Product', 'Matched_Variant', 'Image', 
+            'Supplier_Name', 'Product_Name', 'ABV', 
+            'Format', 'Pack_Size', 'Volume', 'Quantity', 
+            'Item_Price', 'Collaborator', 'Shopify_Variant_ID', 
+            'London_SKU', 'Gloucester_SKU'
         ]
         
-        # Filter and Reorder columns safely
         final_cols = [c for c in ideal_order if c in display_df.columns]
         rem = [c for c in display_df.columns if c not in final_cols]
         display_df = display_df[final_cols + rem]
         
-        # 3. Configure Columns (Renaming happens VISUALLY here)
         column_config = {
             "Image": st.column_config.ImageColumn("Img"),
-            # Rename header visually, but keep data ID same to prevent bugs
             "Shopify_Status": st.column_config.TextColumn("Status", disabled=True), 
             "Matched_Product": st.column_config.TextColumn("Shopify Match", disabled=True),
             "Matched_Variant": st.column_config.TextColumn("Variant Match", disabled=True),
@@ -2081,18 +2067,21 @@ if st.session_state.header_data is not None:
             "Strict_Search": st.column_config.CheckboxColumn("Strict?", width="small", help="Tick to force exact name matching (prevents Vol 1 matching Vol 2)")
         }
 
-        # 4. Render Editor
-        edited_lines = st.data_editor(
+        # --- FIX: CALLBACK SAVE ---
+        key_lines = f"line_editor_{st.session_state.line_items_key}"
+        
+        def save_lines():
+            # Save the editor state back to the main session variable
+            st.session_state.line_items = st.session_state[key_lines]
+
+        st.data_editor(
             display_df, 
             num_rows="dynamic", 
             width='stretch',
-            key=f"line_editor_{st.session_state.line_items_key}",
-            column_config=column_config
+            key=key_lines,
+            column_config=column_config,
+            on_change=save_lines
         )
-        
-        # 5. Save Data (Directly, no conversion needed)
-        if edited_lines is not None:
-            st.session_state.line_items = edited_lines
 
         col1, col2 = st.columns([1, 4])
         with col1:
@@ -2114,7 +2103,9 @@ if st.session_state.header_data is not None:
             with st.expander("🕵️ Debug Logs", expanded=False):
                 st.markdown("\n".join(st.session_state.shopify_logs))
 
-    # --- TAB 2: PREPARE MISSING ITEMS ---
+    # ==========================================
+    # TAB 2: PREPARE SEARCH
+    # ==========================================
     with current_tabs[1]:
         st.subheader("2. Prepare Missing Items for Search")
         
@@ -2123,10 +2114,8 @@ if st.session_state.header_data is not None:
         elif st.session_state.matrix_data is not None and not st.session_state.matrix_data.empty:
             
             # --- 1. CHECK IF SEARCH HAS BEEN RUN ---
-            # We look for any non-empty value in the Untappd_Status column
             search_has_run = False
             if 'Untappd_Status' in st.session_state.matrix_data.columns:
-                # distinct values that are not empty string
                 status_vals = st.session_state.matrix_data['Untappd_Status'].astype(str).unique()
                 if any(v.strip() for v in status_vals):
                     search_has_run = True
@@ -2156,10 +2145,8 @@ if st.session_state.header_data is not None:
 
             # --- 3. DYNAMIC COLUMN ORDER ---
             if search_has_run:
-                # Post-Search: Retry First, then Status/Check, then Data
                 base_cols = ['Retry', 'Untappd_Status', 'Match_Check', 'Supplier_Name', 'Type', 'Collaborator', 'Product_Name', 'ABV']
             else:
-                # Pre-Search: Just Data (Cleaner UI)
                 base_cols = ['Supplier_Name', 'Type', 'Collaborator', 'Product_Name', 'ABV']
             
             ordered_cols = base_cols.copy()
@@ -2180,16 +2167,21 @@ if st.session_state.header_data is not None:
                         .replace("nan", "")
                     )
 
-            edited_prep = st.data_editor(
+            # --- FIX: CALLBACK SAVE (Subset Update) ---
+            key_prep = f"prep_editor_{st.session_state.matrix_key}"
+            
+            def save_prep():
+                changes = st.session_state[key_prep]
+                st.session_state.matrix_data.update(changes)
+
+            st.data_editor(
                 st.session_state.matrix_data[display_cols],
                 num_rows="fixed",
                 width='stretch',
                 column_config=prep_config,
-                key=f"prep_editor_{st.session_state.matrix_key}"
+                key=key_prep,
+                on_change=save_prep
             )
-            
-            if edited_prep is not None:
-                st.session_state.matrix_data.update(edited_prep)
 
             st.divider()
             col_search, col_help = st.columns([1, 2])
@@ -2198,10 +2190,7 @@ if st.session_state.header_data is not None:
             with col_help:
                 st.markdown("**Search Logs:**")
                 log_placeholder = st.empty()
-                
-                # If logs exist in state (and we aren't currently running), show them
                 if st.session_state.untappd_logs:
-                    # Join list into string for code block display
                     log_text = "\n".join(st.session_state.untappd_logs)
                     log_placeholder.code(log_text, language="text")
                 else:
@@ -2210,34 +2199,30 @@ if st.session_state.header_data is not None:
             # -- Left Column: Button Logic --
             with col_search:
                 missing_types = st.session_state.matrix_data['Type'].replace('', pd.NA).isna().sum()
-                
                 btn_label = "🔎 Search Untappd Details" if not search_has_run else "🔎 Search Again / Retry"
                 
                 if st.button(btn_label, type="primary"):
                     if missing_types > 0:
                         st.error(f"⚠️ Please select a Product Type for all {missing_types} rows above before searching.")
                     elif "untappd" in st.secrets:
-                        # Clear previous logs visually before starting
                         log_placeholder.empty()
-                        
                         with st.spinner("Searching Untappd API..."):
-                             # Pass the placeholder to the function for real-time updates
                              updated_matrix, u_logs = batch_untappd_lookup(
                                  st.session_state.matrix_data, 
                                  status_box=log_placeholder
                              )
-                             
                              st.session_state.matrix_data = updated_matrix
                              st.session_state.untappd_logs = u_logs
                              st.session_state.matrix_key += 1 
-                             
                              st.success("Search Complete!") 
                              st.rerun()
                     else: st.error("Untappd Secrets Missing")
+        else: st.info("Run 'Check Inventory' in Tab 1 first.")
 
-    # --- TAB 3: PREPARE UPLOAD ---
+    # ==========================================
+    # TAB 3: PREPARE UPLOAD
+    # ==========================================
     with current_tabs[2]:
-        # --- UPDATED SUBHEADER ---
         st.subheader("3. Review matches and add missing product information")
         
         has_untappd_cols = 'Untappd_Status' in st.session_state.matrix_data.columns if st.session_state.matrix_data is not None else False
@@ -2247,8 +2232,6 @@ if st.session_state.header_data is not None:
         
         elif st.session_state.matrix_data is not None and not st.session_state.matrix_data.empty:
             st.info("👇 These details will be used to create products in Cin7. Edit manually if the match is wrong or missing.")
-            
-            # ... (Rest of Tab 3 code remains the same)
             u_cols = ['Untappd_Status', 'Label_Thumb', 'Untappd_Brewery', 'Untappd_Product', 'Untappd_ABV', 'Untappd_Style', 'Untappd_Desc']
             invoice_cols = ['Supplier_Name', 'Product_Name', 'Format1'] 
             full_view = u_cols + [c for c in invoice_cols if c in st.session_state.matrix_data.columns]
@@ -2262,16 +2245,21 @@ if st.session_state.header_data is not None:
                 "Untappd_Product": st.column_config.TextColumn("Product Name (Cin7)", width="medium"),
             }
 
-            edited_matches = st.data_editor(
+            # --- FIX: CALLBACK SAVE ---
+            key_match = f"match_editor_{st.session_state.matrix_key}"
+            
+            def save_match():
+                st.session_state.matrix_data = st.session_state[key_match]
+
+            st.data_editor(
                 st.session_state.matrix_data,
                 column_order=full_view,
                 num_rows="fixed",
                 width='stretch',
-                key=f"match_editor_{st.session_state.matrix_key}",
-                column_config=column_config
+                key=key_match,
+                column_config=column_config,
+                on_change=save_match
             )
-            
-            if edited_matches is not None: st.session_state.matrix_data = edited_matches
 
             st.divider()
             if st.button("✨ Validate & Stage for Upload", type="primary"):
@@ -2283,7 +2271,9 @@ if st.session_state.header_data is not None:
                     st.session_state.upload_generated = False # RESET FLAG
                     st.success("Products staged successfully! Go to Tab 4.")
 
-    # --- TAB 4: PRODUCT UPLOAD ---
+    # ==========================================
+    # TAB 4: PRODUCT UPLOAD
+    # ==========================================
     with current_tabs[3]:
         st.subheader("4. Product Upload Stage")
         
@@ -2427,14 +2417,20 @@ if st.session_state.header_data is not None:
             for c in current_cols:
                 if c not in final_disp: final_disp.append(c)
 
+            # --- FIX: CALLBACK SAVE ---
+            key_upload = "upload_editor_final"
+            
+            def save_upload():
+                st.session_state.upload_data = st.session_state[key_upload]
+
             edited_upload = st.data_editor(
                 st.session_state.upload_data,
                 width=2000,
                 column_config=upload_col_config,
                 column_order=final_disp, 
-                key="upload_editor_final"
+                key=key_upload,
+                on_change=save_upload
             )
-            if edited_upload is not None: st.session_state.upload_data = edited_upload
 
             # --- SEQUENTIAL UPLOAD LAYOUT ---
             st.divider()
@@ -2492,6 +2488,7 @@ if st.session_state.header_data is not None:
                         st.stop()
 
                     pub_data = fetch_publication_ids()
+                    
                     if not pub_data or not pub_data['london'] or not pub_data['gloucester']:
                         status_ph.warning("⚠️ Catalogs not found. Publishing skipped.")
                     else:
@@ -2703,6 +2700,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
