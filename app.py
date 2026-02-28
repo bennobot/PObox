@@ -1785,7 +1785,11 @@ if 'cin7_all_suppliers' not in st.session_state: st.session_state.cin7_all_suppl
 if 'line_items_key' not in st.session_state: st.session_state.line_items_key = 0
 if 'matrix_key' not in st.session_state: st.session_state.matrix_key = 0
 if 'upload_generated' not in st.session_state: st.session_state.upload_generated = False 
-
+# --- NEW FLAGS FOR SEQUENTIAL UPLOAD ---
+if 'cin7_complete' not in st.session_state: st.session_state.cin7_complete = False
+if 'cin7_log_text' not in st.session_state: st.session_state.cin7_log_text = ""
+if 'shopify_log_text' not in st.session_state: st.session_state.shopify_log_text = ""
+    
 with st.sidebar:
     st.header("Settings")
     if "GOOGLE_API_KEY" in st.secrets:
@@ -2369,7 +2373,20 @@ if st.session_state.header_data is not None:
                 
                 st.session_state.upload_data = final_df[final_order]
                 st.session_state.upload_generated = True 
+                # --- NEW: RESET UPLOAD FLAGS ---
+                st.session_state.cin7_complete = False
+                st.session_state.cin7_log_text = ""
+                st.session_state.shopify_log_text = ""
+                # -------------------------------
                 
+                # --- CHECK FOR MISSING TYPES IMMEDIATELY ---
+                missing_types = st.session_state.upload_data['Type'].replace('', pd.NA).isna().sum()
+                if missing_types > 0:
+                    st.warning(f"⚠️ You have {missing_types} rows with missing Product Types. Please select a Type in the table below before uploading.")
+                else:
+                    st.success("Upload Data Generated!")
+                
+                st.rerun()
                 # --- CHECK FOR MISSING TYPES IMMEDIATELY ---
                 missing_types = st.session_state.upload_data['Type'].replace('', pd.NA).isna().sum()
                 if missing_types > 0:
@@ -2699,6 +2716,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
