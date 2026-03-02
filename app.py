@@ -2330,8 +2330,14 @@ if st.session_state.header_data is not None:
             st.divider()
             
             # --- ACTION BUTTON (Outside the form) ---
-            if st.button("✨ Validate & Stage for Upload"):
+            if st.button("✨ Validate & Stage for Upload", type="primary"):
+                
+                # 🧹 FORCE CLEAN THE ABV COLUMN BEFORE STAGING (Guaranteed to run)
+                if 'Untappd_ABV' in st.session_state.matrix_data.columns:
+                    st.session_state.matrix_data['Untappd_ABV'] = st.session_state.matrix_data['Untappd_ABV'].apply(clean_abv)
+
                 staged_df, errors = stage_products_for_upload(st.session_state.matrix_data)
+                
                 if errors:
                     for e in errors: st.error(e)
                 else:
@@ -2759,6 +2765,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
