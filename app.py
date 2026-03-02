@@ -730,20 +730,27 @@ def publish_product_to_app(product_id_numeric, publication_id_gql):
 
 def clean_abv(abv_str):
     """
-    Formats ABV:
-    - 4.0 -> "4"
-    - 4.5 -> "4.5"
-    - 4.52 -> "4.5" (Rounds to 1 decimal)
+    Aggressively formats ABV and removes % signs.
+    - "4.0%" -> "4"
+    - "4.5 %" -> "4.5"
+    - "approx 4.52" -> "4.5" (Rounds to 1 decimal)
     """
+    if not abv_str: return ""
+    
+    # 1. Force to string and aggressively strip letters/symbols
+    s = str(abv_str)
+    s_clean = re.sub(r"[^\d.]", "", s)
+    
+    # 2. Format the remaining numbers
     try:
-        if not abv_str: return "0"
-        val = float(abv_str)
+        if not s_clean: return ""
+        val = float(s_clean)
         val = round(val, 1) # Force 1 decimal max
         if val.is_integer():
             return str(int(val)) # 4.0 -> "4"
         return str(val) # 4.5 -> "4.5"
     except:
-        return str(abv_str)
+        return "" # Safe fallback to keep UI clean
 
 def get_abv_category(abv_str):
     """
@@ -2765,6 +2772,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
