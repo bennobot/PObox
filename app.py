@@ -2319,6 +2319,10 @@ if st.session_state.header_data is not None:
                 save_match_clicked = st.form_submit_button("💾 Save Changes", type="primary")
                 
                 if save_match_clicked:
+                    # 🧹 FORCE CLEAN THE ABV COLUMN: Strips % and formats to 1 decimal place
+                    if 'Untappd_ABV' in edited_matches.columns:
+                        edited_matches['Untappd_ABV'] = edited_matches['Untappd_ABV'].apply(clean_abv)
+                    
                     st.session_state.matrix_data = edited_matches
                     st.success("✅ Changes saved successfully!")
                     st.rerun()
@@ -2755,6 +2759,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
