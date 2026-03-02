@@ -197,12 +197,23 @@ def download_file_from_drive(file_id):
         return None
 
 # --- 1C. UNTAPPD LOGIC ---
-def search_untappd_item(supplier, product):
+def search_untappd_item(supplier, product, manual_id=None):
     if "untappd" not in st.secrets: return None
     creds = st.secrets["untappd"]
     base_url = creds.get("base_url", "https://business.untappd.com/api/v1")
     token = creds.get("api_token")
+    headers = {"Authorization": f"Basic {token}", "Content-Type": "application/json"}
     
+    clean_manual_id = None
+    if manual_id:
+        raw_id = str(manual_id).strip()
+        # Extract digits from url if they pasted the whole link
+        match = re.search(r'(\d+)$', raw_id)
+        if match:
+            clean_manual_id = int(match.group(1))
+        elif raw_id.isdigit():
+            clean_manual_id = int(raw_id)
+            
     raw_supp = str(supplier).replace("&", " and ")
     raw_prod = str(product).replace("&", " and ")
     clean_supp = re.sub(r'(?i)\b(ltd|limited|llp|plc|brewing|brewery|co\.?)\b', '', raw_supp).strip()
@@ -210,53 +221,84 @@ def search_untappd_item(supplier, product):
     full_string = f"{clean_supp} {clean_prod}"
     parts = full_string.split() 
     query_str = " ".join(parts)
-    
     safe_q = quote(query_str)
-    url = f"{base_url}/items/search?q={safe_q}"
-    headers = {"Authorization": f"Basic {token}", "Content-Type": "application/json"}
     
+    # Helper to parse item
+    def parse_item(best, q_used):
+        return {
+            "untappd_id": best.get("untappd_id"),
+            "name": best.get("name"),
+            "brewery": best.get("brewery"),
+            "abv": best.get("abv"),
+            "ibu": best.get("ibu", 0),
+            "style": best.get("style"), 
+            "description": best.get("description"),
+            "label_image_thumb": best.get("label_image_thumb"),
+            "brewery_location": best.get("brewery_location"),
+            "brewery_country": best.get("country", "") or best.get("brewery_country", ""),
+            "query_used": q_used 
+        }
+
+    # 1. Try manual ID directly
+    if clean_manual_id:
+        try:
+            url_id = f"{base_url}/items/search?q={clean_manual_id}"
+            response = requests.get(url_id, headers=headers)
+            if response.status_code == 200:
+                items = response.json().get('items',[])
+                for item in items:
+                    if item.get("untappd_id") == clean_manual_id:
+                        return parse_item(item, str(clean_manual_id))
+        except: pass
+
+    # 2. String search fallback
+    url = f"{base_url}/items/search?q={safe_q}"
     try:
         response = requests.get(url, headers=headers)
         if response.status_code == 200:
             data = response.json()
-            items = data.get('items', [])
+            items = data.get('items',[])
             if items:
-                best = items[0] 
-                return {
-                    "untappd_id": best.get("untappd_id"),
-                    "name": best.get("name"),
-                    "brewery": best.get("brewery"),
-                    "abv": best.get("abv"),
-                    "ibu": best.get("ibu", 0),  # --- NEW ---
-                    "style": best.get("style"), 
-                    "description": best.get("description"),
-                    "label_image_thumb": best.get("label_image_thumb"),
-                    "brewery_location": best.get("brewery_location"),
-                    "brewery_country": best.get("country", "") or best.get("brewery_country", ""), # --- NEW ---
-                    "query_used": query_str 
-                }
+                if clean_manual_id:
+                    # Scan the returned list for the exact ID
+                    for item in items:
+                        if item.get("untappd_id") == clean_manual_id:
+                            return parse_item(item, query_str)
+                    
+                    # If ID is not found but they provided one, return a skeleton match 
+                    # so it proceeds to Tab 3 with the ID attached for Shopify.
+                    return {
+                        "untappd_id": clean_manual_id, 
+                        "name": clean_prod, 
+                        "brewery": clean_supp,
+                        "query_used": query_str
+                    }
+                else:
+                    return parse_item(items[0], query_str)
     except: pass
+    
+    # Ultimate Fallback
+    if clean_manual_id:
+        return {"untappd_id": clean_manual_id, "query_used": query_str, "name": clean_prod, "brewery": clean_supp}
+        
     return {"query_used": query_str}
 
 def batch_untappd_lookup(matrix_df, status_box=None):
     if matrix_df.empty: return matrix_df, ["Matrix Empty"]
     
-    # Add 'Match_Check' and 'Retry' to columns list
-    cols = ['Untappd_Status', 'Untappd_ID', 'Untappd_Brewery', 'Untappd_Product', 
+    cols =['Untappd_Status', 'Untappd_ID', 'Untappd_Brewery', 'Untappd_Product', 
             'Untappd_ABV', 'Untappd_IBU', 'Untappd_Style', 'Untappd_Desc', 
-            'Label_Thumb', 'Brewery_Loc', 'Untappd_Country', 'Match_Check', 'Retry']
+            'Label_Thumb', 'Brewery_Loc', 'Untappd_Country', 'Match_Check', 'Retry', 'Manual_UT_ID']
     
     for c in cols:
         if c not in matrix_df.columns: matrix_df[c] = ""
             
     updated_rows = []
-    logs = []
+    logs =[]
     
-    # Helper for Real-Time Logging
     def log_msg(msg):
         logs.append(msg)
         if status_box:
-            # Update the UI container immediately
             status_box.code("\n".join(logs), language="text")
 
     prog_bar = st.progress(0)
@@ -266,54 +308,56 @@ def batch_untappd_lookup(matrix_df, status_box=None):
         
         current_status = str(row.get('Untappd_Status', ''))
         retry_flag = row.get('Retry', False)
+        manual_id = str(row.get('Manual_UT_ID', '')).strip()
         
-        # Search if not found OR if user requested retry
-        if current_status != "✅ Found" or retry_flag:
-            res = search_untappd_item(row['Supplier_Name'], row['Product_Name'])
+        # Search if not found OR if user requested retry OR provided a manual ID
+        if current_status != "✅ Found" or retry_flag or manual_id:
+            res = search_untappd_item(row['Supplier_Name'], row['Product_Name'], manual_id)
             
             if res and "untappd_id" in res:
                 # --- MATCH FOUND ---
-                log_msg(f"✅ Found: {res['name']}")
+                log_msg(f"✅ Found: {res.get('name', 'Manual Item')} ({res['untappd_id']})")
                 row['Untappd_Status'] = "✅ Found"
                 row['Untappd_ID'] = res['untappd_id']
-                row['Untappd_Brewery'] = res['brewery']
-                row['Untappd_Product'] = res['name']
-                row['Untappd_ABV'] = res['abv'] 
-                row['Untappd_IBU'] = res['ibu']
-                row['Untappd_Style'] = res['style']
-                row['Untappd_Desc'] = res['description']
-                row['Label_Thumb'] = res['label_image_thumb']
-                row['Brewery_Loc'] = res['brewery_location']
-                row['Untappd_Country'] = res['brewery_country']
+                row['Untappd_Brewery'] = res.get('brewery') or row.get('Supplier_Name', '')
+                row['Untappd_Product'] = res.get('name') or row.get('Product_Name', '')
                 
-                # Create Readable Match Summary
-                clean_res_abv = clean_abv(res['abv'])
-                row['Match_Check'] = f"{res['brewery']} / {res['name']} / {clean_res_abv}%"
+                fetched_abv = res.get('abv')
+                if fetched_abv:
+                    row['Untappd_ABV'] = clean_abv(fetched_abv)
+                else:
+                    row['Untappd_ABV'] = clean_abv(row.get('ABV', ''))
+                    
+                row['Untappd_IBU'] = res.get('ibu', 0)
+                row['Untappd_Style'] = res.get('style', '')
+                row['Untappd_Desc'] = res.get('description', '')
+                row['Label_Thumb'] = res.get('label_image_thumb', '')
+                row['Brewery_Loc'] = res.get('brewery_location', '')
+                row['Untappd_Country'] = res.get('brewery_country', '')
+                
+                clean_res_abv = clean_abv(row['Untappd_ABV'])
+                row['Match_Check'] = f"{row['Untappd_Brewery']} / {row['Untappd_Product']} / {clean_res_abv}%"
                 
             else:
                 # --- NO MATCH ---
                 used_q = res.get('query_used', 'Unknown') if res else 'Error'
-                log_msg(f"❌ No match: {row['Product_Name']} | Query: [{used_q}]")
+                log_msg(f"❌ No match: {row['Product_Name']} | Query:[{used_q}]")
                 
                 row['Untappd_Status'] = "❌ Not Found"
                 row['Match_Check'] = "No Match Found"
                 row['Untappd_ID'] = "" 
                 
-                # Pre-fill with Invoice Data
                 row['Untappd_Brewery'] = row.get('Supplier_Name', '')
                 row['Untappd_Product'] = row.get('Product_Name', '')
-                
-                # Use Invoice ABV if available, else Blank (force manual entry)
-                raw_invoice_abv = row.get('ABV', '')
-                # clean_abv returns "" if input is empty/0, or "4.5" if "4.5%"
-                row['Untappd_ABV'] = clean_abv(raw_invoice_abv)
+                row['Untappd_ABV'] = clean_abv(row.get('ABV', ''))
                 
                 row['Untappd_Style'] = "" 
                 row['Untappd_Desc'] = ""
                 row['Label_Thumb'] = ""
             
-            # Reset Retry Flag
+            # Reset Retry and Manual Flags
             row['Retry'] = False
+            row['Manual_UT_ID'] = ""
         
         updated_rows.append(row)
         
@@ -1630,17 +1674,13 @@ def create_product_matrix(df):
 
     group_cols = ['Supplier_Name', 'Collaborator', 'Product_Name', 'ABV']
     grouped = df.groupby(group_cols, sort=False)
-    matrix_rows = []
+    matrix_rows =[]
     
     for name, group in grouped:
-        # name tuple: (Supplier, Collab, Product, ABV)
         clean_abv_val = clean_abv(name[3])
-        
-        # --- FIX: Wipe 0 to force manual entry ---
         if clean_abv_val in ["0", "0.0"]:
             clean_abv_val = ""
-        # -----------------------------------------
-        
+            
         row = {
             'Supplier_Name': name[0], 
             'Type': '', 
@@ -1657,9 +1697,9 @@ def create_product_matrix(df):
             row[f'Item_Price{suffix}'] = item['Item_Price']
             row[f'Split_Case{suffix}'] = item.get('Use_Split', False)
         
-        # New Columns
         row['Retry'] = False
         row['Match_Check'] = ""
+        row['Manual_UT_ID'] = ""
             
         matrix_rows.append(row)
         
@@ -1668,8 +1708,8 @@ def create_product_matrix(df):
     if 'Untappd_Status' not in matrix_df.columns:
         matrix_df['Untappd_Status'] = "" 
 
-    base_cols = ['Supplier_Name', 'Type', 'Collaborator', 'Product_Name', 'ABV', 'Untappd_Status', 'Match_Check', 'Retry']
-    format_cols = []
+    base_cols =['Supplier_Name', 'Type', 'Collaborator', 'Product_Name', 'ABV', 'Untappd_Status', 'Match_Check', 'Retry', 'Manual_UT_ID']
+    format_cols =[]
     for i in range(1, 4):
         format_cols.extend([f'Format{i}', f'Pack_Size{i}', f'Volume{i}', f'Item_Price{i}', f'Split_Case{i}'])
     
@@ -2138,7 +2178,7 @@ if st.session_state.header_data is not None:
                     search_has_run = True
 
             if search_has_run:
-                st.info("👇 Review matches below. If a match is incorrect, edit the Name/Supplier, tick 'Retry', and click Search again.")
+                st.info("👇 **Review matches.** If a match is wrong, paste the correct Untappd URL into 'Manual ID/URL', click 'Save Changes', then 'Search Again'.")
             else:
                 st.info("👇 Select the **Product Type** for each item below, then click Search.")
             
@@ -2149,7 +2189,8 @@ if st.session_state.header_data is not None:
                 "Type": st.column_config.SelectboxColumn("Product Type", options=type_options, required=True, width="medium"),
                 "Untappd_Status": st.column_config.TextColumn("UT Status", disabled=True, width="small"),
                 "Match_Check": st.column_config.TextColumn("Match Details (Verify Here)", disabled=True, width="large"),
-                "Retry": st.column_config.CheckboxColumn("Retry?", width="small", help="Tick this and click Search to re-run lookup for this line.")
+                "Retry": st.column_config.CheckboxColumn("Retry?", width="small", help="Tick this and click Search to re-run lookup for this line."),
+                "Manual_UT_ID": st.column_config.TextColumn("Manual ID/URL", width="medium", help="Paste Untappd URL or ID here to force a specific match.")
             }
             
             for i in range(1, 4):
@@ -2161,7 +2202,7 @@ if st.session_state.header_data is not None:
 
             # --- 3. DYNAMIC COLUMN ORDER ---
             if search_has_run:
-                base_cols =['Retry', 'Untappd_Status', 'Match_Check', 'Supplier_Name', 'Type', 'Collaborator', 'Product_Name', 'ABV']
+                base_cols =['Retry', 'Manual_UT_ID', 'Untappd_Status', 'Match_Check', 'Supplier_Name', 'Type', 'Collaborator', 'Product_Name', 'ABV']
             else:
                 base_cols =['Supplier_Name', 'Type', 'Collaborator', 'Product_Name', 'ABV']
             
@@ -2170,7 +2211,7 @@ if st.session_state.header_data is not None:
                 if f"Format{i}" in st.session_state.matrix_data.columns:
                     ordered_cols.extend([f"Format{i}", f"Pack_Size{i}", f"Volume{i}", f"Item_Price{i}", f"Split_Case{i}"])
             
-            display_cols = [c for c in ordered_cols if c in st.session_state.matrix_data.columns]
+            display_cols =[c for c in ordered_cols if c in st.session_state.matrix_data.columns]
 
             # --- SAFETY FIX (Types) ---
             for col in display_cols:
@@ -2714,6 +2755,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
