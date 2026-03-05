@@ -134,7 +134,6 @@ def clean_abv(abv_str):
         return "" # Return empty if no number found
 
 def calculate_sell_price(cost_price, product_type, fmt):
-    # ... (Keep existing pricing logic here) ...
     try:
         cost = float(cost_price)
     except:
@@ -143,19 +142,30 @@ def calculate_sell_price(cost_price, product_type, fmt):
     if cost == 0: return 0.00
 
     fmt_lower = str(fmt).lower()
-    draft_triggers = ['keykeg', 'steel', 'poly', 'uni', 'cask', 'keg', 'firkin', 'pin']
+    draft_triggers =['keykeg', 'steel', 'poly', 'uni', 'cask', 'keg', 'firkin', 'pin']
     is_draft = any(t in fmt_lower for t in draft_triggers)
 
-    if is_draft and cost > 140:
-        return round(cost + 40, 2)
-
-    if is_draft and cost < 63:
-        return round(cost + 20, 2)
-
+    # --- CORE PRODUCT RULES ---
     if product_type == "Core Product":
-        return round(cost * 1.265, 2)
+        if is_draft and cost < 64:
+            return round(cost + 17, 2)
+        elif is_draft and cost > 151:
+            return round(cost + 40, 2)
+        elif cost > 142.50:
+            return round(cost + 37.75, 2)
+        else:
+            return round(cost * 1.265, 2)
+            
+    # --- ROTATIONAL PRODUCT RULES ---
     else: 
-        return round(cost * 1.285, 2)
+        if is_draft and cost < 70.25:
+            return round(cost + 20, 2)
+        elif is_draft and cost > 140.5:
+            return round(cost + 40, 2)
+        elif cost > 130:
+            return round(cost + 37.00, 2)
+        else:
+            return round(cost * 1.285, 2)
 
 # --- 1B. GOOGLE DRIVE ---
 def get_drive_service():
@@ -2816,6 +2826,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
