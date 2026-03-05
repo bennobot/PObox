@@ -1,4 +1,3 @@
-```python
 import streamlit as st
 import pandas as pd
 from pdf2image import convert_from_bytes
@@ -2528,3 +2527,4 @@ if st.session_state.header_data is not None:
                             with st.expander("Update Logs", expanded=True):
                                 for log in update_logs:
                                     st.write(log)
+
