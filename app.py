@@ -1703,7 +1703,7 @@ def create_product_matrix(df):
         df = df[df['Shopify_Status'] != "✅ Match"]
     if df.empty: return pd.DataFrame()
 
-    group_cols = ['Supplier_Name', 'Collaborator', 'Product_Name', 'ABV']
+    group_cols =['Supplier_Name', 'Collaborator', 'Product_Name', 'ABV']
     grouped = df.groupby(group_cols, sort=False)
     matrix_rows =[]
     
@@ -1731,6 +1731,7 @@ def create_product_matrix(df):
         row['Retry'] = False
         row['Match_Check'] = ""
         row['Manual_UT_ID'] = ""
+        row['Ignore_UT'] = False # NEW COLUMN
             
         matrix_rows.append(row)
         
@@ -1739,23 +1740,23 @@ def create_product_matrix(df):
     if 'Untappd_Status' not in matrix_df.columns:
         matrix_df['Untappd_Status'] = "" 
 
-    base_cols =['Supplier_Name', 'Type', 'Collaborator', 'Product_Name', 'ABV', 'Untappd_Status', 'Match_Check', 'Retry', 'Manual_UT_ID']
+    base_cols =['Supplier_Name', 'Type', 'Collaborator', 'Product_Name', 'ABV', 'Untappd_Status', 'Match_Check', 'Retry', 'Manual_UT_ID', 'Ignore_UT']
     format_cols =[]
     for i in range(1, 4):
         format_cols.extend([f'Format{i}', f'Pack_Size{i}', f'Volume{i}', f'Item_Price{i}', f'Split_Case{i}'])
     
-    existing_format_cols = [c for c in format_cols if c in matrix_df.columns]
+    existing_format_cols =[c for c in format_cols if c in matrix_df.columns]
     final_cols = base_cols + existing_format_cols
     
     for col in final_cols:
         if col not in matrix_df.columns:
-            if "Split_Case" in col or "Retry" in col:
+            if "Split_Case" in col or "Retry" in col or "Ignore_UT" in col:
                 matrix_df[col] = False
             else:
                 matrix_df[col] = ""
             
     for col in final_cols:
-        if "Split_Case" not in col and "Retry" not in col and "Item_Price" not in col:
+        if "Split_Case" not in col and "Retry" not in col and "Ignore_UT" not in col and "Item_Price" not in col:
             if matrix_df[col].dtype == 'object':
                 matrix_df[col] = matrix_df[col].fillna("").astype(str)
                 if "ABV" not in col:
@@ -2796,6 +2797,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
