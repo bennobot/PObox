@@ -401,9 +401,10 @@ def make_cin7_request(method, url, headers=None, **kwargs):
     return response
 
 # --- PRICE CHECKING & UPDATING HELPERS ---
-def fetch_cin7_price_by_sku(sku):
+def fetch_cin7_product_details_by_sku(sku):
+    """Fetches ID, Price, Full Name, and Attribute 5 from Cin7."""
     headers = get_cin7_headers()
-    if not headers: return None, 0.0
+    if not headers: return None, 0.0, "", "Rotational Product"
     safe_sku = quote(sku)
     url = f"{get_cin7_base_url()}/product?Sku={safe_sku}"
     try:
@@ -411,9 +412,15 @@ def fetch_cin7_price_by_sku(sku):
         if r.status_code == 200:
             prods = r.json().get("Products", [])
             if prods:
-                return prods[0]["ID"], float(prods[0].get("PriceTier1", 0.0))
+                p = prods[0]
+                return (
+                    p.get("ID"), 
+                    float(p.get("PriceTier1", 0.0)),
+                    str(p.get("Name", "")),
+                    str(p.get("AdditionalAttribute5", "Rotational Product"))
+                )
     except: pass
-    return None, 0.0
+    return None, 0.0, "", "Rotational Product"
 
 def update_cin7_price(product_id, new_price):
     headers = get_cin7_headers()
@@ -2421,23 +2428,27 @@ if st.session_state.header_data is not None:
                 with st.spinner("Fetching live prices from Cin7 and Shopify..."):
                     price_rows =[]
                     
+                    # 1. Existing matched items (Tab 1)
                     if st.session_state.line_items is not None:
                         for _, row in st.session_state.line_items.iterrows():
                             if row.get('Shopify_Status') == "✅ Match":
-                                expected_price = calculate_sell_price(row.get('Item_Price', 0), "Rotational Product", row.get('Format', ''))
-                                
                                 for sku_col in['London_SKU', 'Gloucester_SKU']:
                                     sku = str(row.get(sku_col, ''))
                                     if sku and sku != "nan":
-                                        cin7_id, c_price = fetch_cin7_price_by_sku(sku)
+                                        cin7_id, c_price, c_name, c_attr5 = fetch_cin7_product_details_by_sku(sku)
                                         shop_gid, s_price = fetch_shopify_price_by_sku(sku)
                                         
+                                        # Recalculate based on live Attribute 5 from Cin7
+                                        expected_price = calculate_sell_price(row.get('Item_Price', 0), c_attr5, row.get('Format', ''))
+                                        
                                         update_req = abs(c_price - expected_price) > 0.02 or abs(s_price - expected_price) > 0.02
+                                        display_name = c_name if c_name else row.get('Product_Name', '')
                                         
                                         price_rows.append({
                                             "Update": update_req,
                                             "SKU": sku,
-                                            "Product": row.get('Product_Name', ''),
+                                            "Product": display_name,
+                                            "Attribute_5": c_attr5,
                                             "Cost": float(row.get('Item_Price', 0)),
                                             "Expected_Price": expected_price,
                                             "Cin7_Price": c_price,
@@ -2446,22 +2457,28 @@ if st.session_state.header_data is not None:
                                             "Shopify_GID": shop_gid
                                         })
                     
+                    # 2. Newly uploaded items (Tab 4)
                     if st.session_state.upload_data is not None and not st.session_state.upload_data.empty:
                         for _, row in st.session_state.upload_data.iterrows():
                             base_sku = row.get('Variant_SKU', '')
-                            expected_price = row.get('Sales_Price', 0)
                             
                             for prefix in ["L-", "G-"]:
                                 sku = f"{prefix}{base_sku}"
-                                cin7_id, c_price = fetch_cin7_price_by_sku(sku)
+                                cin7_id, c_price, c_name, c_attr5 = fetch_cin7_product_details_by_sku(sku)
                                 shop_gid, s_price = fetch_shopify_price_by_sku(sku)
                                 
+                                # Use Cin7's Attribute 5 if it exists, otherwise use local from Tab 4
+                                final_attr5 = c_attr5 if c_attr5 else row.get('Attribute_5', 'Rotational Product')
+                                expected_price = calculate_sell_price(row.get('item_price', 0), final_attr5, row.get('format', ''))
+                                
                                 update_req = abs(c_price - expected_price) > 0.02 or abs(s_price - expected_price) > 0.02
+                                display_name = c_name if c_name else row.get('Variant_Name', '')
                                 
                                 price_rows.append({
                                     "Update": update_req,
                                     "SKU": sku,
-                                    "Product": row.get('Variant_Name', ''),
+                                    "Product": display_name,
+                                    "Attribute_5": final_attr5,
                                     "Cost": float(row.get('item_price', 0)),
                                     "Expected_Price": expected_price,
                                     "Cin7_Price": c_price,
@@ -2472,6 +2489,7 @@ if st.session_state.header_data is not None:
 
                     st.session_state.price_check_data = pd.DataFrame(price_rows)
             
+            # --- RENDER TABLE ---
             if 'price_check_data' in st.session_state and st.session_state.price_check_data is not None and not st.session_state.price_check_data.empty:
                 st.divider()
                 st.markdown("### Discrepancy Report")
@@ -2481,6 +2499,7 @@ if st.session_state.header_data is not None:
                     "Update": st.column_config.CheckboxColumn("Update?", width="small"),
                     "SKU": st.column_config.TextColumn("SKU", disabled=True),
                     "Product": st.column_config.TextColumn("Product Name", disabled=True),
+                    "Attribute_5": st.column_config.TextColumn("Core/Rotation", disabled=True),
                     "Cost": st.column_config.NumberColumn("Unit Cost", format="£%.2f", disabled=True),
                     "Expected_Price": st.column_config.NumberColumn("🎯 Expected", format="£%.2f", disabled=True),
                     "Cin7_Price": st.column_config.NumberColumn("Cin7 Live", format="£%.2f", disabled=True),
@@ -2527,4 +2546,5 @@ if st.session_state.header_data is not None:
                             with st.expander("Update Logs", expanded=True):
                                 for log in update_logs:
                                     st.write(log)
+
 
