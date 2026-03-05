@@ -288,7 +288,7 @@ def batch_untappd_lookup(matrix_df, status_box=None):
     
     cols =['Untappd_Status', 'Untappd_ID', 'Untappd_Brewery', 'Untappd_Product', 
             'Untappd_ABV', 'Untappd_IBU', 'Untappd_Style', 'Untappd_Desc', 
-            'Label_Thumb', 'Brewery_Loc', 'Untappd_Country', 'Match_Check', 'Retry', 'Manual_UT_ID']
+            'Label_Thumb', 'Brewery_Loc', 'Untappd_Country', 'Match_Check', 'Retry', 'Manual_UT_ID', 'Ignore_UT']
     
     for c in cols:
         if c not in matrix_df.columns: matrix_df[c] = ""
@@ -309,13 +309,32 @@ def batch_untappd_lookup(matrix_df, status_box=None):
         current_status = str(row.get('Untappd_Status', ''))
         retry_flag = row.get('Retry', False)
         manual_id = str(row.get('Manual_UT_ID', '')).strip()
+        ignore_flag = row.get('Ignore_UT', False)
         
-        # Search if not found OR if user requested retry OR provided a manual ID
-        if current_status != "✅ Found" or retry_flag or manual_id:
+        # --- NEW: BYPASS API IF IGNORED ---
+        if ignore_flag:
+            log_msg(f"⏭️ Ignored: {row['Product_Name']} (Moved to Manual Entry)")
+            row['Untappd_Status'] = "⚠️ Manual Entry"
+            row['Match_Check'] = "Skipped Untappd Search"
+            row['Untappd_ID'] = "" 
+            row['Untappd_Brewery'] = row.get('Supplier_Name', '')
+            row['Untappd_Product'] = row.get('Product_Name', '')
+            row['Untappd_ABV'] = clean_abv(row.get('ABV', ''))
+            row['Untappd_Style'] = "" 
+            row['Untappd_Desc'] = ""
+            row['Label_Thumb'] = ""
+            
+            # Reset Flags
+            row['Retry'] = False
+            row['Manual_UT_ID'] = ""
+            row['Ignore_UT'] = False
+            
+        # --- NORMAL SEARCH LOGIC ---
+        elif current_status != "✅ Found" or retry_flag or manual_id:
             res = search_untappd_item(row['Supplier_Name'], row['Product_Name'], manual_id)
             
             if res and "untappd_id" in res:
-                # --- MATCH FOUND ---
+                # MATCH FOUND
                 log_msg(f"✅ Found: {res.get('name', 'Manual Item')} ({res['untappd_id']})")
                 row['Untappd_Status'] = "✅ Found"
                 row['Untappd_ID'] = res['untappd_id']
@@ -339,7 +358,7 @@ def batch_untappd_lookup(matrix_df, status_box=None):
                 row['Match_Check'] = f"{row['Untappd_Brewery']} / {row['Untappd_Product']} / {clean_res_abv}%"
                 
             else:
-                # --- NO MATCH ---
+                # NO MATCH
                 used_q = res.get('query_used', 'Unknown') if res else 'Error'
                 log_msg(f"❌ No match: {row['Product_Name']} | Query:[{used_q}]")
                 
@@ -350,7 +369,6 @@ def batch_untappd_lookup(matrix_df, status_box=None):
                 row['Untappd_Brewery'] = row.get('Supplier_Name', '')
                 row['Untappd_Product'] = row.get('Product_Name', '')
                 row['Untappd_ABV'] = clean_abv(row.get('ABV', ''))
-                
                 row['Untappd_Style'] = "" 
                 row['Untappd_Desc'] = ""
                 row['Label_Thumb'] = ""
@@ -2797,6 +2815,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
