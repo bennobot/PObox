@@ -2539,25 +2539,44 @@ if st.session_state.header_data is not None:
             upload_col_config = {
                 "Attribute_5": st.column_config.SelectboxColumn("Core/Rotation", options=["Rotational Product", "Core Product"], required=True, width="medium"),
                 "Type": st.column_config.SelectboxColumn("Product Type", options=["Beer", "Cider", "Spirits", "Softs", "Wine", "Merch", "Dispense", "Snacks", "PoS", "Other"], required=True, width="medium"),
-                "Sales_Price": st.column_config.NumberColumn("Sales Price", format="£%.2f", disabled=True)
+                "Sales_Price": st.column_config.NumberColumn("Sales Price", format="£%.2f", disabled=True) # Remains disabled so users can't break math
             }
             
             current_cols = st.session_state.upload_data.columns.tolist()
-            disp_order = ['Attribute_5', 'Type', 'Sales_Price', 'item_price', 'Variant_Name', 'Variant_SKU', 'Family_Name']
-            final_disp = []
+            disp_order =['Attribute_5', 'Type', 'Sales_Price', 'item_price', 'Variant_Name', 'Variant_SKU', 'Family_Name']
+            final_disp =[]
             for c in disp_order:
                 if c in current_cols: final_disp.append(c)
             for c in current_cols:
                 if c not in final_disp: final_disp.append(c)
 
-            edited_upload = st.data_editor(
-                st.session_state.upload_data,
-                width=2000,
-                column_config=upload_col_config,
-                column_order=final_disp, 
-                key="upload_editor_final"
-            )
-            if edited_upload is not None: st.session_state.upload_data = edited_upload
+            # --- RENDER EDITOR INSIDE A FORM ---
+            with st.form(key="upload_form_final"):
+                st.caption("✏️ **Make your edits below (e.g. change to Core Product), then click 'Save Changes' to instantly update the Sales Price.**")
+                
+                edited_upload = st.data_editor(
+                    st.session_state.upload_data,
+                    width=2000,
+                    column_config=upload_col_config,
+                    column_order=final_disp, 
+                    key="upload_editor_final"
+                )
+                
+                save_upload_clicked = st.form_submit_button("💾 Save Changes", type="primary")
+                
+                if save_upload_clicked:
+                    # 🧮 RECALCULATE PRICING: If they changed from Core -> Rotational, update the Sales Price instantly!
+                    for idx, row in edited_upload.iterrows():
+                        new_price = calculate_sell_price(
+                            cost_price=row.get('item_price', 0), 
+                            product_type=row.get('Attribute_5', 'Rotational Product'), 
+                            fmt=row.get('format', '')
+                        )
+                        edited_upload.at[idx, 'Sales_Price'] = new_price
+                        
+                    st.session_state.upload_data = edited_upload
+                    st.success("✅ Changes saved and prices recalculated successfully!")
+                    st.rerun()
 
             # --- SEQUENTIAL UPLOAD LAYOUT ---
             st.divider()
@@ -2826,6 +2845,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
