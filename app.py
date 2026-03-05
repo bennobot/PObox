@@ -2228,7 +2228,7 @@ if st.session_state.header_data is not None:
                     search_has_run = True
 
             if search_has_run:
-                st.info("👇 **Review matches.** If a match is wrong, paste the correct Untappd URL into 'Manual ID/URL', click 'Save Changes', then 'Search Again'.")
+                st.info("👇 **Review matches.** If a match is wrong, paste the URL in 'Manual ID', OR tick 'Ignore UT' to type it yourself in Tab 3.")
             else:
                 st.info("👇 Select the **Product Type** for each item below, then click Search.")
             
@@ -2240,7 +2240,8 @@ if st.session_state.header_data is not None:
                 "Untappd_Status": st.column_config.TextColumn("UT Status", disabled=True, width="small"),
                 "Match_Check": st.column_config.TextColumn("Match Details (Verify Here)", disabled=True, width="large"),
                 "Retry": st.column_config.CheckboxColumn("Retry?", width="small", help="Tick this and click Search to re-run lookup for this line."),
-                "Manual_UT_ID": st.column_config.TextColumn("Manual ID/URL", width="medium", help="Paste Untappd URL or ID here to force a specific match.")
+                "Manual_UT_ID": st.column_config.TextColumn("Manual ID/URL", width="medium", help="Paste Untappd URL or ID here to force a specific match."),
+                "Ignore_UT": st.column_config.CheckboxColumn("Ignore UT?", width="small", help="Tick to skip Untappd search entirely and type details in Tab 3.")
             }
             
             for i in range(1, 4):
@@ -2252,9 +2253,9 @@ if st.session_state.header_data is not None:
 
             # --- 3. DYNAMIC COLUMN ORDER ---
             if search_has_run:
-                base_cols =['Retry', 'Manual_UT_ID', 'Untappd_Status', 'Match_Check', 'Supplier_Name', 'Type', 'Collaborator', 'Product_Name', 'ABV']
+                base_cols =['Ignore_UT', 'Retry', 'Manual_UT_ID', 'Untappd_Status', 'Match_Check', 'Supplier_Name', 'Type', 'Collaborator', 'Product_Name', 'ABV']
             else:
-                base_cols =['Supplier_Name', 'Type', 'Collaborator', 'Product_Name', 'ABV']
+                base_cols =['Ignore_UT', 'Supplier_Name', 'Type', 'Collaborator', 'Product_Name', 'ABV']
             
             ordered_cols = base_cols.copy()
             for i in range(1, 4):
@@ -2815,6 +2816,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
