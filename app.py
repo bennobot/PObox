@@ -1505,13 +1505,37 @@ def run_reconciliation_check(lines_df):
                 shop_keg_meta = str(prod.get('keg_meta', {}).get('value', '')).lower()
                 shop_fmt_meta = str(prod.get('format_meta', {}).get('value', '')).lower()
                 shop_title_lower = prod['title'].lower()
+                
+                # Combine tags to search everywhere as a fallback
                 combined_shop_tags = f"{shop_keg_meta} {shop_fmt_meta} {shop_title_lower}"
                 
                 is_compatible = True
+                
                 if "keg" in inv_fmt:
-                    if "poly" in inv_fmt and ("steel" in combined_shop_tags or "stainless" in combined_shop_tags): is_compatible = False
-                    if "steel" in inv_fmt and ("poly" in combined_shop_tags or "dolium" in combined_shop_tags): is_compatible = False
-                    if "key" in inv_fmt and "sankey" in combined_shop_tags: is_compatible = False
+                    # 1. Identify what kind of keg the invoice wants
+                    is_steel = "steel" in inv_fmt or "stainless" in inv_fmt or "lss" in inv_fmt
+                    is_key = "key" in inv_fmt   # KeyKeg
+                    is_poly = "poly" in inv_fmt # PolyKeg
+                    is_dolium = "dolium" in inv_fmt 
+                    is_uni = "uni" in inv_fmt   # UniKeg
+                    
+                    # 2. STRICT METAFIELD VALIDATION
+                    # If Shopify explicitly declares a keg type metafield, it MUST align with the invoice
+                    if shop_keg_meta:
+                        if is_steel and not any(x in shop_keg_meta for x in ["steel", "stainless", "lss"]): is_compatible = False
+                        if is_key and "key" not in shop_keg_meta: is_compatible = False
+                        if is_poly and "poly" not in shop_keg_meta: is_compatible = False
+                        if is_dolium and "dolium" not in shop_keg_meta: is_compatible = False
+                        if is_uni and "uni" not in shop_keg_meta: is_compatible = False
+                        
+                    # 3. CROSS-MATCH BANNING
+                    # Prevent matching if the wrong keg type appears anywhere in the Shopify tags/title
+                    # (Uses "keykeg" to prevent accidental matches with words like "whiskey")
+                    if is_steel and any(x in combined_shop_tags for x in ["keykeg", "key keg", "poly", "dolium", "unikeg"]): is_compatible = False
+                    if is_key and any(x in combined_shop_tags for x in["steel", "stainless", "lss", "poly", "dolium", "unikeg"]): is_compatible = False
+                    if is_poly and any(x in combined_shop_tags for x in["steel", "stainless", "keykeg", "key keg", "dolium", "unikeg"]): is_compatible = False
+                    if is_dolium and any(x in combined_shop_tags for x in["steel", "stainless", "keykeg", "key keg", "poly", "unikeg"]): is_compatible = False
+                    if is_uni and any(x in combined_shop_tags for x in["steel", "stainless", "keykeg", "key keg", "poly", "dolium"]): is_compatible = False
                 
                 if not is_compatible: continue
 
@@ -2772,6 +2796,7 @@ if st.session_state.header_data is not None:
                                 for log in logs: st.write(log)
                 else:
                     st.error("Cin7 Secrets missing.")
+
 
 
 
