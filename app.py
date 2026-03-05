@@ -2405,9 +2405,11 @@ if st.session_state.header_data is not None:
                             if match: task_id = match.group(1)
                             
                             st.success(msg)
-                            if task_id: st.link_button("🔗 Open PO in Cin7", f"https://inventory.dearsystems.com/PurchaseAdvanced#{task_id}")
+                            if task_id: 
+                                st.link_button("🔗 Open PO in Cin7", f"https://inventory.dearsystems.com/PurchaseAdvanced#{task_id}")
+                            
                             st.balloons()
-                            st.rerun()
+                            # Notice: No st.rerun() here, so the balloons and button stay on screen!
                         else:
                             st.error(msg)
                             with st.expander("Error Details"):
@@ -2567,6 +2569,7 @@ if st.session_state.header_data is not None:
                             with st.expander("Update Logs", expanded=True):
                                 for log in update_logs:
                                     st.write(log)
+
 
 
 
