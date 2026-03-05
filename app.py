@@ -2441,10 +2441,20 @@ if st.session_state.header_data is not None:
                                         # Recalculate based on live Attribute 5 from Cin7
                                         expected_price = calculate_sell_price(row.get('Item_Price', 0), c_attr5, row.get('Format', ''))
                                         
-                                        update_req = abs(c_price - expected_price) > 0.02 or abs(s_price - expected_price) > 0.02
+                                        # Determine specific mismatch messages
+                                        c_mismatch = abs(c_price - expected_price) > 0.02
+                                        s_mismatch = abs(s_price - expected_price) > 0.02
+                                        update_req = c_mismatch or s_mismatch
+                                        
+                                        if c_mismatch and s_mismatch: status_msg = "🚨 Cin7 & Shopify Mismatch"
+                                        elif c_mismatch: status_msg = "🚨 Cin7 Mismatch"
+                                        elif s_mismatch: status_msg = "🚨 Shopify Mismatch"
+                                        else: status_msg = "✅ Prices OK"
+                                        
                                         display_name = c_name if c_name else row.get('Product_Name', '')
                                         
                                         price_rows.append({
+                                            "Status": status_msg,
                                             "Update": update_req,
                                             "SKU": sku,
                                             "Product": display_name,
@@ -2462,7 +2472,7 @@ if st.session_state.header_data is not None:
                         for _, row in st.session_state.upload_data.iterrows():
                             base_sku = row.get('Variant_SKU', '')
                             
-                            for prefix in ["L-", "G-"]:
+                            for prefix in["L-", "G-"]:
                                 sku = f"{prefix}{base_sku}"
                                 cin7_id, c_price, c_name, c_attr5 = fetch_cin7_product_details_by_sku(sku)
                                 shop_gid, s_price = fetch_shopify_price_by_sku(sku)
@@ -2471,10 +2481,20 @@ if st.session_state.header_data is not None:
                                 final_attr5 = c_attr5 if c_attr5 else row.get('Attribute_5', 'Rotational Product')
                                 expected_price = calculate_sell_price(row.get('item_price', 0), final_attr5, row.get('format', ''))
                                 
-                                update_req = abs(c_price - expected_price) > 0.02 or abs(s_price - expected_price) > 0.02
+                                # Determine specific mismatch messages
+                                c_mismatch = abs(c_price - expected_price) > 0.02
+                                s_mismatch = abs(s_price - expected_price) > 0.02
+                                update_req = c_mismatch or s_mismatch
+                                
+                                if c_mismatch and s_mismatch: status_msg = "🚨 Cin7 & Shopify Mismatch"
+                                elif c_mismatch: status_msg = "🚨 Cin7 Mismatch"
+                                elif s_mismatch: status_msg = "🚨 Shopify Mismatch"
+                                else: status_msg = "✅ Prices OK"
+                                
                                 display_name = c_name if c_name else row.get('Variant_Name', '')
                                 
                                 price_rows.append({
+                                    "Status": status_msg,
                                     "Update": update_req,
                                     "SKU": sku,
                                     "Product": display_name,
@@ -2496,6 +2516,7 @@ if st.session_state.header_data is not None:
                 st.caption("Rows where the live price differs from the expected price are automatically ticked for updating.")
                 
                 pc_config = {
+                    "Status": st.column_config.TextColumn("Status", disabled=True),
                     "Update": st.column_config.CheckboxColumn("Update?", width="small"),
                     "SKU": st.column_config.TextColumn("SKU", disabled=True),
                     "Product": st.column_config.TextColumn("Product Name", disabled=True),
@@ -2546,5 +2567,6 @@ if st.session_state.header_data is not None:
                             with st.expander("Update Logs", expanded=True):
                                 for log in update_logs:
                                     st.write(log)
+
 
 
