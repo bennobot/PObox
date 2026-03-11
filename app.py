@@ -2047,10 +2047,17 @@ if st.session_state.header_data is not None:
         
         if st.session_state.upload_data is not None and not st.session_state.upload_data.empty:
 
-            for idx, row in st.session_state.upload_data.iterrows():
-                    supp_name = str(row.get('untappd_brewery', '')).strip()
-                    prod_name = str(row.get('untappd_product', '')).strip()
-                    collaborator = str(row.get('collaborator', '')).strip()
+            if st.button("🛠️ Generate Upload Data"):
+                supplier_map = fetch_supplier_codes()
+                format_map = fetch_format_codes()
+                weight_map, size_code_map = fetch_weight_map() 
+                keg_map = fetch_keg_codes() 
+                today_str = datetime.now().strftime('%d%m%Y')
+                processed_rows =[]
+                
+                for idx, row in st.session_state.upload_data.iterrows():
+                    supp_name = row.get('untappd_brewery', '')
+                    prod_name = row.get('untappd_product', '')
                     fmt_name = str(row.get('format', '')).strip()
                     vol_name = str(row.get('volume', '')).strip()
                     attr_5 = row.get('Attribute_5', 'Rotational Product')
@@ -2066,15 +2073,7 @@ if st.session_state.header_data is not None:
                     f_code = format_map.get(fmt_name.lower(), "UN")
                     
                     family_sku = f"{s_code}{p_code}-{today_str}-{idx}-{f_code}"
-                    
-                    # --- NEW LOGIC: Inject Collaborator into the Display Name ---
-                    if collaborator and collaborator.lower() not in ["", "nan", "none"]:
-                        display_supplier = f"{supp_name} + {collaborator}"
-                    else:
-                        display_supplier = supp_name
-                        
-                    # Builds: "Supplier + Collab / Product Name / 4.5% / Format"
-                    family_name = f"{display_supplier} / {prod_name} / {abv_val}% / {fmt_name}"
+                    family_name = f"{supp_name} / {prod_name} / {abv_val}% / {fmt_name}"
 
                     connectors = [""]
                     fmt_lower = fmt_name.lower()
@@ -2603,8 +2602,6 @@ if st.session_state.header_data is not None:
                             with st.expander("Update Logs", expanded=True):
                                 for log in update_logs:
                                     st.write(log)
-
-
 
 
 
