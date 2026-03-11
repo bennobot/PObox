@@ -991,7 +991,14 @@ def create_cin7_variant(row_data, family_id, family_base_sku, family_base_name, 
         weight = float(row_data['Weight'])
         internal_note = f"{full_var_sku} *** {full_var_name} *** {var_name_raw} *** {family_id}"
         tags = f"{location_name},Wholesale,{brand_name}"
+        
         fmt = row_data.get('format', '')
+        
+        # --- NEW LOGIC: Fetch Parent Format from GSheets ---
+        parent_format_map = fetch_parent_formats()
+        # Look up the parent format (e.g., "Keg", "Cans"). Fall back to the raw format if missing from the sheet.
+        attr1_val = parent_format_map.get(str(fmt).lower().strip(), fmt)
+        
         style = row_data.get('untappd_style', '')
         abv = row_data.get('untappd_abv', '')
         keg_connector = row_data.get('Keg_Connector', '')
@@ -1003,16 +1010,38 @@ def create_cin7_variant(row_data, family_id, family_base_sku, family_base_name, 
         sales_price = calculate_sell_price(cost_price, attr_5, fmt)
         
         payload_prod = {
-            "SKU": full_var_sku, "Name": full_var_name, "Category": location_name, "Brand": brand_name,
-            "Type": "Stock", "CostingMethod": "FIFO - Batch", "DropShipMode": "No Drop Ship",
-            "DefaultLocation": location_name, "Weight": weight, "UOM": "Each", "WeightUnits": "kg",
-            "PriceTier1": sales_price, "PriceTiers": {"Tier 1": sales_price}, "InternalNote": internal_note,
-            "Description": row_data['description'], "AdditionalAttribute1": fmt, "AdditionalAttribute2": style, 
-            "AdditionalAttribute3": fmt, "AdditionalAttribute4": prod_type, "AdditionalAttribute5": attr_5, 
-            "AdditionalAttribute6": var_sku_raw, "AdditionalAttribute7": var_name_raw, "AdditionalAttribute8": keg_connector, 
-            "AdditionalAttribute9": prod_name_only, "AdditionalAttribute10": abv, "AttributeSet": "Products",
-            "Tags": tags, "Status": "Active", "COGSAccount": "5101", "RevenueAccount": "4000",
-            "InventoryAccount": "1001", "Sellable": True,
+            "SKU": full_var_sku,
+            "Name": full_var_name,
+            "Category": location_name,
+            "Brand": brand_name,
+            "Type": "Stock",
+            "CostingMethod": "FIFO - Batch",
+            "DropShipMode": "No Drop Ship",
+            "DefaultLocation": location_name,
+            "Weight": weight,
+            "UOM": "Each",
+            "WeightUnits": "kg",
+            "PriceTier1": sales_price, 
+            "PriceTiers": {"Tier 1": sales_price},
+            "InternalNote": internal_note,
+            "Description": row_data['description'],
+            "AdditionalAttribute1": attr1_val,   # <--- Dynamically pulled from GSheets Column C!
+            "AdditionalAttribute2": style, 
+            "AdditionalAttribute3": fmt,         # <--- Remains specific (e.g., "Dolium Keg | 30 Litre")
+            "AdditionalAttribute4": prod_type, 
+            "AdditionalAttribute5": attr_5, 
+            "AdditionalAttribute6": var_sku_raw, 
+            "AdditionalAttribute7": var_name_raw,
+            "AdditionalAttribute8": keg_connector, 
+            "AdditionalAttribute9": prod_name_only, 
+            "AdditionalAttribute10": abv,
+            "AttributeSet": "Products",
+            "Tags": tags,
+            "Status": "Active",
+            "COGSAccount": "5101",
+            "RevenueAccount": "4000",
+            "InventoryAccount": "1001",
+            "Sellable": True,
         }
         try:
             r_create = make_cin7_request("POST", f"{base_url}/product", headers=headers, json=payload_prod)
@@ -1325,14 +1354,18 @@ def fetch_supplier_codes():
     return {}
 
 @st.cache_data(ttl=3600)
-def fetch_format_codes():
+def fetch_parent_formats():
+    """Fetches the 'Parent Format' from Column C (Index 2) of the SKU sheet."""
     try:
         conn = st.connection("gsheets", type=GSheetsConnection)
-        sheet_url = "https://docs.google.com/spreadsheets/d/1Skd85vSu3e16z9iAVG8bZjhwqIWRnUxZXiVv1QbmPHA"
-        df = conn.read(spreadsheet=sheet_url, worksheet="SKU", usecols=[0, 1])
+        # Using the specific Sheet ID provided for the Parent Format lookup
+        sheet_url = "https://docs.google.com/spreadsheets/d/1J1TJHGtqft_HEU0Q-HavYM8RwrWbDtulcxBEU7YWOwA"
+        # Read Column A (0) for Format, and Column C (2) for Parent Format
+        df = conn.read(spreadsheet=sheet_url, worksheet="SKU", usecols=[0, 2])
         if not df.empty:
             df = df.dropna()
-            return dict(zip(df.iloc[:, 0].astype(str).str.lower(), df.iloc[:, 1].astype(str)))
+            # Returns dictionary: {'dolium keg | 20 litre': 'Keg', 'bottles | 33cl': 'Bottles'}
+            return dict(zip(df.iloc[:, 0].astype(str).str.lower().str.strip(), df.iloc[:, 1].astype(str).str.strip()))
     except Exception: pass
     return {}
 
@@ -2569,6 +2602,7 @@ if st.session_state.header_data is not None:
                             with st.expander("Update Logs", expanded=True):
                                 for log in update_logs:
                                     st.write(log)
+
 
 
 
