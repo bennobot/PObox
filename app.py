@@ -946,164 +946,180 @@ def create_cin7_family_node(family_base_sku, family_base_name, brand_name, locat
         else: return None, f"❌ Failed Family {full_sku} [HTTP {response.status_code}]: {response.text}"
     except Exception as e: return None, f"💥 Exception Family: {str(e)}"
 
-def create_cin7_variant(row_data, family_id, family_base_sku, family_base_name, location_prefix):
+def create_cin7_product_only(row_data, family_id, family_base_sku, family_base_name, location_prefix):
+    """Creates the product in Cin7 (or finds it) and returns the ID so it can be bulk-linked later."""
     prefix = "L-" if location_prefix == "L" else "G-"
     location_name = "London" if location_prefix == "L" else "Gloucester"
     var_sku_raw = row_data['Variant_SKU']
     var_name_raw = row_data['Variant_Name']
     full_var_sku = f"{prefix}{var_sku_raw}"
     full_var_name = f"{prefix}{family_base_name} / {var_name_raw}"
+    
     headers = get_cin7_headers()
     base_url = get_cin7_base_url()
-    
-    family_obj = None
-    fam_url = f"{base_url}/productFamily?ID={family_id}"
-    try:
-        r_fam = make_cin7_request("GET", fam_url, headers=headers)
-        if r_fam.status_code == 200:
-            fam_data_response = r_fam.json()
-            if "ProductFamilies" in fam_data_response and fam_data_response["ProductFamilies"]:
-                family_obj = fam_data_response["ProductFamilies"][0]
-            elif "ID" in fam_data_response: family_obj = fam_data_response
-    except Exception as e: return f"💥 Fetch Family Ex: {e}"
 
-    if not family_obj: return "⚠️ Family object not found, cannot verify variant."
-
-    current_products = family_obj.get("Products", [])
-    if current_products is None: current_products =[]
-    
-    for p in current_products:
-        if str(p.get("Option1", "")).lower().strip() == str(var_name_raw).lower().strip():
-            return f"⏭️ Skipped: Variant '{var_name_raw}' already exists in Family."
-
-    product_id = None
-    product_created = False
+    # 1. Check if product already exists
     check_url = f"{base_url}/product?Sku={quote(full_var_sku)}"
     try:
         r_check = make_cin7_request("GET", check_url, headers=headers)
         if r_check.status_code == 200:
             data = r_check.json()
-            if data.get("Products"): product_id = data["Products"][0]["ID"]
-    except Exception: pass
+            if data.get("Products"):
+                return data["Products"][0]["ID"], f"🔍 Found Existing Product: {full_var_sku}"
+    except Exception as e: 
+        return None, f"💥 Check Ex: {e}"
 
-    if not product_id:
-        brand_name = row_data['untappd_brewery']
-        weight = float(row_data['Weight'])
-        internal_note = f"{full_var_sku} *** {full_var_name} *** {var_name_raw} *** {family_id}"
-        tags = f"{location_name},Wholesale,{brand_name}"
-        
-        fmt = row_data.get('format', '')
-        
-        # --- NEW LOGIC: Fetch Parent Format from GSheets ---
-        parent_format_map = fetch_parent_formats()
-        clean_fmt = str(fmt).lower().strip()
-        
-        # 1. Try the Google Sheet exact match first
-        if clean_fmt in parent_format_map:
-            attr1_val = parent_format_map[clean_fmt]
-            
-        # 2. Failsafe: If the sheet misses but it's clearly a keg, force "Keg"
-        elif "keg" in clean_fmt:
-            attr1_val = "Keg"
-            
-        # 3. Ultimate Fallback (e.g., Cans, Bottles)
-        else:
-            attr1_val = fmt
-        
-        style = row_data.get('untappd_style', '')
-        abv = row_data.get('untappd_abv', '')
-        keg_connector = row_data.get('Keg_Connector', '')
-        prod_name_only = row_data.get('untappd_product', '')
-        attr_5 = row_data.get('Attribute_5', 'Rotational Product')
-        prod_type = row_data.get('Type', 'Beer')
-        
-        cost_price = float(row_data.get('item_price', 0))
-        sales_price = calculate_sell_price(cost_price, attr_5, fmt)
-        
-        payload_prod = {
-            "SKU": full_var_sku,
-            "Name": full_var_name,
-            "Category": location_name,
-            "Brand": brand_name,
-            "Type": "Stock",
-            "CostingMethod": "FIFO - Batch",
-            "DropShipMode": "No Drop Ship",
-            "DefaultLocation": location_name,
-            "Weight": weight,
-            "UOM": "Each",
-            "WeightUnits": "kg",
-            "PriceTier1": sales_price, 
-            "PriceTiers": {"Tier 1": sales_price},
-            "InternalNote": internal_note,
-            "Description": row_data['description'],
-            "AdditionalAttribute1": attr1_val,   # <--- Dynamically pulled from GSheets Column C!
-            "AdditionalAttribute2": style, 
-            "AdditionalAttribute3": fmt,         # <--- Remains specific (e.g., "Dolium Keg | 30 Litre")
-            "AdditionalAttribute4": prod_type, 
-            "AdditionalAttribute5": attr_5, 
-            "AdditionalAttribute6": var_sku_raw, 
-            "AdditionalAttribute7": var_name_raw,
-            "AdditionalAttribute8": keg_connector, 
-            "AdditionalAttribute9": prod_name_only, 
-            "AdditionalAttribute10": abv,
-            "AttributeSet": "Products",
-            "Tags": tags,
-            "Status": "Active",
-            "COGSAccount": "5101",
-            "RevenueAccount": "4000",
-            "InventoryAccount": "1001",
-            "Sellable": True,
-        }
-        try:
-            r_create = make_cin7_request("POST", f"{base_url}/product", headers=headers, json=payload_prod)
-            if r_create.status_code == 200:
-                resp_data = r_create.json()
-                if "Products" in resp_data and resp_data["Products"]: product_id = resp_data["Products"][0]["ID"]
-                elif "ID" in resp_data: product_id = resp_data["ID"]
-                product_created = True
-            else: return f"❌ Create Failed {full_var_sku}: {r_create.text}"
-        except Exception as e: return f"💥 Create Ex: {e}"
-
-    if not product_id: return f"❌ Could not retrieve Product ID for {full_var_sku}"
-
-    current_products.append({"ID": product_id, "Option1": var_name_raw})
-    family_obj["Products"] = current_products
+    # 2. Create the Product if it doesn't exist
+    brand_name = row_data['untappd_brewery']
+    weight = float(row_data['Weight'])
+    internal_note = f"{full_var_sku} *** {full_var_name} *** {var_name_raw} *** {family_id}"
+    tags = f"{location_name},Wholesale,{brand_name}"
     
-    for field in ['CreatedDate', 'LastModifiedOn']: family_obj.pop(field, None)
-
-    put_fam_url = f"{base_url}/productFamily"
+    fmt = row_data.get('format', '')
+    parent_format_map = fetch_parent_formats()
+    clean_fmt = str(fmt).lower().strip()
+    
+    if clean_fmt in parent_format_map: 
+        attr1_val = parent_format_map[clean_fmt]
+    elif "keg" in clean_fmt: 
+        attr1_val = "Keg"
+    else: 
+        attr1_val = fmt
+        
+    style = row_data.get('untappd_style', '')
+    abv = row_data.get('untappd_abv', '')
+    keg_connector = row_data.get('Keg_Connector', '')
+    prod_name_only = row_data.get('untappd_product', '')
+    attr_5 = row_data.get('Attribute_5', 'Rotational Product')
+    prod_type = row_data.get('Type', 'Beer')
+    
+    cost_price = float(row_data.get('item_price', 0))
+    sales_price = calculate_sell_price(cost_price, attr_5, fmt)
+    
+    payload_prod = {
+        "SKU": full_var_sku, "Name": full_var_name, "Category": location_name, "Brand": brand_name,
+        "Type": "Stock", "CostingMethod": "FIFO - Batch", "DropShipMode": "No Drop Ship",
+        "DefaultLocation": location_name, "Weight": weight, "UOM": "Each", "WeightUnits": "kg",
+        "PriceTier1": sales_price, "PriceTiers": {"Tier 1": sales_price}, "InternalNote": internal_note,
+        "Description": row_data['description'], "AdditionalAttribute1": attr1_val, "AdditionalAttribute2": style, 
+        "AdditionalAttribute3": fmt, "AdditionalAttribute4": prod_type, "AdditionalAttribute5": attr_5, 
+        "AdditionalAttribute6": var_sku_raw, "AdditionalAttribute7": var_name_raw, "AdditionalAttribute8": keg_connector, 
+        "AdditionalAttribute9": prod_name_only, "AdditionalAttribute10": abv, "AttributeSet": "Products",
+        "Tags": tags, "Status": "Active", "COGSAccount": "5101", "RevenueAccount": "4000",
+        "InventoryAccount": "1001", "Sellable": True,
+    }
+    
     try:
-        r_put = make_cin7_request("PUT", put_fam_url, headers=headers, json=family_obj)
-        if r_put.status_code == 200:
-            action = "Created & Linked" if product_created else "Linked Existing"
-            return f"✅ {action} ({full_var_sku})"
-        else: return f"❌ Link Failed [HTTP {r_put.status_code}]: {r_put.text}"
-    except Exception as e: return f"💥 Link Ex: {e}"
+        r_create = make_cin7_request("POST", f"{base_url}/product", headers=headers, json=payload_prod)
+        if r_create.status_code == 200:
+            resp_data = r_create.json()
+            if "Products" in resp_data and resp_data["Products"]: 
+                return resp_data["Products"][0]["ID"], f"🆕 Created New Product: {full_var_sku}"
+            elif "ID" in resp_data: 
+                return resp_data["ID"], f"🆕 Created New Product: {full_var_sku}"
+            return None, f"⚠️ Created but no ID returned: {full_var_sku}"
+        else: 
+            return None, f"❌ Create Failed {full_var_sku}: {r_create.text}"
+    except Exception as e: 
+        return None, f"💥 Create Ex: {e}"
 
 def sync_product_to_cin7(upload_df, status_box=None):
     log =[]
+    
     def update_log(message):
         log.append(message)
-        if status_box: status_box.code("\n".join(log), language="text")
+        if status_box:
+            # Render the log as a code block so it updates instantly in the UI
+            status_box.code("\n".join(log), language="text")
 
     families = upload_df.groupby('Family_SKU')
     total_families = len(families)
-    update_log(f"🚀 Starting Sync for {total_families} Families...")
+    update_log(f"🚀 Starting Bulk Sync for {total_families} Families...")
+    
+    headers = get_cin7_headers()
+    base_url = get_cin7_base_url()
     
     for i, (fam_sku, group) in enumerate(families):
         first_row = group.iloc[0]
         fam_name = first_row['Family_Name']
         brand = first_row['untappd_brewery']
+        
         update_log(f"\n🔄 Processing Family {i+1}/{total_families}: {fam_sku}")
         
-        for loc in ["L", "G"]:
+        for loc in["L", "G"]:
             fam_id, fam_msg = create_cin7_family_node(fam_sku, fam_name, brand, loc)
-            update_log(f"[{loc}] {fam_msg}")
+            update_log(f"   [{loc}] {fam_msg}")
+            
             if fam_id:
+                # 1. FETCH FAMILY EXACTLY ONCE
+                family_obj = None
+                update_log(f"      📥 Fetching existing family structure...")
+                try:
+                    r_fam = make_cin7_request("GET", f"{base_url}/productFamily?ID={fam_id}", headers=headers)
+                    if r_fam.status_code == 200:
+                        fam_data = r_fam.json()
+                        if "ProductFamilies" in fam_data and fam_data["ProductFamilies"]:
+                            family_obj = fam_data["ProductFamilies"][0]
+                        elif "ID" in fam_data:
+                            family_obj = fam_data
+                except Exception as e:
+                    update_log(f"      💥 Family Fetch Error: {e}")
+                    continue
+                    
+                if not family_obj:
+                    update_log("      ⚠️ Could not retrieve family structure. Skipping variants.")
+                    continue
+                    
+                current_products = family_obj.get("Products", [])
+                if current_products is None: current_products =[]
+                family_needs_update = False
+                
+                # 2. LOOP THROUGH VARIANTS & CREATE PRODUCTS
                 for _, row in group.iterrows():
-                    var_msg = create_cin7_variant(row, fam_id, fam_sku, fam_name, loc)
-                    update_log(f"      -> Variant: {var_msg}")
-            else: update_log(f"   🛑 HALT: Could not acquire Family ID. Skipping variants for {fam_sku} ({loc}).")
+                    var_name_raw = row['Variant_Name']
+                    
+                    # Check if already linked
+                    already_in_fam = False
+                    for p in current_products:
+                        if str(p.get("Option1", "")).lower().strip() == str(var_name_raw).lower().strip():
+                            already_in_fam = True
+                            update_log(f"      -> ⏭️ Skipped: '{var_name_raw}' is already linked to this Family.")
+                            break
+                            
+                    if already_in_fam: 
+                        continue
+                    
+                    # Create or Find the Product
+                    prod_id, var_msg = create_cin7_product_only(row, fam_id, fam_sku, fam_name, loc)
+                    update_log(f"      -> {var_msg}")
+                    
+                    # Stage it for the bulk family update
+                    if prod_id:
+                        current_products.append({"ID": prod_id, "Option1": var_name_raw})
+                        family_needs_update = True
+                        update_log(f"         ⚙️ Staged '{var_name_raw}' for bulk linking...")
+                        
+                # 3. BULK UPLOAD THE VARIANTS TO THE FAMILY
+                if family_needs_update:
+                    update_log(f"      📤 Pushing bulk variant update to Family...")
+                    family_obj["Products"] = current_products
+                    
+                    # Cleanup read-only fields before PUT request
+                    for field in ['CreatedDate', 'LastModifiedOn']: 
+                        family_obj.pop(field, None)
+                    
+                    try:
+                        r_put = make_cin7_request("PUT", f"{base_url}/productFamily", headers=headers, json=family_obj)
+                        if r_put.status_code == 200:
+                            update_log(f"      ✅ Successfully bulk-linked all variants to Family!")
+                        else:
+                            update_log(f"      ❌ Bulk Link Failed: {r_put.text}")
+                    except Exception as e:
+                        update_log(f"      💥 Bulk Link Ex: {e}")
+                else:
+                    update_log(f"      ✅ Family is fully up to date. No bulk link needed.")
+            else: 
+                update_log(f"   🛑 HALT: Could not acquire Family ID. Skipping variants for {fam_sku} ({loc}).")
                 
     update_log("\n✅ Sync Process Complete.")
     return log
@@ -2647,6 +2663,7 @@ if st.session_state.header_data is not None:
                             with st.expander("Update Logs", expanded=True):
                                 for log in update_logs:
                                     st.write(log)
+
 
 
 
