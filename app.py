@@ -996,8 +996,19 @@ def create_cin7_variant(row_data, family_id, family_base_sku, family_base_name, 
         
         # --- NEW LOGIC: Fetch Parent Format from GSheets ---
         parent_format_map = fetch_parent_formats()
-        # Look up the parent format (e.g., "Keg", "Cans"). Fall back to the raw format if missing from the sheet.
-        attr1_val = parent_format_map.get(str(fmt).lower().strip(), fmt)
+        clean_fmt = str(fmt).lower().strip()
+        
+        # 1. Try the Google Sheet exact match first
+        if clean_fmt in parent_format_map:
+            attr1_val = parent_format_map[clean_fmt]
+            
+        # 2. Failsafe: If the sheet misses but it's clearly a keg, force "Keg"
+        elif "keg" in clean_fmt:
+            attr1_val = "Keg"
+            
+        # 3. Ultimate Fallback (e.g., Cans, Bottles)
+        else:
+            attr1_val = fmt
         
         style = row_data.get('untappd_style', '')
         abv = row_data.get('untappd_abv', '')
@@ -2636,6 +2647,7 @@ if st.session_state.header_data is not None:
                             with st.expander("Update Logs", expanded=True):
                                 for log in update_logs:
                                     st.write(log)
+
 
 
 
