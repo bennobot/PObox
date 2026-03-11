@@ -1354,6 +1354,31 @@ def fetch_supplier_codes():
     return {}
 
 @st.cache_data(ttl=3600)
+def fetch_format_codes():
+    try:
+        conn = st.connection("gsheets", type=GSheetsConnection)
+        sheet_url = "https://docs.google.com/spreadsheets/d/1Skd85vSu3e16z9iAVG8bZjhwqIWRnUxZXiVv1QbmPHA"
+        df = conn.read(spreadsheet=sheet_url, worksheet="SKU", usecols=[0, 1])
+        if not df.empty:
+            df = df.dropna()
+            return dict(zip(df.iloc[:, 0].astype(str).str.lower(), df.iloc[:, 1].astype(str)))
+    except Exception: pass
+    return {}
+
+@st.cache_data(ttl=3600)
+def fetch_parent_formats():
+    """Fetches the 'Parent Format' from Column C (Index 2) of the SKU sheet."""
+    try:
+        conn = st.connection("gsheets", type=GSheetsConnection)
+        sheet_url = "https://docs.google.com/spreadsheets/d/1J1TJHGtqft_HEU0Q-HavYM8RwrWbDtulcxBEU7YWOwA"
+        df = conn.read(spreadsheet=sheet_url, worksheet="SKU", usecols=[0, 2])
+        if not df.empty:
+            df = df.dropna()
+            return dict(zip(df.iloc[:, 0].astype(str).str.lower().str.strip(), df.iloc[:, 1].astype(str).str.strip()))
+    except Exception: pass
+    return {}
+
+@st.cache_data(ttl=3600)
 def fetch_parent_formats():
     """Fetches the 'Parent Format' from Column C (Index 2) of the SKU sheet."""
     try:
@@ -2611,6 +2636,7 @@ if st.session_state.header_data is not None:
                             with st.expander("Update Logs", expanded=True):
                                 for log in update_logs:
                                     st.write(log)
+
 
 
 
