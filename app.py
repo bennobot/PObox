@@ -1771,7 +1771,7 @@ if st.button("🚀 Process Invoice", type="primary"):
                         {{
                             "Supplier_Name": "...", "Collaborator": "...", "Product_Name": "...", 
                             "ABV": null,
-                            "Format": "...", "Pack_Size": "...", "Volume": "...", "Quantity": 1, "Item_Price": 10.00
+                            "Format": "...", "Pack_Size": "...", "Volume": "...", "Quantity": 1, "Item_Price": 10.00, "Line_Total": 10.00
                         }}
                     ]
                 }}
@@ -1822,7 +1822,7 @@ if st.button("🚀 Process Invoice", type="primary"):
                 df_lines['Use_Split'] = False 
                 df_lines['Strict_Search'] = False 
                 
-                cols =["Use_Split", "Strict_Search", "Supplier_Name", "Collaborator", "Product_Name", "ABV", "Format", "Pack_Size", "Volume", "Item_Price", "Quantity"]
+                cols =["Use_Split", "Strict_Search", "Supplier_Name", "Collaborator", "Product_Name", "ABV", "Format", "Pack_Size", "Volume", "Item_Price", "Line_Total", "Quantity"]
                 existing = [c for c in cols if c in df_lines.columns]
                 st.session_state.line_items = df_lines[existing]
                 
@@ -1865,7 +1865,7 @@ if st.session_state.header_data is not None:
         ideal_order =[
             'Use_Split', 'Strict_Search', 'Shopify_Status', 'Matched_Product', 
             'Matched_Variant', 'Image', 'Supplier_Name', 'Product_Name', 'ABV', 
-            'Format', 'Pack_Size', 'Volume', 'Quantity', 'Item_Price', 
+            'Format', 'Pack_Size', 'Volume', 'Quantity', 'Line_Total', 'Item_Price', 
             'Collaborator', 'Shopify_Variant_ID', 'London_SKU', 'Gloucester_SKU'
         ]
         
@@ -1878,8 +1878,9 @@ if st.session_state.header_data is not None:
             "Shopify_Status": st.column_config.TextColumn("Status", disabled=True), 
             "Matched_Product": st.column_config.TextColumn("Shopify Match", disabled=True),
             "Matched_Variant": st.column_config.TextColumn("Variant Match", disabled=True),
-            "Use_Split": st.column_config.CheckboxColumn("Order Split?", width="small", help="Tick to order half-case (e.g. 12x instead of 24x)"),
-            "Strict_Search": st.column_config.CheckboxColumn("Strict?", width="small", help="Tick to force exact name matching (prevents Vol 1 matching Vol 2)")
+            "Use_Split": st.column_config.CheckboxColumn("Order Split?", width="small", help="Tick to order half-case"),
+            "Strict_Search": st.column_config.CheckboxColumn("Strict?", width="small", help="Tick to force exact name matching"),
+            "Line_Total": st.column_config.NumberColumn("Line Total", format="£%.2f")
         }
 
         with st.form(key=f"line_items_form_{st.session_state.line_items_key}"):
@@ -1896,8 +1897,21 @@ if st.session_state.header_data is not None:
             save_clicked = st.form_submit_button("💾 Save Changes", type="primary")
             
             if save_clicked:
+                # --- NEW: Auto-Recalculate Item Price on Save ---
+                if 'Line_Total' in edited_lines.columns and 'Quantity' in edited_lines.columns:
+                    for idx, row in edited_lines.iterrows():
+                        try:
+                            qty = float(row['Quantity'])
+                            lt = float(row['Line_Total'])
+                            if qty > 0 and pd.notna(lt):
+                                # If you change the Qty, the Item_Price automatically fixes itself!
+                                edited_lines.at[idx, 'Item_Price'] = round(lt / qty, 2)
+                        except Exception:
+                            pass
+                # ------------------------------------------------
+                
                 st.session_state.line_items = edited_lines
-                st.success("✅ Changes saved successfully!")
+                st.success("✅ Changes saved and Item Prices recalculated!")
                 st.rerun()
         
         st.divider()
