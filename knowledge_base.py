@@ -132,11 +132,22 @@ SUPPLIER_RULEBOOK = {
    """,
 
    "Burning Sky Brewery Limited": """
-   - Extract the EXACT integer at the start of the row for Quantity. Do not change it.
-   - Format Mapping: 
-     "9g Cask" -> Format: Cask, Volume: 9 Gallon
-     "30l Sankey Keg" -> Format: Steel Keg, Volume: 30 Litre
-     "24 x 440ml Can" -> Format: Cans, Pack_Size: 24, Volume: 44cl
+   *** ANTI-HALLUCINATION BYPASS ***
+   To prevent math errors, you MUST set "Item_Price": 0.0 for every single item on this invoice. Do not extract the printed unit price.
+   
+   Your ONLY job is to extract the literal text for Quantity and Line_Total:
+   1. "Quantity": The literal integer at the very start of the line (e.g., 12, 6, 8, 5).
+   2. "Line_Total": The literal currency amount at the very end of the line (e.g., 857.43, 601.34).
+   
+   Example extraction for "12 Plateau - 9g Cask 3.4% £81.66 £10.2075 / 12.5% 20% £857.43":
+   "Quantity": 12
+   "Item_Price": 0.0
+   "Line_Total": 857.43
+   
+   Format Mapping:
+   "9g Cask" -> Format: Cask, Volume: 9 Gallon
+   "30l Sankey Keg" -> Format: Steel Keg, Volume: 30 Litre
+   "24 x 440ml Can" -> Format: Cans, Pack_Size: 24, Volume: 44cl
    - Remove the format text from the Product_Name.
    """,
    
