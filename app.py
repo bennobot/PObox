@@ -2672,26 +2672,16 @@ if st.session_state.header_data is not None:
                             prog_bar = st.progress(0)
                             update_logs =[]
                             
-                            for i, row in to_update.iterrows():
-                                prog_bar.progress((i + 1) / len(to_update))
+                            # --- FIX: Use 'enumerate' to get a clean 0, 1, 2 counter for the progress bar ---
+                            for step, (original_index, row) in enumerate(to_update.iterrows()):
+                                # Now step goes 0, 1, 2... so (step + 1) / length is always between 0.0 and 1.0!
+                                prog_bar.progress((step + 1) / len(to_update))
+                                
                                 sku = row['SKU']
                                 target_price = row['Expected_Price']
                                 
                                 c_stat = "❌ Failed"
                                 s_stat = "❌ Failed"
-                                
-                                if pd.notna(row['Cin7_ID']) and row['Cin7_ID']:
-                                    if update_cin7_price(row['Cin7_ID'], target_price): c_stat = "✅ OK"
-                                        
-                                if pd.notna(row['Shopify_GID']) and row['Shopify_GID']:
-                                    if update_shopify_price(row['Shopify_GID'], target_price): s_stat = "✅ OK"
-                                        
-                                update_logs.append(f"**{sku}** -> Set to £{target_price:.2f} | Cin7: {c_stat} | Shopify: {s_stat}")
-                            
-                            st.success("Batch update complete!")
-                            with st.expander("Update Logs", expanded=True):
-                                for log in update_logs:
-                                    st.write(log)
 
 
 
