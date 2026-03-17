@@ -1749,6 +1749,14 @@ if st.button("🚀 Process Invoice", type="primary"):
                     st.write(f"   - Scanning page {i+1}...")
                     full_text += pytesseract.image_to_string(img) + "\n"
 
+                # --- THE PYTHON ERASER (OCR PRE-SCRUBBING) ---
+                # If the invoice is Burning Sky, delete the distracting middle numbers 
+                # (e.g., "£81.66 £10.2075 / 12.5% 20%") before the AI reads the text.
+                if "Burning Sky" in full_text or "BURNING SKY" in full_text:
+                    # Regex to find and erase the Unit Price, Discount, and VAT block
+                    full_text = re.sub(r'£\d+\.\d+\s*£\d+\.\d+\s*/\s*\d+\.?\d*%\s*\d+%', '', full_text)
+                # ---------------------------------------------
+
                 st.write("3. Sending Text to AI Model...")
                 injected = f"\n!!! USER OVERRIDE !!!\n{custom_rule}\n" if custom_rule else ""
 
