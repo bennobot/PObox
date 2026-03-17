@@ -103,8 +103,9 @@ GLOBAL_RULES_TEXT = f"""
    - The "VALID FORMATS LIST" uses `Format | Volume`. SPLIT this into two columns.
 
 4. **PACK SIZE vs QUANTITY**:
-   - **Pack_Size**: Bottles/Cans = count. Kegs = NULL.
-   - **Quantity**: Units ordered.
+   - **Pack_Size**: Bottles/Cans = count inside the case (e.g. "24 x 440ml" -> Pack_Size: 24). Kegs/Casks = NULL.
+   - **Quantity**: The exact number of units ordered. 
+   - **CRITICAL**: DO NOT attempt to calculate the quantity mathematically (e.g. dividing Line Total by Unit Price). Invoices have line discounts that will break your math. YOU MUST strictly extract the literal number printed in the QTY / Quantity column (usually the very first number on the row).
 
 5. **FINANCIALS**: 
    - **Item_Price**: Price per PURCHASE UNIT.
@@ -128,6 +129,12 @@ SUPPLIER_RULEBOOK = {
 
    "Brass Castle Brewery": """
    there is a discount after the line items which needs to be calculated as a percentage and then applied to the cost price of each item
+   """,
+
+   "Burning Sky Brewery Limited": """
+   - The very first number on the OCR line is the QTY. Extract this literal number, do NOT calculate it.
+   - Disregard the mathematical relationship between Unit Price and Line Price due to the mixed 'Discount' column.
+   - Extract format details from the name: '9g Cask' -> Vol 9 Gallon, Format Cask. '30l Sankey Keg' -> Vol 30 Litre, Format Steel Keg. '24 x 440ml Can' -> Pack 24, Vol 44cl, Format Cans.
    """,
    
    "Thornbridge Brewery": """
