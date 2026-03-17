@@ -1863,10 +1863,25 @@ if st.session_state.header_data is not None:
         display_df = st.session_state.line_items.copy()
         
         ideal_order =[
-            'Use_Split', 'Strict_Search', 'Shopify_Status', 'Matched_Product', 
-            'Matched_Variant', 'Image', 'Supplier_Name', 'Product_Name', 'ABV', 
-            'Format', 'Pack_Size', 'Volume', 'Quantity', 'Line_Total', 'Item_Price', 
-            'Collaborator', 'Shopify_Variant_ID', 'London_SKU', 'Gloucester_SKU'
+            'Use_Split', 
+            'Strict_Search', 
+            'Shopify_Status', 
+            'Matched_Product', 
+            'Matched_Variant', 
+            'Image', 
+            'Supplier_Name', 
+            'Collaborator',    # <-- Moved between Supplier and Product
+            'Product_Name', 
+            'ABV', 
+            'Format', 
+            'Pack_Size', 
+            'Volume', 
+            'Quantity', 
+            'Item_Price', 
+            'Line_Total',      # <-- Moved to the right of Item_Price
+            'Shopify_Variant_ID', 
+            'London_SKU', 
+            'Gloucester_SKU'
         ]
         
         final_cols =[c for c in ideal_order if c in display_df.columns]
