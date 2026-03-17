@@ -1812,7 +1812,6 @@ if st.button("🚀 Process Invoice", type="primary"):
                 df_lines.rename(columns=lambda x: 'ABV' if x.lower() == 'abv' else x, inplace=True)
 
                 # --- NEW: PYTHON MATH SAFEGUARD FOR LINE DISCOUNTS ---
-                # This safely fixes Burning Sky without breaking global invoice discounts!
                 if 'Line_Total' in df_lines.columns and 'Quantity' in df_lines.columns and 'Item_Price' in df_lines.columns:
                     for idx, row in df_lines.iterrows():
                         try:
@@ -1820,11 +1819,11 @@ if st.button("🚀 Process Invoice", type="primary"):
                             lt = float(row['Line_Total'])
                             price = float(row['Item_Price'])
                             
-                            if qty > 0 and lt > 0:
-                                # If Qty * Printed Price doesn't match Line Total, a line discount was applied!
-                                if abs((qty * price) - lt) > 0.02:
-                                    # Force the Item_Price to be the true discounted cost per unit
-                                    df_lines.at[idx, 'Item_Price'] = round(lt / qty, 2)
+                            # THE ZERO-PRICE BYPASS: 
+                            # Only calculate if the AI was explicitly instructed to output 0.0
+                            # This protects global discounts (like Brass Castle) from being overwritten!
+                            if qty > 0 and lt > 0 and price == 0.0:
+                                df_lines.at[idx, 'Item_Price'] = round(lt / qty, 2)
                         except: pass
                 # -----------------------------------------------------
 
