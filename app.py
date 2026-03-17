@@ -1771,7 +1771,7 @@ if st.button("🚀 Process Invoice", type="primary"):
                         {{
                             "Supplier_Name": "...", "Collaborator": "...", "Product_Name": "...", 
                             "ABV": null,
-                            "Format": "...", "Pack_Size": "...", "Volume": "...", "Quantity": 1, "Item_Price": 10.00
+                            "Format": "...", "Pack_Size": "...", "Volume": "...", "Quantity": 1, "Item_Price": 10.00, "Line_Total": 10.00
                         }}
                     ]
                 }}
@@ -1810,6 +1810,23 @@ if st.button("🚀 Process Invoice", type="primary"):
                 
                 df_lines.columns = [c.strip() for c in df_lines.columns]
                 df_lines.rename(columns=lambda x: 'ABV' if x.lower() == 'abv' else x, inplace=True)
+
+                # --- NEW: PYTHON MATH SAFEGUARD FOR LINE DISCOUNTS ---
+                # This safely fixes Burning Sky without breaking global invoice discounts!
+                if 'Line_Total' in df_lines.columns and 'Quantity' in df_lines.columns and 'Item_Price' in df_lines.columns:
+                    for idx, row in df_lines.iterrows():
+                        try:
+                            qty = float(row['Quantity'])
+                            lt = float(row['Line_Total'])
+                            price = float(row['Item_Price'])
+                            
+                            if qty > 0 and lt > 0:
+                                # If Qty * Printed Price doesn't match Line Total, a line discount was applied!
+                                if abs((qty * price) - lt) > 0.02:
+                                    # Force the Item_Price to be the true discounted cost per unit
+                                    df_lines.at[idx, 'Item_Price'] = round(lt / qty, 2)
+                        except: pass
+                # -----------------------------------------------------
 
                 if 'ABV' in df_lines.columns:
                     df_lines['ABV'] = df_lines['ABV'].fillna("").apply(clean_abv)
