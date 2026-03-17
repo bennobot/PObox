@@ -1749,12 +1749,6 @@ if st.button("🚀 Process Invoice", type="primary"):
                     st.write(f"   - Scanning page {i+1}...")
                     full_text += pytesseract.image_to_string(img) + "\n"
 
-                # --- THE PYTHON ERASER (OCR PRE-SCRUBBING) ---
-                if "Burning Sky" in full_text or "BURNING SKY" in full_text:
-                    # Flexibly catches missing or garbled £ signs to guarantee deletion
-                    full_text = re.sub(r'(?:£|E|e)?\d+\.\d+\s+(?:£|E|e)?\d+\.\d+\s*/\s*\d+\.?\d*%\s*\d+%', '', full_text)
-                # ---------------------------------------------
-
                 st.write("3. Sending Text to AI Model...")
                 injected = f"\n!!! USER OVERRIDE !!!\n{custom_rule}\n" if custom_rule else ""
 
@@ -1777,7 +1771,7 @@ if st.button("🚀 Process Invoice", type="primary"):
                         {{
                             "Supplier_Name": "...", "Collaborator": "...", "Product_Name": "...", 
                             "ABV": null,
-                            "Format": "...", "Pack_Size": "...", "Volume": "...", "Quantity": 1, "Item_Price": 10.00, "Line_Total": 10.00
+                            "Format": "...", "Pack_Size": "...", "Volume": "...", "Quantity": 1, "Item_Price": 10.00
                         }}
                     ]
                 }}
@@ -1816,22 +1810,6 @@ if st.button("🚀 Process Invoice", type="primary"):
                 
                 df_lines.columns = [c.strip() for c in df_lines.columns]
                 df_lines.rename(columns=lambda x: 'ABV' if x.lower() == 'abv' else x, inplace=True)
-
-                # --- NEW: PYTHON MATH SAFEGUARD FOR LINE DISCOUNTS ---
-                if 'Line_Total' in df_lines.columns and 'Quantity' in df_lines.columns and 'Item_Price' in df_lines.columns:
-                    for idx, row in df_lines.iterrows():
-                        try:
-                            qty = float(row['Quantity'])
-                            lt = float(row['Line_Total'])
-                            price = float(row['Item_Price'])
-                            
-                            # THE ZERO-PRICE BYPASS: 
-                            # Only calculate if the AI was explicitly instructed to output 0.0
-                            # This protects global discounts (like Brass Castle) from being overwritten!
-                            if qty > 0 and lt > 0 and price == 0.0:
-                                df_lines.at[idx, 'Item_Price'] = round(lt / qty, 2)
-                        except: pass
-                # -----------------------------------------------------
 
                 if 'ABV' in df_lines.columns:
                     df_lines['ABV'] = df_lines['ABV'].fillna("").apply(clean_abv)
