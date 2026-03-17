@@ -132,24 +132,25 @@ SUPPLIER_RULEBOOK = {
    """,
 
    "Burning Sky Brewery Limited": """
-   *** ANTI-HALLUCINATION BYPASS ***
-   To prevent math errors, you MUST set "Item_Price": 0.0 for every single item on this invoice. Do not extract the printed unit price.
+   *** CRITICAL AI MATH TRAP - DO NOT CALCULATE QUANTITY ***
+   You have a critical flaw where you try to calculate the Quantity by dividing the Line Total by the Unit Price. 
+   Because this invoice applies a 12.5% discount, YOUR MATH WILL BE WRONG.
    
-   Your ONLY job is to extract the literal text for Quantity and Line_Total:
-   1. "Quantity": The literal integer at the very start of the line (e.g., 12, 6, 8, 5).
-   2. "Line_Total": The literal currency amount at the very end of the line (e.g., 857.43, 601.34).
+   For example, on the 'Low Life' line, 367.50 / 52.50 = 7. BUT THE REAL QUANTITY IS 8.
+   For the 'Arise' line, 511.77 / 97.48 = 5.25. BUT THE REAL QUANTITY IS 6.
    
-   Example extraction for "12 Plateau - 9g Cask 3.4% £81.66 £10.2075 / 12.5% 20% £857.43":
-   "Quantity": 12
-   "Item_Price": 0.0
-   "Line_Total": 857.43
+   You MUST STOP calculating the quantity. You MUST extract the exact literal number printed at the absolute beginning of the line.
+   
+   1. Quantity: The very first number on the far left. (e.g., 12, 6, 6, 6, 6, 8, 5, 5, 5).
+   2. Item_Price: 0.0 (Always output 0.0. The system will calculate it later).
+   3. Line_Total: The final currency amount on the far right.
    
    Format Mapping:
-   "9g Cask" -> Format: Cask, Volume: 9 Gallon
-   "30l Sankey Keg" -> Format: Steel Keg, Volume: 30 Litre
-   "24 x 440ml Can" -> Format: Cans, Pack_Size: 24, Volume: 44cl
+   - "9g Cask" -> Format: Cask, Volume: 9 Gallon
+   - "30l Sankey Keg" -> Format: Steel Keg, Volume: 30 Litre
+   - "24 x 440ml Can" -> Format: Cans, Pack_Size: 24, Volume: 44cl
    - Remove the format text from the Product_Name.
-   """,
+   """,,
    
    "Thornbridge Brewery": """
    when the product name includes ekeg it is a steel keg, when it includes keg it is a Keykeg
