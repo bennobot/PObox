@@ -82,9 +82,8 @@ GLOBAL_RULES_TEXT = f"""
 1. **PRODUCT NAMES (SMART CLEANING)**:
    - **Hyphen Handling**: 
      - **DO NOT** blindly split at every hyphen (-).
-     - **CHECK**: Does the text AFTER the hyphen describe the Beer (e.g. "Nelson Sauvin", "Restoration Series")? -> **KEEP IT**.
-     - **CHECK**: Does the text AFTER the hyphen describe Format/Size (e.g. "Firkin", "9G", "Keg")? -> **REMOVE IT**.
-     - Example: "Ruby Mild - Restoration Series - Firkin" -> Product Name: "Ruby Mild - Restoration Series".
+     - **CHECK**: Does the text AFTER the hyphen describe the Beer? -> **KEEP IT**.
+     - **CHECK**: Does the text AFTER the hyphen describe Format/Size? -> **REMOVE IT**.
    - **Remove Prefixes**: Strip codes like "SRM-", "NRB", "30EK", "9G".
    - **Collaborator**: Extract partner names (e.g. "STF/Croft" -> Collab: Croft).
    - **Title Case**: Convert Product Name to Title Case.
@@ -102,22 +101,21 @@ GLOBAL_RULES_TEXT = f"""
 3. **VALID LIST HANDLING**:
    - The "VALID FORMATS LIST" uses `Format | Volume`. SPLIT this into two columns.
 
-4. **QUANTITY EXTRACTION (CRITICAL - DO NOT HALLUCINATE)**:
-   - **Quantity** is the EXACT literal number printed at the far left beginning of the line (e.g., 12, 6, 8, 5). 
-   - NEVER reverse-engineer, guess, or alter the Quantity to make the math match the unit price. If the OCR says 6, the Quantity is exactly 6.
-   - **Pack_Size**: The count inside a case (e.g., "24 x 440ml" -> Pack_Size: 24). Do not confuse Pack_Size with Quantity. Kegs/Casks = NULL.
+4. **QUANTITY EXTRACTION (TRUST THE COLUMNS)**:
+   - Identify the Quantity column strictly based on the invoice table headers (e.g., QTY, Quantity, Order).
+   - **CRITICAL**: Extract the EXACT literal number printed in that column. NEVER try to "verify" or "adjust" the quantity by doing math in your head. Do not alter the quantity to make the unit price match the line total.
+   - **Pack_Size**: Bottles/Cans = count inside the case. Kegs/Casks = NULL.
 
-5. **FINANCIALS & DISCOUNT MATH (GLOBAL RULE)**:
-   - Invoices frequently contain line discounts (e.g., "12.5%", "£10.20") which make the printed "Unit Price" incorrect for our system.
-   - **Item_Price**: You MUST calculate the true, final cost per unit. 
-   - **Formula**: `Item_Price = Line Total Price / Quantity`. 
-   - Ignore the printed "Unit Price". Always trust the Line Total and the literal Quantity to find the true Item_Price.
+5. **FINANCIALS & DISCOUNT MATH**:
+   - **Item_Price MUST be calculated by you.**
+   - **Formula**: `Item_Price = Line Total Price / Quantity`.
+   - Ignore the printed "Unit Price", as it does not include line discounts. Always trust the Line Total column and divide it by the literal Quantity.
 
 6. **FILTERING**:
    - Exclude "pump clip", "badge" ONLY IF price is 0.00.
 
 7. **HEADER EXTRACTION**:
-   - **Payable_To**: The Supplier Name (Not Pig's Ears).
+   - **Payable_To**: The Supplier Name.
 
 VALID FORMATS LIST:
 {VALID_FORMATS}
@@ -133,11 +131,12 @@ SUPPLIER_RULEBOOK = {
    """,
 
    "Burning Sky Brewery Limited": """
-   - PRODUCT NAME: Remove the format text entirely (e.g., "Plateau", "Aurora", "Numbers", "Petite Pils", "Low Life").
-   - FORMATS: 
-      - "9g Cask" -> Format: Cask, Volume: 9 Gallon
-      - "30l Sankey Keg" -> Format: Steel Keg, Volume: 30 Litre
-      - "24 x 440ml Can" -> Format: Cans, Pack_Size: 24, Volume: 44cl
+   - TABLE STRUCTURE: The columns are exactly QTY | ITEM | ABV | UNIT PRICE | DISCOUNT | VAT | LINE PRICE.
+   - QUANTITY: Strictly use the number in the first column (QTY). Example: '12', '6', '8', '5'.
+   - WARNING: Do NOT confuse the 'DISCOUNT' amount (e.g., '£10.2075') with the Quantity!
+   - ITEM_PRICE: Calculate as LINE PRICE / QTY. Example: 857.43 / 12 = 71.45.
+   - PRODUCT NAME: Remove the format text (e.g., "Plateau", "Aurora").
+   - FORMATS: "9g Cask" -> Format: Cask, Volume: 9 Gallon. "30l Sankey Keg" -> Format: Steel Keg, Volume: 30 Litre. "24 x 440ml Can" -> Format: Cans, Pack_Size: 24, Volume: 44cl.
    """,
    
    "Thornbridge Brewery": """
