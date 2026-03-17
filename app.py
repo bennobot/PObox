@@ -2637,6 +2637,14 @@ if st.session_state.header_data is not None:
             # --- RENDER TABLE ---
             if 'price_check_data' in st.session_state and st.session_state.price_check_data is not None and not st.session_state.price_check_data.empty:
                 st.divider()
+                
+                # 1. DISPLAY LOGS OUTSIDE THE FORM (Survives reruns!)
+                if 'price_update_logs' in st.session_state and st.session_state.price_update_logs:
+                    st.success("✅ Batch update complete!")
+                    with st.expander("View Update Logs", expanded=True):
+                        for log in st.session_state.price_update_logs:
+                            st.write(log)
+                            
                 st.markdown("### Discrepancy Report")
                 st.caption("Rows where the live price differs from the expected price are automatically ticked for updating.")
                 
@@ -2672,16 +2680,40 @@ if st.session_state.header_data is not None:
                             prog_bar = st.progress(0)
                             update_logs =[]
                             
-                            # --- FIX: Use 'enumerate' to get a clean 0, 1, 2 counter for the progress bar ---
                             for step, (original_index, row) in enumerate(to_update.iterrows()):
-                                # Now step goes 0, 1, 2... so (step + 1) / length is always between 0.0 and 1.0!
                                 prog_bar.progress((step + 1) / len(to_update))
-                                
                                 sku = row['SKU']
                                 target_price = row['Expected_Price']
                                 
-                                c_stat = "❌ Failed"
-                                s_stat = "❌ Failed"
+                                c_stat = "Skipped"
+                                s_stat = "Skipped"
+                                
+                                # 2. UPDATE CIN7 & MODIFY LOCAL TABLE
+                                if pd.notna(row['Cin7_ID']) and str(row['Cin7_ID']).strip():
+                                    if update_cin7_price(row['Cin7_ID'], target_price): 
+                                        c_stat = "✅ OK"
+                                        st.session_state.price_check_data.at[original_index, 'Cin7_Price'] = target_price
+                                    else:
+                                        c_stat = "❌ Failed"
+                                        
+                                # 3. UPDATE SHOPIFY & MODIFY LOCAL TABLE
+                                if pd.notna(row['Shopify_GID']) and str(row['Shopify_GID']).strip():
+                                    if update_shopify_price(row['Shopify_GID'], target_price): 
+                                        s_stat = "✅ OK"
+                                        st.session_state.price_check_data.at[original_index, 'Shopify_Price'] = target_price
+                                    else:
+                                        s_stat = "❌ Failed"
+                                        
+                                # 4. FLIP STATUS TO GREEN IF SUCCESSFUL
+                                if "Failed" not in c_stat and "Failed" not in s_stat:
+                                    st.session_state.price_check_data.at[original_index, 'Status'] = "✅ Prices OK"
+                                    st.session_state.price_check_data.at[original_index, 'Update'] = False # Untick the box
+                                        
+                                update_logs.append(f"**{sku}** -> Set to £{target_price:.2f} | Cin7: {c_stat} | Shopify: {s_stat}")
+                            
+                            # Save logs to session state and rerun to force the UI to paint the new data!
+                            st.session_state.price_update_logs = update_logs
+                            st.rerun()
 
 
 
