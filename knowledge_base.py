@@ -99,12 +99,13 @@ GLOBAL_RULES_TEXT = f"""
    - "Poly" -> PolyKeg.
    - **Conversions**: ml->cl, L->Litre.
 
-3. **VALID LIST HANDLING**:
-   - The "VALID FORMATS LIST" uses `Format | Volume`. SPLIT this into two columns.
-
-4. **PACK SIZE vs QUANTITY**:
+4. **QUANTITY EXTRACTION**:
+   - **Quantity**: The exact literal number ordered. DO NOT alter the quantity to balance the math. We calculate discounts securely in our backend.
    - **Pack_Size**: Bottles/Cans = count. Kegs = NULL.
-   - **Quantity**: Units ordered.
+
+5. **FINANCIALS**: 
+   - **Item_Price**: Extract the printed unit price.
+   - **Line_Total**: Extract the total price for that specific line.
 
 5. **FINANCIALS**: 
    - **Item_Price**: Price per PURCHASE UNIT.
@@ -128,6 +129,15 @@ SUPPLIER_RULEBOOK = {
 
    "Brass Castle Brewery": """
    there is a discount after the line items which needs to be calculated as a percentage and then applied to the cost price of each item
+   """,
+
+   "Burning Sky Brewery Limited": """
+   - Extract the EXACT integer at the start of the row for Quantity. Do not change it.
+   - Format Mapping: 
+     "9g Cask" -> Format: Cask, Volume: 9 Gallon
+     "30l Sankey Keg" -> Format: Steel Keg, Volume: 30 Litre
+     "24 x 440ml Can" -> Format: Cans, Pack_Size: 24, Volume: 44cl
+   - Remove the format text from the Product_Name.
    """,
    
    "Thornbridge Brewery": """
