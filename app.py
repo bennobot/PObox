@@ -487,20 +487,59 @@ def update_shopify_price(variant_gid, new_price):
     endpoint = f"https://{shop_url}/admin/api/{version}/graphql.json"
     headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
     
+    # 1. Fetch the Parent Product ID (required for the bulk update mutation)
+    query_prod = """
+    query getProduct($id: ID!) {
+      productVariant(id: $id) {
+        product {
+          id
+        }
+      }
+    }
+    """
+    try:
+        r_prod = requests.post(endpoint, json={"query": query_prod, "variables": {"id": variant_gid}}, headers=headers)
+        if r_prod.status_code == 200:
+            prod_data = r_prod.json()
+            product_gid = prod_data.get("data", {}).get("productVariant", {}).get("product", {}).get("id")
+            if not product_gid:
+                return False, "Could not resolve parent Product ID."
+        else:
+            return False, f"Failed to fetch parent product: {r_prod.text}"
+    except Exception as e:
+        return False, f"Exception fetching product ID: {str(e)}"
+
+    # 2. Execute the Bulk Update Mutation
     mutation = """
-    mutation productVariantUpdate($input: ProductVariantInput!) {
-      productVariantUpdate(input: $input) {
-        productVariant { id price }
-        userErrors { message }
+    mutation UpdateVariantPrice($productId: ID!, $variants:[ProductVariantsBulkInput!]!) {
+      productVariantsBulkUpdate(productId: $productId, variants: $variants) {
+        productVariants {
+          id
+          price
+        }
+        userErrors {
+          field
+          message
+        }
       }
     }
     """
     
+    variables = {
+        "productId": product_gid,
+        "variants":[
+            {
+                "id": variant_gid,
+                "price": str(new_price)
+            }
+        ]
+    }
+    
     try:
-        r = requests.post(endpoint, json={"query": mutation, "variables": {"input": {"id": variant_gid, "price": str(new_price)}}}, headers=headers)
+        r = requests.post(endpoint, json={"query": mutation, "variables": variables}, headers=headers)
         if r.status_code == 200:
             data = r.json()
-            errors = data.get("data", {}).get("productVariantUpdate", {}).get("userErrors",[])
+            errors = data.get("data", {}).get("productVariantsBulkUpdate", {}).get("userErrors",[])
             if not errors:
                 return True, "OK"
             else:
