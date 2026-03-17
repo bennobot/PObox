@@ -424,17 +424,27 @@ def fetch_cin7_product_details_by_sku(sku):
 
 def update_cin7_price(product_id, new_price):
     headers = get_cin7_headers()
-    if not headers: return False
+    if not headers: return False, "No headers found."
     url = f"{get_cin7_base_url()}/product"
-    payload =[{
+    
+    # FIXED: Send as a dictionary {...}, not a list [{...}]
+    payload = {
         "ID": product_id,
         "PriceTier1": new_price,
-        "PriceTiers": {"Tier 1": new_price}
-    }]
+        "PriceTiers": {
+            "Tier 1": new_price
+        }
+    }
+    
     try:
         r = make_cin7_request("PUT", url, headers=headers, json=payload)
-        return r.status_code == 200
-    except: return False
+        if r.status_code == 200:
+            return True, "OK"
+        else:
+            return False, r.text # Returns the exact Cin7 error
+    except Exception as e: 
+        return False, str(e)
+
 
 def fetch_shopify_price_by_sku(sku):
     if "shopify" not in st.secrets: return None, 0.0
@@ -467,8 +477,9 @@ def fetch_shopify_price_by_sku(sku):
     except: pass
     return None, 0.0
 
+
 def update_shopify_price(variant_gid, new_price):
-    if "shopify" not in st.secrets: return False
+    if "shopify" not in st.secrets: return False, "No secrets found."
     creds = st.secrets["shopify"]
     shop_url = creds.get("shop_url")
     token = creds.get("access_token")
@@ -479,17 +490,25 @@ def update_shopify_price(variant_gid, new_price):
     mutation = """
     mutation productVariantUpdate($input: ProductVariantInput!) {
       productVariantUpdate(input: $input) {
+        productVariant { id price }
         userErrors { message }
       }
     }
     """
+    
     try:
         r = requests.post(endpoint, json={"query": mutation, "variables": {"input": {"id": variant_gid, "price": str(new_price)}}}, headers=headers)
         if r.status_code == 200:
-            errors = r.json().get("data", {}).get("productVariantUpdate", {}).get("userErrors",[])
-            return len(errors) == 0
-    except: pass
-    return False
+            data = r.json()
+            errors = data.get("data", {}).get("productVariantUpdate", {}).get("userErrors",[])
+            if not errors:
+                return True, "OK"
+            else:
+                return False, str(errors) # Returns the exact Shopify GraphQL error
+        else:
+            return False, r.text
+    except Exception as e: 
+        return False, str(e)
 
 @st.cache_data(ttl=3600)
 def fetch_cin7_brands():
@@ -2678,41 +2697,60 @@ if st.session_state.header_data is not None:
                             st.warning("No rows selected for update.")
                         else:
                             prog_bar = st.progress(0)
+                            
+                            # --- REAL TIME LOGGER SETUP ---
+                            log_container = st.empty()
                             update_logs =[]
+                            
+                            def log_rt(msg):
+                                update_logs.append(msg)
+                                log_container.code("\n".join(update_logs), language="text")
+
+                            log_rt("🚀 Starting Price Updates...")
+                            # ------------------------------
                             
                             for step, (original_index, row) in enumerate(to_update.iterrows()):
                                 prog_bar.progress((step + 1) / len(to_update))
                                 sku = row['SKU']
                                 target_price = row['Expected_Price']
                                 
+                                log_rt(f"\n🔄 Updating {sku} to £{target_price:.2f}...")
+                                
                                 c_stat = "Skipped"
                                 s_stat = "Skipped"
                                 
                                 # 2. UPDATE CIN7 & MODIFY LOCAL TABLE
                                 if pd.notna(row['Cin7_ID']) and str(row['Cin7_ID']).strip():
-                                    if update_cin7_price(row['Cin7_ID'], target_price): 
+                                    success, msg = update_cin7_price(row['Cin7_ID'], target_price)
+                                    if success:
                                         c_stat = "✅ OK"
                                         st.session_state.price_check_data.at[original_index, 'Cin7_Price'] = target_price
+                                        log_rt(f"   -> Cin7: {c_stat}")
                                     else:
                                         c_stat = "❌ Failed"
+                                        log_rt(f"   -> Cin7: ❌ Failed ({msg})")
                                         
                                 # 3. UPDATE SHOPIFY & MODIFY LOCAL TABLE
                                 if pd.notna(row['Shopify_GID']) and str(row['Shopify_GID']).strip():
-                                    if update_shopify_price(row['Shopify_GID'], target_price): 
+                                    success, msg = update_shopify_price(row['Shopify_GID'], target_price)
+                                    if success:
                                         s_stat = "✅ OK"
                                         st.session_state.price_check_data.at[original_index, 'Shopify_Price'] = target_price
+                                        log_rt(f"   -> Shopify: {s_stat}")
                                     else:
                                         s_stat = "❌ Failed"
+                                        log_rt(f"   -> Shopify: ❌ Failed ({msg})")
                                         
                                 # 4. FLIP STATUS TO GREEN IF SUCCESSFUL
                                 if "Failed" not in c_stat and "Failed" not in s_stat:
                                     st.session_state.price_check_data.at[original_index, 'Status'] = "✅ Prices OK"
-                                    st.session_state.price_check_data.at[original_index, 'Update'] = False # Untick the box
-                                        
-                                update_logs.append(f"**{sku}** -> Set to £{target_price:.2f} | Cin7: {c_stat} | Shopify: {s_stat}")
+                                    st.session_state.price_check_data.at[original_index, 'Update'] = False
                             
-                            # Save logs to session state and rerun to force the UI to paint the new data!
+                            log_rt("\n✨ Batch update complete!")
+                            
+                            # Save logs to session state, pause briefly so user can read them, then refresh!
                             st.session_state.price_update_logs = update_logs
+                            time.sleep(1.5)
                             st.rerun()
 
 
