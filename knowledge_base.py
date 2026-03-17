@@ -132,8 +132,9 @@ SUPPLIER_RULEBOOK = {
    """,
 
    "Burning Sky Brewery Limited": """
-   - Extract the literal Quantity from the beginning of the line.
-   - Format Mapping: 
+   - QUANTITY: You MUST extract the exact integer at the very beginning of the row (e.g., 12, 6, 8, 5). DO NOT default to 1.
+   - PRODUCT NAME: Extract the text after the quantity. DO NOT include the quantity in the name! (e.g., "Plateau", "Aurora").
+   - FORMATS: 
      "9g Cask" -> Format: Cask, Volume: 9 Gallon
      "30l Sankey Keg" -> Format: Steel Keg, Volume: 30 Litre
      "24 x 440ml Can" -> Format: Cans, Pack_Size: 24, Volume: 44cl
