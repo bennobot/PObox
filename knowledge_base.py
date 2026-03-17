@@ -102,15 +102,16 @@ GLOBAL_RULES_TEXT = f"""
 3. **VALID LIST HANDLING**:
    - The "VALID FORMATS LIST" uses `Format | Volume`. SPLIT this into two columns.
 
-4. **PACK SIZE vs QUANTITY**:
-   - **Pack_Size**: Bottles/Cans = count inside the case (e.g. "24 x 440ml" -> Pack_Size: 24). Kegs/Casks = NULL.
-   - **Quantity**: The exact number of units ordered. 
-   - **CRITICAL**: DO NOT attempt to calculate the quantity mathematically (e.g. dividing Line Total by Unit Price). Invoices have line discounts that will break your math. YOU MUST strictly extract the literal number printed in the QTY / Quantity column (usually the very first number on the row).
+4. **QUANTITY EXTRACTION (CRITICAL - DO NOT HALLUCINATE)**:
+   - **Quantity** is the EXACT literal number printed at the far left beginning of the line (e.g., 12, 6, 8, 5). 
+   - NEVER reverse-engineer, guess, or alter the Quantity to make the math match the unit price. If the OCR says 6, the Quantity is exactly 6.
+   - **Pack_Size**: The count inside a case (e.g., "24 x 440ml" -> Pack_Size: 24). Do not confuse Pack_Size with Quantity. Kegs/Casks = NULL.
 
-5. **FINANCIALS**: 
-   - **Item_Price**: Price per PURCHASE UNIT.
-   - **Landed Cost**: (Total Delivery / Total Units) + Item Price.
-   - **Discount**: Apply line item discounts. In case of line discount, divide line total by number of units to find cost price per unit.
+5. **FINANCIALS & DISCOUNT MATH (GLOBAL RULE)**:
+   - Invoices frequently contain line discounts (e.g., "12.5%", "£10.20") which make the printed "Unit Price" incorrect for our system.
+   - **Item_Price**: You MUST calculate the true, final cost per unit. 
+   - **Formula**: `Item_Price = Line Total Price / Quantity`. 
+   - Ignore the printed "Unit Price". Always trust the Line Total and the literal Quantity to find the true Item_Price.
 
 6. **FILTERING**:
    - Exclude "pump clip", "badge" ONLY IF price is 0.00.
@@ -132,14 +133,8 @@ SUPPLIER_RULEBOOK = {
    """,
 
    "Burning Sky Brewery Limited": """
-   CRITICAL: Do NOT reverse-engineer or guess the Quantity! The invoice includes a 12.5% discount that makes the raw math look incorrect. 
-   
-   1. QUANTITY: You MUST extract the exact number printed at the very beginning of the line (e.g., 12, 6, 8, 5). 
-   2. ITEM_PRICE: Ignore the printed "Unit Price". You MUST calculate the true cost price by dividing the Line Total (the last number) by the exact Quantity (the first number).
-      - Example 1: "12 Plateau - 9g Cask 3.4% £81.66 £10.2075 / 12.5% 20% £857.43" -> Qty is 12. Item_Price is 857.43 / 12 = 71.45.
-      - Example 2: "6 Aurora - 9g Cask 5.6% £114.54 £14.3175 / 12.5% 20% £601.34" -> Qty is 6. Item_Price is 601.34 / 6 = 100.22. (DO NOT output 5 or 120.27).
-   3. PRODUCT NAME: Remove the format text (e.g., "Plateau", "Aurora", "Numbers").
-   4. FORMATS: 
+   - PRODUCT NAME: Remove the format text entirely (e.g., "Plateau", "Aurora", "Numbers", "Petite Pils", "Low Life").
+   - FORMATS: 
       - "9g Cask" -> Format: Cask, Volume: 9 Gallon
       - "30l Sankey Keg" -> Format: Steel Keg, Volume: 30 Litre
       - "24 x 440ml Can" -> Format: Cans, Pack_Size: 24, Volume: 44cl
