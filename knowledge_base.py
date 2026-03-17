@@ -150,7 +150,7 @@ SUPPLIER_RULEBOOK = {
    - "30l Sankey Keg" -> Format: Steel Keg, Volume: 30 Litre
    - "24 x 440ml Can" -> Format: Cans, Pack_Size: 24, Volume: 44cl
    - Remove the format text from the Product_Name.
-   """,,
+   """,
    
    "Thornbridge Brewery": """
    when the product name includes ekeg it is a steel keg, when it includes keg it is a Keykeg
