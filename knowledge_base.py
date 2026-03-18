@@ -143,6 +143,10 @@ SUPPLIER_RULEBOOK = {
 
    The products Pale Rider and Easy Rider should have the Supplier_Name Kelham Island Brewery
    """,
+
+      "Neepsend Brew Co.": """
+   there is a discount after the last product line, that needs taking off the item price evenly
+   """,
    
    "UnBarred Brewery": """
    For Unbarred Brewery when the product name has Cask - at the beginning remove this from the product name
