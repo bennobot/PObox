@@ -1,3 +1,5 @@
+import textwrap
+
 # ==========================================
 # 1. MASTER DATA (The Valid List)
 # ==========================================
@@ -75,9 +77,6 @@ Cellar Equipment | 250 Pack
 # ==========================================
 # 2. GLOBAL RULES (Applies to everyone)
 # ==========================================
-# ==========================================
-# 2. GLOBAL RULES (Applies to everyone)
-# ==========================================
 GLOBAL_RULES_TEXT = f"""
 1. **PRODUCT NAMES (SMART CLEANING)**:
    - **Hyphen Handling**: 
@@ -126,11 +125,11 @@ VALID FORMATS LIST:
 # ==========================================
 SUPPLIER_RULEBOOK = {
 
-   "Brass Castle Brewery": """
+   "Brass Castle Brewery": textwrap.dedent("""\
    there is a discount after the line items which needs to be calculated as a percentage and then applied to the cost price of each item
-   """,
+   """).strip(),
    
-   "Thornbridge Brewery": """
+   "Thornbridge Brewery": textwrap.dedent("""\
    when the product name includes ekeg it is a steel keg, when it includes keg it is a Keykeg
 
    The product format is the last part of each product name, this needs removing e.g. Green Mountain AF Ekeg should be Green Mountain AF and Wild Swan Ecask should be Wild Swan
@@ -142,43 +141,42 @@ SUPPLIER_RULEBOOK = {
    18.0000 0.0000 18.0000B/JAIP-ECA09-059 Jaipur Ecask - 5.9% ABV 9 Gallon 97.00 ECask 1,746.00
 
    The products Pale Rider and Easy Rider should have the Supplier_Name Kelham Island Brewery
-   """,
+   """).strip(),
 
-      "Neepsend Brew Co.": """
+   "Neepsend Brew Co.": textwrap.dedent("""\
    there is a discount after the last product line, that needs taking off the item price evenly
-   """,
+   """).strip(),
    
-   "UnBarred Brewery": """
+   "UnBarred Brewery": textwrap.dedent("""\
    For Unbarred Brewery when the product name has Cask - at the beginning remove this from the product name
-   """,
+   """).strip(),
    
-   "Pig & Porter": """
+   "Pig & Porter": textwrap.dedent("""\
    For Pig And Porter Limited the Supplier_Name is always Pig & Porter
 
    Product Skylarking Session Ipa is just called Skylarking
 
    Product Got The Face On Tropical Pale is just called Got The Face On
-   """,
+   """).strip(),
    
-   "Crafty AF Ltd": """
+   "Crafty AF Ltd": textwrap.dedent("""\
    For Craft AF Ltd the supplier_name for the products is always Below Brew Co
-   """,
+   """).strip(),
       
-   "Lakedown Brewing Company LLP": """
+   "Lakedown Brewing Company LLP": textwrap.dedent("""\
    for Lakedown Brewing Company LLP the supplier_name for the products is Lakedown Brewing Co.
 
    The product name is within apostrophes - this the rest needs disregarding - unless no apostrophes exist then use the full string
 
    If the product name contains Marquee - that is the product name - disregard the information within the apostrophes!
-   """,
-
+   """).strip(),
    
-   "Anspach & Hobday": """
+   "Anspach & Hobday": textwrap.dedent("""\
    check the product name carefully
    the pack size is in the product name for cans
-   """,
+   """).strip(),
    
-   "The Beak Brewery Limited": """
+   "The Beak Brewery Limited": textwrap.dedent("""\
    the abv and style is at the end of the product name - this needs removing
    the data is set out in the following order
    Quantity, Product_Name, Unit Price, Line Discount (Amount) / Line Discount (Percentage), VAT (Tax), Line total price
@@ -189,43 +187,43 @@ SUPPLIER_RULEBOOK = {
    
    IMPORTANT The item price is is the line price divided by the quantity - calculate the item price this way
    firkin is always 9 Gallon for volume
-   """,
+   """).strip(),
    
-   "Track Brewing Company Limited": """
+   "Track Brewing Company Limited": textwrap.dedent("""\
    FOR TRACK the style is listed in the product name after the last -
    Don't include this in the product name
    If the product name includes Dreaming Of... the next part is the hop variety and needs to be included in the product name
-   """,
+   """).strip(),
    
-   "Little Mercies Limited": """
+   "Little Mercies Limited": textwrap.dedent("""\
    For Little Mercies all bottles apart from Gift Boxes need to be adjusted to be pack size 1. The cost price needs to be recalculated to account for this 
-   """,
+   """).strip(),
    
-   "Trenchmore LLP": """
+   "Trenchmore LLP": textwrap.dedent("""\
    - Supplier Name: "Silly Moo Cider".
    - Product Name: Remove "Silly Moo" from description.
-   """,
+   """).strip(),
    
-   "Pilton Cider Ltd": """
+   "Pilton Cider Ltd": textwrap.dedent("""\
    - BOTTLES: If size is 33cl -> Pack_Size: 12.
    - BOTTLES: If size is 75cl -> Pack_Size: 1.
-   """,
+   """).strip(),
    
-    "DEYA Brewing Company": """
+    "DEYA Brewing Company": textwrap.dedent("""\
     - FORMAT: "LSS" -> Steel Keg.
     - CANS: 500mL -> Volume: 50cl.
-    """,
+    """).strip(),
 
-    "Simple Things Fermentations": """
+    "Simple Things Fermentations": textwrap.dedent("""\
     - COLLAB: "STF/Croft 3" -> Collaborator is "Croft 3".
     - PREFIX: Remove "30EK", "9G".
     - DISCOUNT: Apply 15% discount.
-    """,
+    """).strip(),
     
-    "James Clay and Sons": """
+    "James Clay and Sons": textwrap.dedent("""\
     - STRATEGY: Split Description into Supplier/Product.
     - PATTERN: "NxVol" (e.g. 20x50cl) indicates Pack/Volume.
-    """,
+    """).strip(),
     
     "Polly's Brew Co.": "PRODUCT NAME: Stop at first hyphen. Watch for 18-packs.",
     
@@ -233,12 +231,10 @@ SUPPLIER_RULEBOOK = {
     
     "Neon Raptor": "Handle 'Discount' column. Merge multi-line descriptions.",
 
-   "German Drinks Company Limited": """
+   "German Drinks Company Limited": textwrap.dedent("""\
    - Supplier: Extract from Product Name (e.g. "Rothaus").
    - Product: The remainder (e.g. "Pils").
    - Format: Default to "Bottles" unless "Keg" is specified.
    - Payable To: "German Drinks Company Limited".
-   """
+   """).strip()
 }
-
-
