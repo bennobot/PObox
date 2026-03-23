@@ -1,6 +1,8 @@
 import streamlit as st
 import requests
 import json
+import time
+from thefuzz import process
 
 st.set_page_config(page_title="Cin7 Connector Test")
 st.title("🧪 Cin7 Supplier Dropdown Test")
@@ -15,7 +17,7 @@ if "cin7" not in st.secrets:
 def fetch_all_cin7_suppliers():
     """
     Fetches ALL suppliers from Cin7 (Paginated).
-    Returns a list of dictionaries: [{'Name': '...', 'ID': '...'}]
+    Returns a list of dictionaries:[{'Name': '...', 'ID': '...'}]
     """
     creds = st.secrets["cin7"]
     base_url = creds.get("base_url", "https://inventory.dearsystems.com/ExternalApi/v2")
@@ -27,7 +29,7 @@ def fetch_all_cin7_suppliers():
         "Content-Type": "application/json"
     }
     
-    all_suppliers = []
+    all_suppliers =[]
     page = 1
     
     status_text = st.empty()
@@ -40,7 +42,14 @@ def fetch_all_cin7_suppliers():
             # Manual URL construction to ensure parameters are clean
             url = f"{base_url}/supplier?Page={page}&Limit=100"
             
-            response = requests.get(url, headers=headers)
+            # ADDED: timeout=15 to prevent indefinite hanging
+            response = requests.get(url, headers=headers, timeout=15)
+            
+            # ADDED: Handle rate limits (429 Too Many Requests)
+            if response.status_code == 429:
+                st.warning(f"Rate limit hit on Page {page}. Waiting 2 seconds...")
+                time.sleep(2)
+                continue # Try the exact same page again
             
             if response.status_code != 200:
                 st.error(f"API Error on Page {page}: {response.status_code} - {response.text}")
@@ -72,7 +81,11 @@ def fetch_all_cin7_suppliers():
                 
     except Exception as e:
         st.error(f"Connection Exception: {e}")
-        return []
+        # ADDED: Don't lose data! Return what we successfully fetched so far
+        if all_suppliers:
+            st.warning("Returning partial supplier list due to connection error.")
+            return sorted(all_suppliers, key=lambda x: x['Name'].lower())
+        return[]
         
     progress_bar.empty()
     status_text.success(f"✅ Successfully loaded {len(all_suppliers)} suppliers.")
@@ -92,12 +105,18 @@ if st.button("🔄 Connect & Fetch Suppliers"):
         supplier_names = [s['Name'] for s in suppliers]
         
         # Simulate an AI guess (e.g. AI extracted "Anspach")
-        ai_guess = "Anspach & Hobday"
+        # I changed this slightly to test the fuzzy matcher
+        ai_guess = "Anspach and Hobday" 
         
-        # Try to find the index of the guess
+        # ADDED: Fuzzy Matching using thefuzz
+        best_match, score = process.extractOne(ai_guess, supplier_names)
+        
         default_index = 0
-        if ai_guess in supplier_names:
-            default_index = supplier_names.index(ai_guess)
+        if score > 85: # We are reasonably confident it's a match
+            default_index = supplier_names.index(best_match)
+            st.success(f"🤖 AI Guessed: '{ai_guess}' -> Matched to: '{best_match}' (Confidence: {score}%)")
+        else:
+            st.warning(f"🤖 AI Guessed: '{ai_guess}' but couldn't find a confident match. Please select manually.")
         
         selected_name = st.selectbox(
             "Select Payable To:", 
