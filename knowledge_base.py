@@ -126,7 +126,7 @@ VALID FORMATS LIST:
 # ==========================================
 SUPPLIER_RULEBOOK = {
 
-   "Good Chemistry Brewing": textwrap.dedent("""\
+   "Good Chemistry Brewing": """
    The column order is: QTY, ITEM, UNIT PRICE, DISCOUNT, VAT, LINE PRICE
 
    QTY is the first column and is the number of units ordered - this is NOT 1, read it carefully from the start of each line.
@@ -147,7 +147,7 @@ SUPPLIER_RULEBOOK = {
    Remove these format/size descriptors from the Product_Name.
 
    Line discounts shown at the bottom of the invoice are already reflected in the individual line prices - do not apply them again.
-   """).strip(),
+   """,
    
    "Brass Castle Brewery": """
    there is a discount after the line items which needs to be calculated as a percentage and then applied to the cost price of each item
