@@ -1252,28 +1252,6 @@ def run_reconciliation_check(lines_df):
                 if score > match_threshold:
                     scored_candidates.append((score, prod, shop_prod_name_clean))
 
-            for edge in candidates:
-                prod = edge['node']
-                shop_title_full = prod['title']
-                shop_prod_name_clean = shop_title_full
-                if "/" in shop_title_full:
-                    parts = [p.strip() for p in shop_title_full.split("/")]
-                    if len(parts) >= 2: shop_prod_name_clean = parts[1]
-
-                score = fuzz.token_sort_ratio(inv_prod_name, shop_prod_name_clean)
-
-                # Hard disqualifier: numeric token mismatch (e.g. ABV in name)
-                shop_nums = set(re.findall(r'\d+', shop_prod_name_clean))
-                if inv_nums and shop_nums and inv_nums != shop_nums:
-                    logs.append(f"   ⛔ Numeric mismatch disqualified: '{shop_prod_name_clean}' (inv:{inv_nums} vs shop:{shop_nums})")
-                    continue    # skip — don't just penalise, disqualify
-
-                if not is_strict:
-                    if inv_prod_name.lower() in shop_prod_name_clean.lower(): score += 5
-
-                if score > match_threshold:
-                    scored_candidates.append((score, prod, shop_prod_name_clean))
-
             scored_candidates.sort(key=lambda x: x[0], reverse=True)
             match_found = False
 
