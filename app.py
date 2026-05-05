@@ -1247,7 +1247,14 @@ def run_reconciliation_check(lines_df):
                         pass
 
                 if not is_strict:
-                    if inv_prod_name_clean.lower() in strip_nums(shop_prod_name_clean).lower(): score += 5
+                    inv_lower = inv_prod_name_clean.lower()
+                    shop_lower = strip_nums(shop_prod_name_clean).lower()
+                    # Full containment — invoice name is a substring of Shopify title (e.g. "Kokomo" in "Kokomo Weekday")
+                    if inv_lower in shop_lower:
+                        score += 20
+                    # Partial containment — all invoice words appear in the Shopify title
+                    elif all(word in shop_lower for word in inv_lower.split() if len(word) > 2):
+                        score += 10
 
                 if score > match_threshold:
                     scored_candidates.append((score, prod, shop_prod_name_clean))
