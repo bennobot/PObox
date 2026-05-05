@@ -1207,14 +1207,50 @@ def run_reconciliation_check(lines_df):
 
         inv_vol = normalize_vol_string(row.get('Volume', ''))
         inv_fmt = str(row.get('Format', '')).lower()
-        inv_nums = set(re.findall(r'\d+', inv_prod_name))
+        # Strip numbers from product names before fuzzy matching —
+        # suppliers often use shorthand that omits ABV/batch numbers.
+        # ABV is checked separately via the Shopify metafield below.
+        def strip_nums(s):
+            return re.sub(r'\b\d+[\d.,]*\b', '', s).strip()
+
+        inv_prod_name_clean = strip_nums(inv_prod_name)
+        inv_abv = clean_abv(str(row.get('ABV', '')))
 
         debug_mode = "(Strict)" if is_strict else "(Fuzzy)"
-        logs.append(f"Checking: **{inv_prod_name}** {debug_mode} | Target Pack: {target_pack}")
+        logs.append(f"Checking: **{inv_prod_name}** {debug_mode} | Target Pack: {target_pack} | ABV: {inv_abv or 'unknown'}")
 
         if supplier in shopify_cache and shopify_cache[supplier]:
             candidates = shopify_cache[supplier]
             scored_candidates = []
+
+            for edge in candidates:
+                prod = edge['node']
+                shop_title_full = prod['title']
+                shop_prod_name_clean = shop_title_full
+                if "/" in shop_title_full:
+                    parts = [p.strip() for p in shop_title_full.split("/")]
+                    if len(parts) >= 2: shop_prod_name_clean = parts[1]
+
+                # Match on number-stripped names — allows invoice shorthand to match
+                score = fuzz.token_sort_ratio(inv_prod_name_clean, strip_nums(shop_prod_name_clean))
+
+                # Separate ABV check using the Shopify metafield, not the product name.
+                # Only penalise if BOTH sides have a known ABV and they differ by > 0.4%.
+                shop_abv = clean_abv(str(prod.get('abv_meta', {}).get('value', '')))
+                if inv_abv and shop_abv:
+                    try:
+                        abv_diff = abs(float(inv_abv) - float(shop_abv))
+                        if abv_diff > 0.4:
+                            logs.append(f"   ⛔ ABV mismatch: invoice {inv_abv}% vs Shopify {shop_abv}% for '{shop_prod_name_clean}'")
+                            continue
+                    except ValueError:
+                        pass
+
+                if not is_strict:
+                    if inv_prod_name_clean.lower() in strip_nums(shop_prod_name_clean).lower(): score += 5
+
+                if score > match_threshold:
+                    scored_candidates.append((score, prod, shop_prod_name_clean))
 
             for edge in candidates:
                 prod = edge['node']
