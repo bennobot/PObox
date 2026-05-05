@@ -126,28 +126,28 @@ VALID FORMATS LIST:
 # ==========================================
 SUPPLIER_RULEBOOK = {
 
-"Good Chemistry Brewing": textwrap.dedent("""\
-The column order is: QTY, ITEM, UNIT PRICE, DISCOUNT, VAT, LINE PRICE
+   "Good Chemistry Brewing": textwrap.dedent("""\
+   The column order is: QTY, ITEM, UNIT PRICE, DISCOUNT, VAT, LINE PRICE
 
-QTY is the first column and is the number of units ordered - this is NOT 1, read it carefully from the start of each line.
+   QTY is the first column and is the number of units ordered - this is NOT 1, read it carefully from the start of each line.
 
-DISCOUNT is shown as both an amount and percentage e.g. "£12.825 / 15%" - apply this to the unit price to get the real item cost price:
-Item_Price = UNIT PRICE - DISCOUNT AMOUNT
+   DISCOUNT is shown as both an amount and percentage e.g. "£12.825 / 15%" - apply this to the unit price to get the real item cost price:
+   Item_Price = UNIT PRICE - DISCOUNT AMOUNT
 
-For example:
-2 Kokomo - 30L EKeg £85.50 £12.825 / 15% 20% £145.35
--> Quantity: 2, Item_Price: 72.68 (85.50 - 12.825), Line_Total: 145.35
+   For example:
+   2 Kokomo - 30L EKeg £85.50 £12.825 / 15% 20% £145.35
+   -> Quantity: 2, Item_Price: 72.68 (85.50 - 12.825), Line_Total: 145.35
 
-Exclude any lines where UNIT PRICE is £0.00 - these are badge/pumpclip items with no cost.
+   Exclude any lines where UNIT PRICE is £0.00 - these are badge/pumpclip items with no cost.
 
-The product format is at the end of the product name and must be removed:
-- "EKeg" or "Ekeg" = Steel Keg (format), 30L = volume
-- "Firkin" = Cask (format), 9 Gallon = volume  
-- "Ecask" or "ECask" = Cask (format)
-Remove these format/size descriptors from the Product_Name.
+   The product format is at the end of the product name and must be removed:
+   - "EKeg" or "Ekeg" = Steel Keg (format), 30L = volume
+   - "Firkin" = Cask (format), 9 Gallon = volume  
+   - "Ecask" or "ECask" = Cask (format)
+   Remove these format/size descriptors from the Product_Name.
 
-Line discounts shown at the bottom of the invoice are already reflected in the individual line prices - do not apply them again.
-""").strip(),
+   Line discounts shown at the bottom of the invoice are already reflected in the individual line prices - do not apply them again.
+   """).strip(),
    
    "Brass Castle Brewery": """
    there is a discount after the line items which needs to be calculated as a percentage and then applied to the cost price of each item
