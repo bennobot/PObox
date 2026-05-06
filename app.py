@@ -1,4 +1,4 @@
-import streamlit as st
+﻿import streamlit as st
 import pandas as pd
 from pdf2image import convert_from_bytes
 import pytesseract
@@ -1686,16 +1686,25 @@ if st.button("🚀 Process Invoice", type="primary"):
                 client = genai.Client(api_key=api_key)
                 st.write("1. Converting PDF to Images (OCR Prep)...")
                 target_stream.seek(0)
-                images = convert_from_bytes(target_stream.read(), dpi=300)
+                images = convert_from_bytes(target_stream.read(), dpi=200)
 
                 st.write(f"2. Extracting Text from {len(images)} pages...")
                 full_text = ""
                 for i, img in enumerate(images):
                     st.write(f"   - Scanning page {i+1}...")
-                    full_text += pytesseract.image_to_string(img) + "\n"
+                    full_text += pytesseract.image_to_string(img, config='--psm 6') + "\n"
 
                 st.write("3. Sending Text to AI Model...")
                 injected = f"\n!!! USER OVERRIDE !!!\n{custom_rule}\n" if custom_rule else ""
+
+                detected_supplier = ""
+                for supplier_name in SUPPLIER_RULEBOOK:
+                    if supplier_name.lower().replace("&", "and") in full_text.lower().replace("&", "and"):
+                        detected_supplier = supplier_name
+                        break
+
+                supplier_rule = SUPPLIER_RULEBOOK.get(detected_supplier, "")
+                supplier_rule_block = f"SUPPLIER SPECIFIC RULES FOR {detected_supplier}:\n{supplier_rule}" if supplier_rule else ""
 
                 prompt = f"""
                 Extract invoice data to JSON.
@@ -1720,7 +1729,7 @@ if st.button("🚀 Process Invoice", type="primary"):
                         }}
                     ]
                 }}
-                SUPPLIER RULEBOOK: {json.dumps(SUPPLIER_RULEBOOK)}
+                {supplier_rule_block}
                 GLOBAL RULES: {GLOBAL_RULES_TEXT}
                 {injected}
                 INVOICE TEXT:
@@ -2327,3 +2336,4 @@ if st.session_state.header_data is not None:
                     st.success("Price update complete.")
 
             st.download_button("📥 Download Price Check CSV", edited_pc.to_csv(index=False), "price_check.csv")
+
