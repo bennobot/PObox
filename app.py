@@ -1535,12 +1535,16 @@ def build_price_check_from_matched_lines(line_items_df):
     matched = line_items_df[line_items_df.get('Shopify_Status', '') == "✅ Match"].copy() if 'Shopify_Status' in line_items_df.columns else pd.DataFrame()
     if matched.empty:
         return pd.DataFrame()
+    # One price-check row per SKU — mirrors the final PO (no duplicates across pack sizes)
+    matched = matched.drop_duplicates(subset='London_SKU', keep='first')
     rows = []
     for _, row in matched.iterrows():
         sku = str(row.get('London_SKU', '')).strip()
         if not sku:
             continue
-        invoice_cost = float(row.get('Item_Price', 0))
+        raw_price = float(row.get('Item_Price', 0))
+        # Apply same split-case adjustment as prepare_final_po_lines
+        invoice_cost = raw_price / 2 if row.get('Use_Split', False) else raw_price
         prod_id, current_cin7_price, full_name, attr_5 = fetch_cin7_product_details_by_sku(sku)
         recommended_price = calculate_sell_price(invoice_cost, attr_5, str(row.get('Format', '')))
         price_diff = round(recommended_price - current_cin7_price, 2)
