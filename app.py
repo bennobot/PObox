@@ -1007,6 +1007,7 @@ def create_cin7_product_only(row_data, family_id, family_base_sku, family_base_n
 
 def sync_product_to_cin7(upload_df, status_box=None):
     log = []
+    links = []  # {"label": ..., "url": ...} for newly created products only
     def update_log(message):
         log.append(message)
         if status_box: status_box.code("\n".join(log), language="text")
@@ -1057,6 +1058,12 @@ def sync_product_to_cin7(upload_df, status_box=None):
                         current_products.append({"ID": prod_id, "Option1": var_name_raw})
                         family_needs_update = True
                         update_log(f"         ⚙️ Staged '{var_name_raw}' for bulk linking...")
+                        if "🆕" in var_msg:
+                            prefix = "L-" if loc == "L" else "G-"
+                            links.append({
+                                "label": f"{fam_name} / {var_name_raw} ({prefix}{row['Variant_SKU']})",
+                                "url": f"https://inventory.dearsystems.com/Product#{prod_id}",
+                            })
                 if family_needs_update:
                     update_log(f"      📤 Pushing bulk variant update to Family...")
                     family_obj["Products"] = current_products
@@ -1072,7 +1079,7 @@ def sync_product_to_cin7(upload_df, status_box=None):
             else:
                 update_log(f"   🛑 HALT: Could not acquire Family ID. Skipping variants for {fam_sku} ({loc}).")
     update_log("\n✅ Sync Process Complete.")
-    return log
+    return log, links
 
 def create_cin7_purchase_order(header_df, lines_df, location_choice):
     headers = get_cin7_headers()
@@ -2188,10 +2195,14 @@ if st.session_state.header_data is not None:
                 with col_c:
                     if st.button("🚀 Sync to Cin7", type="primary"):
                         with st.spinner("Syncing to Cin7..."):
-                            log = sync_product_to_cin7(st.session_state.upload_data, status_box=cin7_status_box)
+                            log, cin7_links = sync_product_to_cin7(st.session_state.upload_data, status_box=cin7_status_box)
                             st.session_state.cin7_complete = True
                             st.session_state.cin7_log_text = "\n".join(log)
                             st.success("Cin7 Sync Complete!")
+                            if cin7_links:
+                                st.markdown("**🔗 Cin7 — Created Products**")
+                                for item in cin7_links:
+                                    st.markdown(f"- [{item['label']}]({item['url']})")
 
                 with col_s:
                     if st.button("🛍️ Create Shopify Products", type="primary"):
@@ -2201,6 +2212,7 @@ if st.session_state.header_data is not None:
                             loc_ids = fetch_shopify_location_ids()
                             pub_ids = fetch_publication_ids()
                             shopify_log = []
+                            shopify_links = []
                             prog = st.progress(0)
                             for i, (_, row) in enumerate(st.session_state.upload_data.iterrows()):
                                 prog.progress((i + 1) / len(st.session_state.upload_data))
@@ -2220,11 +2232,21 @@ if st.session_state.header_data is not None:
                                             new_prod = r.json().get('product', {})
                                             prod_id = new_prod.get('id')
                                             shopify_log.append(f"✅ Created: {row.get('Family_Name', '')} ({loc_prefix})")
+                                            variants = new_prod.get('variants', [])
+                                            if prod_id and variants:
+                                                variant_id = variants[0].get('id')
+                                                variant_title = variants[0].get('title', '')
+                                                if variant_id:
+                                                    label = f"{row.get('Family_Name', '')} — {variant_title} ({loc_prefix})"
+                                                    shopify_links.append({
+                                                        "label": label,
+                                                        "url": f"https://{shop_url}/admin/products/{prod_id}/variants/{variant_id}",
+                                                    })
                                             if prod_id and pub_ids:
                                                 pub_id = pub_ids['london'] if is_london else pub_ids['gloucester']
                                                 if pub_id: publish_product_to_app(prod_id, pub_id)
-                                            if loc_ids and new_prod.get('variants'):
-                                                inv_item_id = new_prod['variants'][0].get('inventory_item_id')
+                                            if loc_ids and variants:
+                                                inv_item_id = variants[0].get('inventory_item_id')
                                                 target_loc = loc_ids['london'] if is_london else loc_ids['gloucester']
                                                 set_variant_location(inv_item_id, target_loc, loc_ids['all_ids'])
                                         else:
@@ -2234,6 +2256,10 @@ if st.session_state.header_data is not None:
                                 shopify_status_box.code("\n".join(shopify_log), language="text")
                             st.session_state.shopify_log_text = "\n".join(shopify_log)
                             st.success("Shopify Creation Complete!")
+                            if shopify_links:
+                                st.markdown("**🔗 Shopify — Created Variants**")
+                                for item in shopify_links:
+                                    st.markdown(f"- [{item['label']}]({item['url']})")
 
     # -------------------------
     # TAB 5: FINALIZE PO
