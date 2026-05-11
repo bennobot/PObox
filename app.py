@@ -2165,6 +2165,8 @@ if st.session_state.header_data is not None:
                     # Variant name
                     if pack_int and pack_int > 1:
                         variant_name = f"{pack_int}x{vol_name}"
+                    elif keg_connector:
+                        variant_name = f"{vol_name} - {keg_connector}"
                     else:
                         variant_name = vol_name
 
