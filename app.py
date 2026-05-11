@@ -1521,8 +1521,14 @@ def fetch_keg_codes():
         sheet_url = "https://docs.google.com/spreadsheets/d/1Skd85vSu3e16z9iAVG8bZjhwqIWRnUxZXiVv1QbmPHA"
         df = conn.read(spreadsheet=sheet_url, worksheet="Keg", usecols=[0, 1])
         if not df.empty:
-            df = df.dropna()
-            return dict(zip(df.iloc[:, 0].astype(str).str.lower(), df.iloc[:, 1].astype(str)))
+            df = df.dropna(how='all')
+            result = {}
+            for _, row in df.iterrows():
+                k = str(row.iloc[0]).strip().lower()
+                v = str(row.iloc[1]).strip()
+                if k and k != 'nan' and v and v != 'nan':
+                    result[k] = v
+            return result
     except Exception: pass
     return {}
 
@@ -2238,6 +2244,8 @@ if st.session_state.header_data is not None:
                 format_map = fetch_format_codes()
                 weight_map, size_code_map = fetch_weight_map()
                 keg_map = fetch_keg_codes()
+                if not keg_map:
+                    st.warning("⚠️ Keg connector map is empty — check the 'Keg' worksheet in the reference spreadsheet.")
                 today_str = datetime.now().strftime('%d%m%Y')
                 processed_rows = []
 
