@@ -1059,9 +1059,9 @@ def sync_product_to_cin7(upload_df, status_box=None):
                         family_needs_update = True
                         update_log(f"         ⚙️ Staged '{var_name_raw}' for bulk linking...")
                         if "🆕" in var_msg:
-                            prefix = "L-" if loc == "L" else "G-"
+                            full_sku = var_msg.split(": ")[-1].strip()
                             links.append({
-                                "label": f"{fam_name} / {var_name_raw} ({prefix}{row['Variant_SKU']})",
+                                "label": f"{fam_name} / {var_name_raw} ({full_sku})",
                                 "url": f"https://inventory.dearsystems.com/Product#{prod_id}",
                             })
                 if family_needs_update:
