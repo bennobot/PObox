@@ -2292,7 +2292,12 @@ if st.session_state.header_data is not None:
             else:
                 st.success("✅ All prices are within 5% of current. No action required.")
 
+            if 'Update' not in pc_df.columns:
+                pc_df['Update'] = pc_df['Flag'] == "⚠️ Review"
+                st.session_state.price_check_data = pc_df
+
             col_cfg = {
+                "Update":               st.column_config.CheckboxColumn("Update?", width="small"),
                 "Invoice_Cost":         st.column_config.NumberColumn("Invoice Cost", format="£%.2f"),
                 "Current_Cin7_Price":   st.column_config.NumberColumn("Current Price", format="£%.2f"),
                 "Recommended_Price":    st.column_config.NumberColumn("Recommended", format="£%.2f"),
@@ -2309,35 +2314,24 @@ if st.session_state.header_data is not None:
             )
 
             st.divider()
-            update_cols = st.columns(2)
-            with update_cols[0]:
-                threshold = st.number_input("Only update if change > (£)", min_value=0.0, value=0.0, step=0.50, format="%.2f")
+            if st.button("💰 Update Prices in Cin7 & Shopify"):
+                update_log = []
+                prog = st.progress(0)
+                rows_to_update = edited_pc[edited_pc['Update'] == True]
+                for i, (_, row) in enumerate(rows_to_update.iterrows()):
+                    prog.progress((i + 1) / max(len(rows_to_update), 1))
+                    new_price = row['Recommended_Price']
+                    prod_id = row.get('Cin7_ID')
+                    if prod_id:
+                        ok, msg = update_cin7_price(prod_id, new_price)
+                        update_log.append(f"{'✅' if ok else '❌'} Cin7 {row['SKU']}: {msg}")
+                    variant_id, _ = fetch_shopify_price_by_sku(row['SKU'])
+                    if variant_id:
+                        ok, msg = update_shopify_price(variant_id, new_price)
+                        update_log.append(f"{'✅' if ok else '❌'} Shopify {row['SKU']}: {msg}")
 
-            with update_cols[1]:
-                st.write("")
-                st.write("")
-                if st.button("💰 Update Prices in Cin7 & Shopify"):
-                    update_log = []
-                    prog = st.progress(0)
-                    rows_to_update = edited_pc[edited_pc['Flag'] == "⚠️ Review"]
-                    for i, (_, row) in enumerate(rows_to_update.iterrows()):
-                        prog.progress((i + 1) / max(len(rows_to_update), 1))
-                        new_price = row['Recommended_Price']
-                        diff = abs(new_price - row['Current_Cin7_Price'])
-                        if diff < threshold:
-                            update_log.append(f"⏭️ Skipped {row['SKU']} (change £{diff:.2f} < threshold)")
-                            continue
-                        prod_id = row.get('Cin7_ID')
-                        if prod_id:
-                            ok, msg = update_cin7_price(prod_id, new_price)
-                            update_log.append(f"{'✅' if ok else '❌'} Cin7 {row['SKU']}: {msg}")
-                        variant_id, _ = fetch_shopify_price_by_sku(row['SKU'])
-                        if variant_id:
-                            ok, msg = update_shopify_price(variant_id, new_price)
-                            update_log.append(f"{'✅' if ok else '❌'} Shopify {row['SKU']}: {msg}")
-
-                    st.code("\n".join(update_log), language="text")
-                    st.success("Price update complete.")
+                st.code("\n".join(update_log), language="text")
+                st.success("Price update complete.")
 
             st.download_button("📥 Download Price Check CSV", edited_pc.to_csv(index=False), "price_check.csv")
 
