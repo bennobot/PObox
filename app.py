@@ -622,6 +622,8 @@ def prepare_final_po_lines(line_items_df):
         matched_sku = row.get('Matched_Variant', '')
         raw_qty = float(row.get('Quantity', 0))
         raw_price = float(row.get('Item_Price', 0))
+        # Invoice Line_Total is the authoritative figure — use it to anchor the PO total
+        line_total = float(row.get('Line_Total') or (raw_qty * raw_price))
         if row.get('Use_Split', False):
             final_qty = raw_qty * 2
             final_price = raw_price / 2
@@ -635,6 +637,7 @@ def prepare_final_po_lines(line_items_df):
         po_rows.append({
             "Product": prod_name, "Variant_Match": matched_sku,
             "PO_Qty": final_qty, "PO_Cost": final_price,
+            "Invoice_Line_Total": line_total,
             "Total": final_qty * final_price, "Notes": notes,
             "Cin7_London_ID": l_id, "Cin7_Glou_ID": g_id
         })
@@ -1102,8 +1105,10 @@ def create_cin7_purchase_order(header_df, lines_df, location_choice):
         prod_id = row.get(id_col)
         if pd.notna(prod_id) and str(prod_id).strip():
             qty = float(row.get('PO_Qty', 0))
-            price = round(float(row.get('PO_Cost', 0)), 10)
-            total = round(qty * price, 10)
+            # Derive price from invoice line total so qty * price = exact invoice total
+            invoice_total = float(row.get('Invoice_Line_Total') or row.get('PO_Cost', 0))
+            price = round(invoice_total / qty, 10) if qty else 0
+            total = invoice_total
             order_lines.append({
                 "ProductID": prod_id, "Quantity": qty, "Price": price, "Total": total,
                 "TaxRule": "20% (VAT on Expenses)", "Discount": 0, "Tax": 0
