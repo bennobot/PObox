@@ -2357,11 +2357,19 @@ if st.session_state.header_data is not None:
                             pub_ids = fetch_publication_ids()
                             shopify_log = []
                             shopify_links = []
+                            total_rows = len(st.session_state.upload_data)
                             prog = st.progress(0)
+                            def shopify_update_log(msg):
+                                shopify_log.append(msg)
+                                shopify_status_box.code("\n".join(shopify_log), language="text")
+                            shopify_update_log(f"🚀 Starting Shopify sync for {total_rows} rows...")
                             for i, (_, row) in enumerate(st.session_state.upload_data.iterrows()):
-                                prog.progress((i + 1) / len(st.session_state.upload_data))
+                                prog.progress((i + 1) / total_rows)
+                                fam_name = row.get('Family_Name', row.get('Variant_SKU', f'Row {i+1}'))
                                 for loc_prefix in ["L", "G"]:
                                     is_london = loc_prefix == "L"
+                                    full_sku = f"{loc_prefix}-{row.get('Variant_SKU', '')}"
+                                    shopify_update_log(f"\n🔄 [{loc_prefix}] {fam_name}")
                                     variant_payload = create_shopify_variant_payload(row, loc_prefix)
                                     product_payload = create_shopify_product_payload(row, loc_prefix, [variant_payload])
                                     creds = st.secrets["shopify"]
@@ -2375,29 +2383,34 @@ if st.session_state.header_data is not None:
                                         if r.status_code == 201:
                                             new_prod = r.json().get('product', {})
                                             prod_id = new_prod.get('id')
-                                            shopify_log.append(f"✅ Created: {row.get('Family_Name', '')} ({loc_prefix})")
+                                            shopify_update_log(f"   ✅ Product created: {full_sku} (ID: {prod_id})")
                                             variants = new_prod.get('variants', [])
                                             if prod_id and variants:
                                                 variant_id = variants[0].get('id')
                                                 variant_title = variants[0].get('title', '')
+                                                shopify_update_log(f"   📦 Variant: {variant_title} (ID: {variant_id})")
                                                 if variant_id:
-                                                    label = f"{row.get('Family_Name', '')} — {variant_title} ({loc_prefix})"
+                                                    label = f"{fam_name} — {variant_title} ({loc_prefix})"
                                                     shopify_links.append({
                                                         "label": label,
                                                         "url": f"https://{shop_url}/admin/products/{prod_id}/variants/{variant_id}",
                                                     })
                                             if prod_id and pub_ids:
                                                 pub_id = pub_ids['london'] if is_london else pub_ids['gloucester']
-                                                if pub_id: publish_product_to_app(prod_id, pub_id)
+                                                if pub_id:
+                                                    pub_ok = publish_product_to_app(prod_id, pub_id)
+                                                    shopify_update_log(f"   {'✅' if pub_ok else '❌'} Published to {'London' if is_london else 'Gloucester'} catalogue")
+                                                else:
+                                                    shopify_update_log(f"   ⚠️ No publication ID found for {'London' if is_london else 'Gloucester'}")
                                             if loc_ids and variants:
                                                 inv_item_id = variants[0].get('inventory_item_id')
                                                 target_loc = loc_ids['london'] if is_london else loc_ids['gloucester']
-                                                set_variant_location(inv_item_id, target_loc, loc_ids['all_ids'])
+                                                loc_ok = set_variant_location(inv_item_id, target_loc, loc_ids['all_ids'])
+                                                shopify_update_log(f"   {'✅' if loc_ok else '❌'} Inventory location set to {'London' if is_london else 'Gloucester'}")
                                         else:
-                                            shopify_log.append(f"❌ Failed ({loc_prefix}): {r.text[:200]}")
+                                            shopify_update_log(f"   ❌ Create failed [{r.status_code}]: {r.text[:200]}")
                                     except Exception as e:
-                                        shopify_log.append(f"💥 Exception ({loc_prefix}): {str(e)}")
-                                shopify_status_box.code("\n".join(shopify_log), language="text")
+                                        shopify_update_log(f"   💥 Exception: {str(e)}")
                             st.session_state.shopify_log_text = "\n".join(shopify_log)
                             st.session_state.shopify_links = shopify_links
                             st.rerun()
