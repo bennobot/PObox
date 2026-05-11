@@ -64,6 +64,7 @@ DEFAULT_STATE = {
     'selected_drive_name': None,
     'upload_generated': False,
     'po_success': False,
+    'po_url': None,
     'price_check_data': None,
     'cin7_complete': False,
     'cin7_log_text': "",
@@ -1085,7 +1086,7 @@ def sync_product_to_cin7(upload_df, status_box=None):
 
 def create_cin7_purchase_order(header_df, lines_df, location_choice):
     headers = get_cin7_headers()
-    if not headers: return False, "Cin7 Secrets missing.", []
+    if not headers: return False, "Cin7 Secrets missing.", [], None
     logs = []
     supplier_id = None
     if 'Cin7_Supplier_ID' in header_df.columns and header_df.iloc[0]['Cin7_Supplier_ID']:
@@ -1094,7 +1095,7 @@ def create_cin7_purchase_order(header_df, lines_df, location_choice):
         supplier_name = header_df.iloc[0]['Payable_To']
         supplier_data = get_cin7_supplier(supplier_name)
         if supplier_data: supplier_id = supplier_data['ID']
-    if not supplier_id: return False, "Supplier not linked.", logs
+    if not supplier_id: return False, "Supplier not linked.", logs, None
     order_lines = []
     id_col = 'Cin7_London_ID' if location_choice == 'London' else 'Cin7_Glou_ID'
     for _, row in lines_df.iterrows():
@@ -1107,7 +1108,7 @@ def create_cin7_purchase_order(header_df, lines_df, location_choice):
                 "ProductID": prod_id, "Quantity": qty, "Price": price, "Total": total,
                 "TaxRule": "20% (VAT on Expenses)", "Discount": 0, "Tax": 0
             })
-    if not order_lines: return False, "No valid lines found to export.", logs
+    if not order_lines: return False, "No valid lines found to export.", logs, None
     url_create = f"{get_cin7_base_url()}/advanced-purchase"
     payload_header = {
         "SupplierID": supplier_id, "Location": location_choice,
@@ -1120,8 +1121,8 @@ def create_cin7_purchase_order(header_df, lines_df, location_choice):
     try:
         r1 = make_cin7_request("POST", url_create, headers=headers, json=payload_header)
         if r1.status_code == 200: task_id = r1.json().get('ID')
-        else: return False, f"Header Error: {r1.text}", logs
-    except Exception as e: return False, f"Header Ex: {e}", logs
+        else: return False, f"Header Error: {r1.text}", logs, None
+    except Exception as e: return False, f"Header Ex: {e}", logs, None
     if task_id:
         url_lines = f"{get_cin7_base_url()}/purchase/order"
         payload_lines = {
@@ -1130,10 +1131,10 @@ def create_cin7_purchase_order(header_df, lines_df, location_choice):
         }
         try:
             r2 = make_cin7_request("POST", url_lines, headers=headers, json=payload_lines)
-            if r2.status_code == 200: return True, f"✅ PO Created! ID: {task_id}", logs
-            else: return False, f"Line Error: {r2.text}", logs
-        except Exception as e: return False, f"Lines Ex: {e}", logs
-    return False, "Unknown Error", logs
+            if r2.status_code == 200: return True, f"✅ PO Created!", logs, task_id
+            else: return False, f"Line Error: {r2.text}", logs, None
+        except Exception as e: return False, f"Lines Ex: {e}", logs, None
+    return False, "Unknown Error", logs, None
 
 def normalize_vol_string(v_str):
     if not v_str: return "0"
@@ -2308,14 +2309,19 @@ if st.session_state.header_data is not None:
                     st.error("Please select a supplier.")
                 else:
                     with st.spinner("Creating PO..."):
-                        success, message, logs = create_cin7_purchase_order(
+                        success, message, logs, task_id = create_cin7_purchase_order(
                             st.session_state.header_data, po_lines, location_choice
                         )
                         if success:
-                            st.success(message)
                             st.session_state.po_success = True
+                            st.session_state.po_url = f"https://inventory.dearsystems.com/Purchase#{task_id}"
+                            st.balloons()
                         else:
                             st.error(message)
+
+            if st.session_state.po_success and st.session_state.po_url:
+                st.success("✅ PO Created!")
+                st.link_button("📄 View Purchase Order in Cin7", st.session_state.po_url)
 
     # -------------------------
     # TAB 6: PRICE CHECK
