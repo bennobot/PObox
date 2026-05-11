@@ -422,7 +422,7 @@ def make_cin7_request(method, url, headers=None, status_placeholder=None, **kwar
 # --- PRICE CHECKING & UPDATING HELPERS ---
 def fetch_cin7_product_details_by_sku(sku):
     headers = get_cin7_headers()
-    if not headers: return None, 0.0, "", "Rotational Product"
+    if not headers: return None, 0.0, "", "Rotational Product", ""
     safe_sku = quote(sku)
     url = f"{get_cin7_base_url()}/product?Sku={safe_sku}"
     try:
@@ -435,10 +435,99 @@ def fetch_cin7_product_details_by_sku(sku):
                     p.get("ID"),
                     float(p.get("PriceTier1", 0.0)),
                     str(p.get("Name", "")),
-                    str(p.get("AdditionalAttribute5", "Rotational Product"))
+                    str(p.get("AdditionalAttribute5", "Rotational Product")),
+                    str(p.get("AdditionalAttribute10", "")),
                 )
     except: pass
-    return None, 0.0, "", "Rotational Product"
+    return None, 0.0, "", "Rotational Product", ""
+
+def update_cin7_product_details(product_id, cin7_full_name, old_product, new_product, old_variant, new_variant, new_abv):
+    headers = get_cin7_headers()
+    if not headers: return False, "No headers found."
+    updated_name = cin7_full_name
+    if new_product and old_product and old_product != new_product:
+        updated_name = updated_name.replace(old_product, new_product, 1)
+    if new_variant and old_variant and old_variant != new_variant:
+        updated_name = updated_name.replace(old_variant, new_variant, 1)
+    payload = {"ID": product_id, "Name": updated_name}
+    if new_abv is not None and str(new_abv).strip():
+        payload["AdditionalAttribute10"] = str(new_abv).replace("%", "").strip()
+    try:
+        r = make_cin7_request("PUT", f"{get_cin7_base_url()}/product", headers=headers, json=payload)
+        if r.status_code == 200: return True, "OK"
+        else: return False, r.text
+    except Exception as e:
+        return False, str(e)
+
+def update_shopify_product_details(sku, new_product_title, new_variant_title, new_abv):
+    if "shopify" not in st.secrets: return False, "No secrets."
+    creds = st.secrets["shopify"]
+    shop_url = creds.get("shop_url")
+    token = creds.get("access_token")
+    version = creds.get("api_version", "2024-04")
+    rest_headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
+    gql_endpoint = f"https://{shop_url}/admin/api/{version}/graphql.json"
+    gql_headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
+
+    variant_gid, _ = fetch_shopify_price_by_sku(sku)
+    if not variant_gid: return False, "SKU not found in Shopify"
+
+    # Get numeric IDs from GIDs
+    numeric_variant_id = variant_gid.split("/")[-1]
+    query_prod = """query($id: ID!) { productVariant(id: $id) { product { id } } }"""
+    try:
+        r = requests.post(gql_endpoint, json={"query": query_prod, "variables": {"id": variant_gid}}, headers=gql_headers)
+        product_gid = r.json().get("data", {}).get("productVariant", {}).get("product", {}).get("id", "")
+        numeric_product_id = product_gid.split("/")[-1]
+    except Exception as e:
+        return False, f"Could not resolve product GID: {e}"
+
+    errors = []
+
+    if new_product_title:
+        try:
+            r = requests.put(
+                f"https://{shop_url}/admin/api/{version}/products/{numeric_product_id}.json",
+                json={"product": {"id": int(numeric_product_id), "title": new_product_title}},
+                headers=rest_headers
+            )
+            if r.status_code != 200: errors.append(f"Title: {r.text[:100]}")
+        except Exception as e:
+            errors.append(f"Title: {e}")
+
+    if new_variant_title:
+        try:
+            r = requests.put(
+                f"https://{shop_url}/admin/api/{version}/variants/{numeric_variant_id}.json",
+                json={"variant": {"id": int(numeric_variant_id), "option1": new_variant_title}},
+                headers=rest_headers
+            )
+            if r.status_code != 200: errors.append(f"Variant: {r.text[:100]}")
+        except Exception as e:
+            errors.append(f"Variant: {e}")
+
+    if new_abv is not None and str(new_abv).strip():
+        abv_clean = str(new_abv).replace("%", "").strip()
+        mutation = """
+        mutation UpdateABV($input: ProductInput!) {
+          productUpdate(input: $input) {
+            product { id }
+            userErrors { field message }
+          }
+        }
+        """
+        metafield_input = {"id": product_gid, "metafields": [
+            {"namespace": "custom", "key": "ABV", "value": abv_clean, "type": "number_decimal"}
+        ]}
+        try:
+            r = requests.post(gql_endpoint, json={"query": mutation, "variables": {"input": metafield_input}}, headers=gql_headers)
+            gql_errors = r.json().get("data", {}).get("productUpdate", {}).get("userErrors", [])
+            if gql_errors: errors.append(f"ABV: {gql_errors}")
+        except Exception as e:
+            errors.append(f"ABV: {e}")
+
+    if errors: return False, " | ".join(errors)
+    return True, "OK"
 
 def update_cin7_price(product_id, new_price):
     headers = get_cin7_headers()
@@ -1564,7 +1653,7 @@ def build_price_check_from_matched_lines(line_items_df):
         raw_price = float(row.get('Item_Price', 0))
         # Apply same split-case adjustment as prepare_final_po_lines
         invoice_cost = raw_price / 2 if row.get('Use_Split', False) else raw_price
-        prod_id, current_cin7_price, full_name, attr_5 = fetch_cin7_product_details_by_sku(sku)
+        prod_id, current_cin7_price, cin7_full_name, attr_5, cin7_abv = fetch_cin7_product_details_by_sku(sku)
         recommended_price = calculate_sell_price(invoice_cost, attr_5, str(row.get('Format', '')))
         price_diff = round(recommended_price - current_cin7_price, 2)
         pct_change = round((price_diff / current_cin7_price) * 100, 1) if current_cin7_price else 0
@@ -1573,12 +1662,14 @@ def build_price_check_from_matched_lines(line_items_df):
             "SKU": sku,
             "Product": str(row.get('Product_Name', '')),
             "Variant": str(row.get('Matched_Variant', '')),
+            "ABV": cin7_abv,
             "Invoice_Cost": invoice_cost,
             "Current_Cin7_Price": current_cin7_price,
             "Recommended_Price": recommended_price,
             "Change_%": pct_change,
             "Flag": flag,
             "Cin7_ID": prod_id or "",
+            "Cin7_Name": cin7_full_name,
             "Attr5": attr_5,
         })
     return pd.DataFrame(rows)
@@ -2356,40 +2447,74 @@ if st.session_state.header_data is not None:
 
             col_cfg = {
                 "Update":               st.column_config.CheckboxColumn("Update?", width="small"),
+                "Product":              st.column_config.TextColumn("Product"),
+                "Variant":              st.column_config.TextColumn("Variant"),
+                "ABV":                  st.column_config.TextColumn("ABV"),
                 "Invoice_Cost":         st.column_config.NumberColumn("Invoice Cost", format="£%.2f"),
                 "Current_Cin7_Price":   st.column_config.NumberColumn("Current Price", format="£%.2f"),
                 "Recommended_Price":    st.column_config.NumberColumn("Recommended", format="£%.2f"),
                 "Change_%":             st.column_config.NumberColumn("Change %", format="%.1f%%"),
                 "Flag":                 st.column_config.TextColumn("Flag", disabled=True),
+                "Cin7_ID":              st.column_config.TextColumn("Cin7_ID", disabled=True),
+                "Cin7_Name":            None,
+                "Attr5":                st.column_config.TextColumn("Attr5", disabled=True),
             }
 
             edited_pc = st.data_editor(
                 pc_df,
                 column_config=col_cfg,
+                column_order=["Update", "SKU", "Product", "Variant", "ABV", "Invoice_Cost", "Current_Cin7_Price", "Recommended_Price", "Change_%", "Flag"],
                 num_rows="fixed",
                 use_container_width=True,
                 key="price_check_editor"
             )
 
             st.divider()
-            if st.button("💰 Update Prices in Cin7 & Shopify"):
-                update_log = []
-                prog = st.progress(0)
-                rows_to_update = edited_pc[edited_pc['Update'] == True]
-                for i, (_, row) in enumerate(rows_to_update.iterrows()):
-                    prog.progress((i + 1) / max(len(rows_to_update), 1))
-                    new_price = row['Recommended_Price']
-                    prod_id = row.get('Cin7_ID')
-                    if prod_id:
-                        ok, msg = update_cin7_price(prod_id, new_price)
-                        update_log.append(f"{'✅' if ok else '❌'} Cin7 {row['SKU']}: {msg}")
-                    variant_id, _ = fetch_shopify_price_by_sku(row['SKU'])
-                    if variant_id:
-                        ok, msg = update_shopify_price(variant_id, new_price)
-                        update_log.append(f"{'✅' if ok else '❌'} Shopify {row['SKU']}: {msg}")
+            btn_col1, btn_col2 = st.columns(2)
 
-                st.code("\n".join(update_log), language="text")
-                st.success("Price update complete.")
+            with btn_col1:
+                if st.button("💰 Update Prices in Cin7 & Shopify"):
+                    update_log = []
+                    prog = st.progress(0)
+                    rows_to_update = edited_pc[edited_pc['Update'] == True]
+                    for i, (_, row) in enumerate(rows_to_update.iterrows()):
+                        prog.progress((i + 1) / max(len(rows_to_update), 1))
+                        new_price = row['Recommended_Price']
+                        prod_id = row.get('Cin7_ID')
+                        if prod_id:
+                            ok, msg = update_cin7_price(prod_id, new_price)
+                            update_log.append(f"{'✅' if ok else '❌'} Cin7 {row['SKU']}: {msg}")
+                        variant_id, _ = fetch_shopify_price_by_sku(row['SKU'])
+                        if variant_id:
+                            ok, msg = update_shopify_price(variant_id, new_price)
+                            update_log.append(f"{'✅' if ok else '❌'} Shopify {row['SKU']}: {msg}")
+                    st.code("\n".join(update_log), language="text")
+                    st.success("Price update complete.")
+
+            with btn_col2:
+                if st.button("✏️ Update Product Details in Cin7 & Shopify"):
+                    detail_log = []
+                    prog2 = st.progress(0)
+                    rows_to_update = edited_pc[edited_pc['Update'] == True]
+                    orig = st.session_state.price_check_data
+                    for i, (idx, row) in enumerate(rows_to_update.iterrows()):
+                        prog2.progress((i + 1) / max(len(rows_to_update), 1))
+                        sku = row['SKU']
+                        orig_row = orig.loc[idx] if idx in orig.index else None
+                        old_product = orig_row['Product'] if orig_row is not None else row['Product']
+                        old_variant = orig_row['Variant'] if orig_row is not None else row['Variant']
+                        new_product = row['Product']
+                        new_variant = row['Variant']
+                        new_abv     = row.get('ABV', '')
+                        cin7_name   = row.get('Cin7_Name', '')
+                        prod_id     = row.get('Cin7_ID')
+                        if prod_id:
+                            ok, msg = update_cin7_product_details(prod_id, cin7_name, old_product, new_product, old_variant, new_variant, new_abv)
+                            detail_log.append(f"{'✅' if ok else '❌'} Cin7 {sku}: {msg}")
+                        ok, msg = update_shopify_product_details(sku, new_product, new_variant, new_abv)
+                        detail_log.append(f"{'✅' if ok else '❌'} Shopify {sku}: {msg}")
+                    st.code("\n".join(detail_log), language="text")
+                    st.success("Product detail update complete.")
 
             st.download_button("📥 Download Price Check CSV", edited_pc.to_csv(index=False), "price_check.csv")
 
