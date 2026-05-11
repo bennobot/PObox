@@ -441,7 +441,7 @@ def fetch_cin7_product_details_by_sku(sku):
     except: pass
     return None, 0.0, "", "Rotational Product", ""
 
-def update_cin7_product_details(product_id, cin7_full_name, old_product, new_product, old_variant, new_variant, new_abv):
+def update_cin7_product_details(product_id, cin7_full_name, old_product, new_product, old_variant, new_variant, old_abv, new_abv):
     headers = get_cin7_headers()
     if not headers: return False, "No headers found."
     updated_name = cin7_full_name
@@ -449,6 +449,10 @@ def update_cin7_product_details(product_id, cin7_full_name, old_product, new_pro
         updated_name = updated_name.replace(old_product, new_product, 1)
     if new_variant and old_variant and old_variant != new_variant:
         updated_name = updated_name.replace(old_variant, new_variant, 1)
+    if new_abv and old_abv and str(old_abv).strip() != str(new_abv).strip():
+        old_abv_str = str(old_abv).replace("%", "").strip() + "%"
+        new_abv_str = str(new_abv).replace("%", "").strip() + "%"
+        updated_name = updated_name.replace(old_abv_str, new_abv_str, 1)
     payload = {"ID": product_id}
     if updated_name:
         payload["Name"] = updated_name
@@ -461,7 +465,7 @@ def update_cin7_product_details(product_id, cin7_full_name, old_product, new_pro
     except Exception as e:
         return False, str(e)
 
-def update_shopify_product_details(sku, new_product_title, new_variant_title, new_abv):
+def update_shopify_product_details(sku, new_product_title, new_variant_title, old_abv, new_abv, old_product=None):
     if "shopify" not in st.secrets: return False, "No secrets."
     creds = st.secrets["shopify"]
     shop_url = creds.get("shop_url")
@@ -474,23 +478,34 @@ def update_shopify_product_details(sku, new_product_title, new_variant_title, ne
     variant_gid, _ = fetch_shopify_price_by_sku(sku)
     if not variant_gid: return False, "SKU not found in Shopify"
 
-    # Get numeric IDs from GIDs
+    # Get numeric IDs and current product title in one query
     numeric_variant_id = variant_gid.split("/")[-1]
-    query_prod = """query($id: ID!) { productVariant(id: $id) { product { id } } }"""
+    query_prod = """query($id: ID!) { productVariant(id: $id) { product { id title } } }"""
     try:
         r = requests.post(gql_endpoint, json={"query": query_prod, "variables": {"id": variant_gid}}, headers=gql_headers)
-        product_gid = r.json().get("data", {}).get("productVariant", {}).get("product", {}).get("id", "")
+        prod_data = r.json().get("data", {}).get("productVariant", {}).get("product", {})
+        product_gid = prod_data.get("id", "")
+        current_title = prod_data.get("title", "")
         numeric_product_id = product_gid.split("/")[-1]
     except Exception as e:
         return False, f"Could not resolve product GID: {e}"
 
     errors = []
 
-    if new_product_title:
+    # Reconstruct title via string replacement rather than overwriting
+    updated_title = current_title
+    if new_product_title and old_product and old_product != new_product_title:
+        updated_title = updated_title.replace(old_product, new_product_title, 1)
+    if new_abv and old_abv and str(old_abv).strip() != str(new_abv).strip():
+        old_abv_str = str(old_abv).replace("%", "").strip() + "%"
+        new_abv_str = str(new_abv).replace("%", "").strip() + "%"
+        updated_title = updated_title.replace(old_abv_str, new_abv_str, 1)
+
+    if updated_title and updated_title != current_title:
         try:
             r = requests.put(
                 f"https://{shop_url}/admin/api/{version}/products/{numeric_product_id}.json",
-                json={"product": {"id": int(numeric_product_id), "title": new_product_title}},
+                json={"product": {"id": int(numeric_product_id), "title": updated_title}},
                 headers=rest_headers
             )
             if r.status_code != 200: errors.append(f"Title: {r.text[:100]}")
@@ -2506,6 +2521,7 @@ if st.session_state.header_data is not None:
                         orig_row = orig.loc[idx] if idx in orig.index else None
                         old_product = orig_row['Product'] if orig_row is not None else row['Product']
                         old_variant = orig_row['Variant'] if orig_row is not None else row['Variant']
+                        old_abv     = orig_row.get('ABV', '') if orig_row is not None else row.get('ABV', '')
                         new_product = row['Product']
                         new_variant = row['Variant']
                         new_abv     = row.get('ABV', '')
@@ -2514,9 +2530,9 @@ if st.session_state.header_data is not None:
                         if prod_id:
                             if not cin7_name:
                                 _, _, cin7_name, _, _ = fetch_cin7_product_details_by_sku(sku)
-                            ok, msg = update_cin7_product_details(prod_id, cin7_name, old_product, new_product, old_variant, new_variant, new_abv)
+                            ok, msg = update_cin7_product_details(prod_id, cin7_name, old_product, new_product, old_variant, new_variant, old_abv, new_abv)
                             detail_log.append(f"{'✅' if ok else '❌'} Cin7 {sku}: {msg}")
-                        ok, msg = update_shopify_product_details(sku, new_product, new_variant, new_abv)
+                        ok, msg = update_shopify_product_details(sku, new_product, new_variant, old_abv, new_abv, old_product=old_product)
                         detail_log.append(f"{'✅' if ok else '❌'} Shopify {sku}: {msg}")
                     st.code("\n".join(detail_log), language="text")
                     st.success("Product detail update complete.")
