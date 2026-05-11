@@ -1,5 +1,6 @@
 ﻿import streamlit as st
 import pandas as pd
+import math
 from pdf2image import convert_from_bytes
 import pytesseract
 from google import genai
@@ -131,6 +132,9 @@ def apply_clean_abv_to_df(df, col='ABV'):
         df[col] = df[col].fillna("").apply(clean_abv)
     return df
 
+def ceil2(x):
+    return math.ceil(x * 100) / 100
+
 def calculate_sell_price(cost_price, product_type, fmt):
     try:
         cost = float(cost_price)
@@ -141,15 +145,15 @@ def calculate_sell_price(cost_price, product_type, fmt):
     draft_triggers = ['keykeg', 'steel', 'poly', 'uni', 'cask', 'keg', 'firkin', 'pin']
     is_draft = any(t in fmt_lower for t in draft_triggers)
     if product_type == "Core Product":
-        if is_draft and cost < 64: return round(cost + 17, 2)
-        elif is_draft and cost > 151: return round(cost + 40, 2)
-        elif cost > 142.50: return round(cost + 37.75, 2)
-        else: return round(cost * 1.265, 2)
+        if is_draft and cost < 64: return ceil2(cost + 17)
+        elif is_draft and cost > 151: return ceil2(cost + 40)
+        elif cost > 142.50: return ceil2(cost + 37.75)
+        else: return ceil2(cost * 1.265)
     else:
-        if is_draft and cost < 70.25: return round(cost + 20, 2)
-        elif is_draft and cost > 140.5: return round(cost + 40, 2)
-        elif cost > 130: return round(cost + 37.00, 2)
-        else: return round(cost * 1.285, 2)
+        if is_draft and cost < 70.25: return ceil2(cost + 20)
+        elif is_draft and cost > 140.5: return ceil2(cost + 40)
+        elif cost > 130: return ceil2(cost + 37.00)
+        else: return ceil2(cost * 1.285)
 
 # --- 1B. GOOGLE DRIVE ---
 def get_drive_service():
