@@ -449,7 +449,9 @@ def update_cin7_product_details(product_id, cin7_full_name, old_product, new_pro
         updated_name = updated_name.replace(old_product, new_product, 1)
     if new_variant and old_variant and old_variant != new_variant:
         updated_name = updated_name.replace(old_variant, new_variant, 1)
-    payload = {"ID": product_id, "Name": updated_name}
+    payload = {"ID": product_id}
+    if updated_name:
+        payload["Name"] = updated_name
     if new_abv is not None and str(new_abv).strip():
         payload["AdditionalAttribute10"] = str(new_abv).replace("%", "").strip()
     try:
@@ -2509,6 +2511,8 @@ if st.session_state.header_data is not None:
                         cin7_name   = row.get('Cin7_Name', '')
                         prod_id     = row.get('Cin7_ID')
                         if prod_id:
+                            if not cin7_name:
+                                _, _, cin7_name, _, _ = fetch_cin7_product_details_by_sku(sku)
                             ok, msg = update_cin7_product_details(prod_id, cin7_name, old_product, new_product, old_variant, new_variant, new_abv)
                             detail_log.append(f"{'✅' if ok else '❌'} Cin7 {sku}: {msg}")
                         ok, msg = update_shopify_product_details(sku, new_product, new_variant, new_abv)
