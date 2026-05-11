@@ -68,6 +68,8 @@ DEFAULT_STATE = {
     'cin7_complete': False,
     'cin7_log_text': "",
     'shopify_log_text': "",
+    'cin7_links': [],
+    'shopify_links': [],
 }
 
 # ==========================================
@@ -2198,11 +2200,8 @@ if st.session_state.header_data is not None:
                             log, cin7_links = sync_product_to_cin7(st.session_state.upload_data, status_box=cin7_status_box)
                             st.session_state.cin7_complete = True
                             st.session_state.cin7_log_text = "\n".join(log)
-                            st.success("Cin7 Sync Complete!")
-                            if cin7_links:
-                                st.markdown("**🔗 Cin7 — Created Products**")
-                                for item in cin7_links:
-                                    st.markdown(f"- [{item['label']}]({item['url']})")
+                            st.session_state.cin7_links = cin7_links
+                            st.rerun()
 
                 with col_s:
                     if st.button("🛍️ Create Shopify Products", type="primary"):
@@ -2255,11 +2254,24 @@ if st.session_state.header_data is not None:
                                         shopify_log.append(f"💥 Exception ({loc_prefix}): {str(e)}")
                                 shopify_status_box.code("\n".join(shopify_log), language="text")
                             st.session_state.shopify_log_text = "\n".join(shopify_log)
-                            st.success("Shopify Creation Complete!")
-                            if shopify_links:
-                                st.markdown("**🔗 Shopify — Created Variants**")
-                                for item in shopify_links:
-                                    st.markdown(f"- [{item['label']}]({item['url']})")
+                            st.session_state.shopify_links = shopify_links
+                            st.rerun()
+
+                if st.session_state.cin7_log_text:
+                    st.markdown("**Cin7 Sync Log**")
+                    st.code(st.session_state.cin7_log_text, language="text")
+                    if st.session_state.cin7_links:
+                        st.markdown("**🔗 Cin7 — Created Products**")
+                        for item in st.session_state.cin7_links:
+                            st.markdown(f"- [{item['label']}]({item['url']})")
+
+                if st.session_state.shopify_log_text:
+                    st.markdown("**Shopify Creation Log**")
+                    st.code(st.session_state.shopify_log_text, language="text")
+                    if st.session_state.shopify_links:
+                        st.markdown("**🔗 Shopify — Created Variants**")
+                        for item in st.session_state.shopify_links:
+                            st.markdown(f"- [{item['label']}]({item['url']})")
 
     # -------------------------
     # TAB 5: FINALIZE PO
