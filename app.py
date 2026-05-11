@@ -1236,7 +1236,7 @@ def run_reconciliation_check(lines_df):
 
                 # Separate ABV check using the Shopify metafield, not the product name.
                 # Only penalise if BOTH sides have a known ABV and they differ by > 0.4%.
-                shop_abv = clean_abv(str(prod.get('abv_meta', {}).get('value', '')))
+                shop_abv = clean_abv(str((prod.get('abv_meta') or {}).get('value', '')))
                 if inv_abv and shop_abv:
                     try:
                         abv_diff = abs(float(inv_abv) - float(shop_abv))
@@ -1265,8 +1265,8 @@ def run_reconciliation_check(lines_df):
             for score, prod, clean_name in scored_candidates:
                 if score < match_threshold: continue
 
-                shop_keg_meta = str(prod.get('keg_meta', {}).get('value', '')).lower()
-                shop_fmt_meta = str(prod.get('format_meta', {}).get('value', '')).lower()
+                shop_keg_meta = str((prod.get('keg_meta') or {}).get('value', '')).lower()
+                shop_fmt_meta = str((prod.get('format_meta') or {}).get('value', '')).lower()
                 combined_shop_tags = f"{shop_keg_meta} {shop_fmt_meta} {prod['title'].lower()}"
 
                 if not _format_is_compatible(inv_fmt, shop_keg_meta, combined_shop_tags):
