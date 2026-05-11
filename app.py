@@ -1102,8 +1102,8 @@ def create_cin7_purchase_order(header_df, lines_df, location_choice):
         prod_id = row.get(id_col)
         if pd.notna(prod_id) and str(prod_id).strip():
             qty = float(row.get('PO_Qty', 0))
-            price = float(row.get('PO_Cost', 0))
-            total = round(qty * price, 2)
+            price = round(float(row.get('PO_Cost', 0)), 10)
+            total = round(qty * price, 10)
             order_lines.append({
                 "ProductID": prod_id, "Quantity": qty, "Price": price, "Total": total,
                 "TaxRule": "20% (VAT on Expenses)", "Discount": 0, "Tax": 0
