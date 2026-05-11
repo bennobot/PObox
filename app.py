@@ -2246,6 +2246,8 @@ if st.session_state.header_data is not None:
                 keg_map = fetch_keg_codes()
                 if not keg_map:
                     st.warning("⚠️ Keg connector map is empty — check the 'Keg' worksheet in the reference spreadsheet.")
+                else:
+                    st.info(f"🔍 Keg map keys: {list(keg_map.keys())}")
                 today_str = datetime.now().strftime('%d%m%Y')
                 processed_rows = []
 
