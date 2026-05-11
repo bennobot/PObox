@@ -2341,10 +2341,13 @@ if st.session_state.header_data is not None:
             st.info("Run **Check Inventory** in Tab 1 to auto-populate price check from matched lines.")
         else:
             review_count = len(pc_df[pc_df['Flag'] == "⚠️ Review"])
+            changed_count = len(pc_df[pc_df['Change_%'] != 0.0])
             if review_count:
                 st.warning(f"⚠️ **{review_count} SKU(s)** have a price change > 5% — review before creating the PO.")
+            elif changed_count:
+                st.info(f"ℹ️ **{changed_count} SKU(s)** have a price change — all within 5%, but review before creating the PO.")
             else:
-                st.success("✅ All prices are within 5% of current. No action required.")
+                st.success("✅ All prices match current. No updates needed.")
 
             if 'Update' not in pc_df.columns:
                 pc_df['Update'] = pc_df['Flag'] == "⚠️ Review"
