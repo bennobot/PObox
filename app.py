@@ -2193,7 +2193,7 @@ if st.session_state.header_data is not None:
                 shopify_status_box = st.empty()
 
                 with col_c:
-                    if st.button("🚀 Sync to Cin7", type="primary"):
+                    if st.button("🚀 Create Cin7 Products", type="primary"):
                         with st.spinner("Syncing to Cin7..."):
                             log, cin7_links = sync_product_to_cin7(st.session_state.upload_data, status_box=cin7_status_box)
                             st.session_state.cin7_complete = True
