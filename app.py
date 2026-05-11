@@ -1664,31 +1664,36 @@ def build_price_check_from_matched_lines(line_items_df):
     matched = matched.drop_duplicates(subset='London_SKU', keep='first')
     rows = []
     for _, row in matched.iterrows():
-        sku = str(row.get('London_SKU', '')).strip()
-        if not sku:
+        london_sku = str(row.get('London_SKU', '')).strip()
+        if not london_sku:
             continue
         raw_price = float(row.get('Item_Price', 0))
-        # Apply same split-case adjustment as prepare_final_po_lines
         invoice_cost = raw_price / 2 if row.get('Use_Split', False) else raw_price
-        prod_id, current_cin7_price, cin7_full_name, attr_5, cin7_abv = fetch_cin7_product_details_by_sku(sku)
-        recommended_price = calculate_sell_price(invoice_cost, attr_5, str(row.get('Format', '')))
-        price_diff = round(recommended_price - current_cin7_price, 2)
-        pct_change = round((price_diff / current_cin7_price) * 100, 1) if current_cin7_price else 0
-        flag = "⚠️ Review" if abs(pct_change) > 5 else "✅ OK"
-        rows.append({
-            "SKU": sku,
-            "Product": str(row.get('Product_Name', '')),
-            "Variant": str(row.get('Matched_Variant', '')),
-            "ABV": cin7_abv,
-            "Invoice_Cost": invoice_cost,
-            "Current_Cin7_Price": current_cin7_price,
-            "Recommended_Price": recommended_price,
-            "Change_%": pct_change,
-            "Flag": flag,
-            "Cin7_ID": prod_id or "",
-            "Cin7_Name": cin7_full_name,
-            "Attr5": attr_5,
-        })
+        # Emit one row for each depot prefix (L and G)
+        for prefix, other in [("L-", "G-"), ("G-", "L-")]:
+            if london_sku.startswith("L-"):
+                sku = london_sku if prefix == "L-" else "G-" + london_sku[2:]
+            else:
+                sku = london_sku if prefix == "G-" else "L-" + london_sku[2:]
+            prod_id, current_cin7_price, cin7_full_name, attr_5, cin7_abv = fetch_cin7_product_details_by_sku(sku)
+            recommended_price = calculate_sell_price(invoice_cost, attr_5, str(row.get('Format', '')))
+            price_diff = round(recommended_price - current_cin7_price, 2)
+            pct_change = round((price_diff / current_cin7_price) * 100, 1) if current_cin7_price else 0
+            flag = "⚠️ Review" if abs(pct_change) > 5 else "✅ OK"
+            rows.append({
+                "SKU": sku,
+                "Product": str(row.get('Product_Name', '')),
+                "Variant": str(row.get('Matched_Variant', '')),
+                "ABV": cin7_abv,
+                "Invoice_Cost": invoice_cost,
+                "Current_Cin7_Price": current_cin7_price,
+                "Recommended_Price": recommended_price,
+                "Change_%": pct_change,
+                "Flag": flag,
+                "Cin7_ID": prod_id or "",
+                "Cin7_Name": cin7_full_name,
+                "Attr5": attr_5,
+            })
     return pd.DataFrame(rows)
 
 # ==========================================
