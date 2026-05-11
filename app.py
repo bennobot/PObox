@@ -1516,19 +1516,32 @@ def fetch_weight_map():
 
 @st.cache_data(ttl=3600)
 def fetch_keg_codes():
+    """Returns {format_lower: {"connector": connector_name, "sku_end": sku_end_code}}"""
+    sheet_url = "https://docs.google.com/spreadsheets/d/1Skd85vSu3e16z9iAVG8bZjhwqIWRnUxZXiVv1QbmPHA"
     try:
-        conn = st.connection("gsheets", type=GSheetsConnection)
-        sheet_url = "https://docs.google.com/spreadsheets/d/1Skd85vSu3e16z9iAVG8bZjhwqIWRnUxZXiVv1QbmPHA"
-        df = conn.read(spreadsheet=sheet_url, worksheet="Keg", usecols=[0, 1])
-        if not df.empty:
-            df = df.dropna(how='all')
-            result = {}
-            for _, row in df.iterrows():
+        gconn = st.connection("gsheets", type=GSheetsConnection)
+        # Keg sheet: Connector -> SKU End
+        sku_end_map = {}
+        df_keg = gconn.read(spreadsheet=sheet_url, worksheet="Keg", usecols=[0, 1])
+        if not df_keg.empty:
+            for _, row in df_keg.dropna(how='all').iterrows():
                 k = str(row.iloc[0]).strip().lower()
                 v = str(row.iloc[1]).strip()
                 if k and k != 'nan' and v and v != 'nan':
-                    result[k] = v
-            return result
+                    sku_end_map[k] = v
+        # SKU sheet col 0 (Format) + col 3 (Default Connector)
+        result = {}
+        df_sku = gconn.read(spreadsheet=sheet_url, worksheet="SKU", usecols=[0, 3])
+        if not df_sku.empty:
+            for _, row in df_sku.dropna(how='all').iterrows():
+                fmt = str(row.iloc[0]).strip().lower()
+                connector = str(row.iloc[1]).strip()
+                if fmt and fmt != 'nan' and connector and connector != 'nan':
+                    result[fmt] = {
+                        "connector": connector,
+                        "sku_end": sku_end_map.get(connector.lower(), ""),
+                    }
+        return result
     except Exception: pass
     return {}
 
@@ -2245,9 +2258,7 @@ if st.session_state.header_data is not None:
                 weight_map, size_code_map = fetch_weight_map()
                 keg_map = fetch_keg_codes()
                 if not keg_map:
-                    st.warning("⚠️ Keg connector map is empty — check the 'Keg' worksheet in the reference spreadsheet.")
-                else:
-                    st.info(f"🔍 Keg map keys: {list(keg_map.keys())}")
+                    st.warning("⚠️ Keg connector map is empty — check the SKU worksheet in the reference spreadsheet.")
                 today_str = datetime.now().strftime('%d%m%Y')
                 processed_rows = []
 
@@ -2282,8 +2293,9 @@ if st.session_state.header_data is not None:
                     is_split = bool(row.get('is_split_case', False))
                     if is_split: pack_int = pack_int * 2
 
-                    keg_connector = ""
-                    if fmt_name.lower() in keg_map: keg_connector = keg_map[fmt_name.lower()]
+                    keg_info = keg_map.get(fmt_name.lower(), {})
+                    keg_connector = keg_info.get("connector", "")
+                    keg_sku_end = keg_info.get("sku_end", "")
 
                     # Variant name
                     if pack_int and pack_int > 1:
@@ -2299,7 +2311,7 @@ if st.session_state.header_data is not None:
 
                     abv_str = f"{abv_val}%" if abv_val else ""
                     family_name = f"{display_supplier} / {prod_name} / {abv_str} / {fmt_name}" if abv_str else f"{display_supplier} / {prod_name} / {fmt_name}"
-                    sku_size = f"{pack_int}X{size_code}" if pack_int > 1 else size_code
+                    sku_size = f"{pack_int}X{size_code}" if pack_int > 1 else f"{size_code}{keg_sku_end}"
                     variant_sku_base = f"{family_sku}-{sku_size}"
 
                     processed_rows.append({
