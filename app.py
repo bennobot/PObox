@@ -2267,7 +2267,8 @@ if st.session_state.header_data is not None:
                     if is_split: cost_price = cost_price / 2
                     sales_price = calculate_sell_price(cost_price, attr_5, fmt_name)
 
-                    family_name = f"{display_supplier} / {prod_name} / {fmt_name}"
+                    abv_str = f"{abv_val}%" if abv_val else ""
+                    family_name = f"{display_supplier} / {prod_name} / {abv_str} / {fmt_name}" if abv_str else f"{display_supplier} / {prod_name} / {fmt_name}"
                     sku_size = f"{pack_int}X{size_code}" if pack_int > 1 else size_code
                     variant_sku_base = f"{family_sku}-{sku_size}"
 
