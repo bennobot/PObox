@@ -2294,6 +2294,8 @@ if st.session_state.header_data is not None:
 
             if 'Update' not in pc_df.columns:
                 pc_df['Update'] = pc_df['Flag'] == "⚠️ Review"
+                cols = ['Update'] + [c for c in pc_df.columns if c != 'Update']
+                pc_df = pc_df[cols]
                 st.session_state.price_check_data = pc_df
 
             col_cfg = {
