@@ -456,6 +456,8 @@ def update_cin7_product_details(product_id, cin7_full_name, old_product, new_pro
         if not prods:
             return False, "Product not found"
         payload = prods[0].copy()
+        for ro in ("CreatedDate", "ModifiedDate", "BrandID"):
+            payload.pop(ro, None)
     except Exception as e:
         return False, f"GET error: {e}"
     # Apply name changes via string replacement on the live name
