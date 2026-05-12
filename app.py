@@ -2735,14 +2735,19 @@ if st.session_state.header_data is not None:
                     for i, (_, row) in enumerate(rows_to_update.iterrows()):
                         prog.progress((i + 1) / max(len(rows_to_update), 1))
                         new_price = row['Recommended_Price']
+                        old_price = row.get('Current_Cin7_Price', 0)
+                        abv = str(row.get('ABV', '')).strip()
+                        abv_str = f" / {abv}%" if abv and abv.lower() not in ('', 'nan') else ""
+                        readable = f"{row.get('Product', row['SKU'])}{abv_str} / {row.get('Variant', '')}  £{old_price:.2f} → £{new_price:.2f}"
+                        update_log.append(f"\n── {readable}")
                         prod_id = row.get('Cin7_ID')
                         if prod_id:
                             ok, msg = update_cin7_price(prod_id, new_price)
-                            update_log.append(f"{'✅' if ok else '❌'} Cin7 {row['SKU']}: {msg}")
+                            update_log.append(f"  {'✅' if ok else '❌'} Cin7:   {msg}")
                         variant_id, _ = fetch_shopify_price_by_sku(row['SKU'])
                         if variant_id:
                             ok, msg = update_shopify_price(variant_id, new_price)
-                            update_log.append(f"{'✅' if ok else '❌'} Shopify {row['SKU']}: {msg}")
+                            update_log.append(f"  {'✅' if ok else '❌'} Shopify: {msg}")
                     st.code("\n".join(update_log), language="text")
                     st.success("Price update complete.")
 
