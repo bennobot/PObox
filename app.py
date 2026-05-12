@@ -71,6 +71,7 @@ DEFAULT_STATE = {
     'shopify_log_text': "",
     'cin7_links': [],
     'shopify_links': [],
+    'polykeg_selections': {},
 }
 
 # ==========================================
@@ -718,6 +719,12 @@ def get_cin7_supplier(name):
     if "&" in name: return get_cin7_supplier(name.replace("&", "and"))
     return None
 
+def swap_polykeg_sku_end(sku, new_end):
+    for old_end in ["KKT", "USDT", "ST"]:  # longest/most-specific first
+        if sku.endswith(old_end):
+            return sku[:-len(old_end)] + new_end
+    return sku + new_end
+
 def prepare_final_po_lines(line_items_df):
     if line_items_df is None or line_items_df.empty:
         return pd.DataFrame()
@@ -742,6 +749,9 @@ def prepare_final_po_lines(line_items_df):
         g_id = row.get('Cin7_Glou_ID', '')
         po_rows.append({
             "Product": prod_name, "Variant_Match": matched_sku,
+            "Format": str(row.get('Format', '')),
+            "London_SKU": str(row.get('London_SKU', '')),
+            "Gloucester_SKU": str(row.get('Gloucester_SKU', '')),
             "PO_Qty": final_qty, "PO_Cost": final_price,
             "Invoice_Line_Total": line_total,
             "Total": final_qty * final_price, "Notes": notes,
@@ -1941,6 +1951,7 @@ if st.button("🚀 Process Invoice", type="primary"):
                 st.session_state.upload_data = None
                 st.session_state.upload_generated = False
                 st.session_state.price_check_data = None
+                st.session_state.polykeg_selections = {}
                 st.session_state.line_items_key += 1
 
                 status.update(label="Processing Complete!", state="complete", expanded=False)
@@ -2294,38 +2305,45 @@ if st.session_state.header_data is not None:
                     if is_split: pack_int = pack_int * 2
 
                     keg_info = keg_map.get(fmt_name.lower(), {})
-                    keg_connector = keg_info.get("connector", "")
-                    keg_sku_end = keg_info.get("sku_end", "")
-
-                    # Variant name
-                    if pack_int and pack_int > 1:
-                        variant_name = f"{pack_int}x{vol_name}"
-                    elif keg_connector:
-                        variant_name = f"{vol_name} - {keg_connector}"
-                    else:
-                        variant_name = vol_name
-
                     cost_price = float(str(row.get('item_price', 0)).replace('£', '').strip() or 0)
                     if is_split: cost_price = cost_price / 2
                     sales_price = calculate_sell_price(cost_price, attr_5, fmt_name)
 
                     abv_str = f"{abv_val}%" if abv_val else ""
                     family_name = f"{display_supplier} / {prod_name} / {abv_str} / {fmt_name}" if abv_str else f"{display_supplier} / {prod_name} / {fmt_name}"
-                    sku_size = f"{pack_int}X{size_code}" if pack_int > 1 else f"{size_code}{keg_sku_end}"
-                    variant_sku_base = f"{family_sku}-{sku_size}"
 
-                    processed_rows.append({
-                        **row.to_dict(),
-                        'Family_SKU': family_sku,
-                        'Variant_SKU': variant_sku_base,
-                        'Family_Name': family_name,
-                        'Variant_Name': variant_name,
-                        'Weight': unit_weight * pack_int,
-                        'Keg_Connector': keg_connector,
-                        'Sales_Price': sales_price,
-                        'item_price': cost_price,
-                        'untappd_abv': abv_val,
-                    })
+                    # PolyKeg generates two variants (Sankey + KeyKeg); all others generate one
+                    is_polykeg = fmt_name.lower() == "polykeg"
+                    coupler_variants = [
+                        {"connector": "Sankey Coupler", "sku_end": "ST"},
+                        {"connector": "KeyKeg Coupler", "sku_end": "KKT"},
+                    ] if is_polykeg else [
+                        {"connector": keg_info.get("connector", ""), "sku_end": keg_info.get("sku_end", "")}
+                    ]
+
+                    for coupler in coupler_variants:
+                        keg_connector = coupler["connector"]
+                        keg_sku_end = coupler["sku_end"]
+                        if pack_int and pack_int > 1:
+                            variant_name = f"{pack_int}x{vol_name}"
+                        elif keg_connector:
+                            variant_name = f"{vol_name} - {keg_connector}"
+                        else:
+                            variant_name = vol_name
+                        sku_size = f"{pack_int}X{size_code}" if pack_int > 1 else f"{size_code}{keg_sku_end}"
+                        variant_sku_base = f"{family_sku}-{sku_size}"
+                        processed_rows.append({
+                            **row.to_dict(),
+                            'Family_SKU': family_sku,
+                            'Variant_SKU': variant_sku_base,
+                            'Family_Name': family_name,
+                            'Variant_Name': variant_name,
+                            'Weight': unit_weight * pack_int,
+                            'Keg_Connector': keg_connector,
+                            'Sales_Price': sales_price,
+                            'item_price': cost_price,
+                            'untappd_abv': abv_val,
+                        })
 
                 st.session_state.upload_data = pd.DataFrame(processed_rows)
                 st.session_state.upload_generated = True
@@ -2363,52 +2381,75 @@ if st.session_state.header_data is not None:
                                 shopify_log.append(msg)
                                 shopify_status_box.code("\n".join(shopify_log), language="text")
                             shopify_update_log(f"🚀 Starting Shopify sync for {total_rows} rows...")
+                            created_shopify_products = {}  # f"{loc}-{family_name}" -> product_id
+                            creds = st.secrets["shopify"]
+                            shop_url = creds.get("shop_url")
+                            token = creds.get("access_token")
+                            version = creds.get("api_version", "2024-04")
+                            s_headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
                             for i, (_, row) in enumerate(st.session_state.upload_data.iterrows()):
                                 prog.progress((i + 1) / total_rows)
                                 fam_name = row.get('Family_Name', row.get('Variant_SKU', f'Row {i+1}'))
                                 for loc_prefix in ["L", "G"]:
                                     is_london = loc_prefix == "L"
                                     full_sku = f"{loc_prefix}-{row.get('Variant_SKU', '')}"
+                                    product_key = f"{loc_prefix}-{fam_name}"
                                     shopify_update_log(f"\n🔄 [{loc_prefix}] {fam_name}")
                                     variant_payload = create_shopify_variant_payload(row, loc_prefix)
-                                    product_payload = create_shopify_product_payload(row, loc_prefix, [variant_payload])
-                                    creds = st.secrets["shopify"]
-                                    shop_url = creds.get("shop_url")
-                                    token = creds.get("access_token")
-                                    version = creds.get("api_version", "2024-04")
-                                    url = f"https://{shop_url}/admin/api/{version}/products.json"
-                                    headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
                                     try:
-                                        r = requests.post(url, json=product_payload, headers=headers)
-                                        if r.status_code == 201:
-                                            new_prod = r.json().get('product', {})
-                                            prod_id = new_prod.get('id')
-                                            shopify_update_log(f"   ✅ Product created: {full_sku} (ID: {prod_id})")
-                                            variants = new_prod.get('variants', [])
-                                            if prod_id and variants:
-                                                variant_id = variants[0].get('id')
-                                                variant_title = variants[0].get('title', '')
-                                                shopify_update_log(f"   📦 Variant: {variant_title} (ID: {variant_id})")
+                                        if product_key in created_shopify_products:
+                                            # PolyKeg second coupler: add variant to existing product
+                                            existing_id = created_shopify_products[product_key]
+                                            shopify_update_log(f"   🔀 PolyKeg: adding variant to product {existing_id}")
+                                            r = requests.post(
+                                                f"https://{shop_url}/admin/api/{version}/products/{existing_id}/variants.json",
+                                                json={"variant": variant_payload},
+                                                headers=s_headers
+                                            )
+                                            if r.status_code == 201:
+                                                new_var = r.json().get('variant', {})
+                                                variant_id = new_var.get('id')
+                                                variant_title = new_var.get('title', '')
+                                                shopify_update_log(f"   ✅ Variant added: {variant_title} (ID: {variant_id})")
                                                 if variant_id:
-                                                    label = f"{fam_name} — {variant_title} ({loc_prefix})"
-                                                    shopify_links.append({
-                                                        "label": label,
-                                                        "url": f"https://{shop_url}/admin/products/{prod_id}/variants/{variant_id}",
-                                                    })
-                                            if prod_id and pub_ids:
-                                                pub_id = pub_ids['london'] if is_london else pub_ids['gloucester']
-                                                if pub_id:
-                                                    pub_ok = publish_product_to_app(prod_id, pub_id)
-                                                    shopify_update_log(f"   {'✅' if pub_ok else '❌'} Published to {'London' if is_london else 'Gloucester'} catalogue")
-                                                else:
-                                                    shopify_update_log(f"   ⚠️ No publication ID found for {'London' if is_london else 'Gloucester'}")
-                                            if loc_ids and variants:
-                                                inv_item_id = variants[0].get('inventory_item_id')
-                                                target_loc = loc_ids['london'] if is_london else loc_ids['gloucester']
-                                                loc_ok = set_variant_location(inv_item_id, target_loc, loc_ids['all_ids'])
-                                                shopify_update_log(f"   {'✅' if loc_ok else '❌'} Inventory location set to {'London' if is_london else 'Gloucester'}")
+                                                    shopify_links.append({"label": f"{fam_name} — {variant_title} ({loc_prefix})", "url": f"https://{shop_url}/admin/products/{existing_id}/variants/{variant_id}"})
+                                                if loc_ids:
+                                                    inv_item_id = new_var.get('inventory_item_id')
+                                                    target_loc = loc_ids['london'] if is_london else loc_ids['gloucester']
+                                                    loc_ok = set_variant_location(inv_item_id, target_loc, loc_ids['all_ids'])
+                                                    shopify_update_log(f"   {'✅' if loc_ok else '❌'} Inventory location set to {'London' if is_london else 'Gloucester'}")
+                                            else:
+                                                shopify_update_log(f"   ❌ Add variant failed [{r.status_code}]: {r.text[:200]}")
                                         else:
-                                            shopify_update_log(f"   ❌ Create failed [{r.status_code}]: {r.text[:200]}")
+                                            # Normal path: create new product
+                                            product_payload = create_shopify_product_payload(row, loc_prefix, [variant_payload])
+                                            r = requests.post(f"https://{shop_url}/admin/api/{version}/products.json", json=product_payload, headers=s_headers)
+                                            if r.status_code == 201:
+                                                new_prod = r.json().get('product', {})
+                                                prod_id = new_prod.get('id')
+                                                shopify_update_log(f"   ✅ Product created: {full_sku} (ID: {prod_id})")
+                                                created_shopify_products[product_key] = prod_id
+                                                variants = new_prod.get('variants', [])
+                                                if prod_id and variants:
+                                                    variant_id = variants[0].get('id')
+                                                    variant_title = variants[0].get('title', '')
+                                                    shopify_update_log(f"   📦 Variant: {variant_title} (ID: {variant_id})")
+                                                    if variant_id:
+                                                        shopify_links.append({"label": f"{fam_name} — {variant_title} ({loc_prefix})", "url": f"https://{shop_url}/admin/products/{prod_id}/variants/{variant_id}"})
+                                                if prod_id and pub_ids:
+                                                    pub_id = pub_ids['london'] if is_london else pub_ids['gloucester']
+                                                    if pub_id:
+                                                        pub_ok = publish_product_to_app(prod_id, pub_id)
+                                                        shopify_update_log(f"   {'✅' if pub_ok else '❌'} Published to {'London' if is_london else 'Gloucester'} catalogue")
+                                                    else:
+                                                        shopify_update_log(f"   ⚠️ No publication ID found for {'London' if is_london else 'Gloucester'}")
+                                                if loc_ids and variants:
+                                                    inv_item_id = variants[0].get('inventory_item_id')
+                                                    target_loc = loc_ids['london'] if is_london else loc_ids['gloucester']
+                                                    loc_ok = set_variant_location(inv_item_id, target_loc, loc_ids['all_ids'])
+                                                    shopify_update_log(f"   {'✅' if loc_ok else '❌'} Inventory location set to {'London' if is_london else 'Gloucester'}")
+                                            else:
+                                                shopify_update_log(f"   ❌ Create failed [{r.status_code}]: {r.text[:200]}")
                                     except Exception as e:
                                         shopify_update_log(f"   💥 Exception: {str(e)}")
                             st.session_state.shopify_log_text = "\n".join(shopify_log)
@@ -2447,7 +2488,33 @@ if st.session_state.header_data is not None:
             st.warning("No matched lines ready for PO. Run inventory check in Tab 1 first.")
         else:
             st.markdown("**PO Lines**")
-            st.dataframe(po_lines, use_container_width=True)
+            display_po = po_lines.drop(columns=[c for c in ['Format', 'London_SKU', 'Gloucester_SKU'] if c in po_lines.columns], errors='ignore')
+            st.dataframe(display_po, use_container_width=True)
+
+            # PolyKeg coupler gate
+            polykeg_lines = po_lines[po_lines['Format'].str.lower() == 'polykeg'] if 'Format' in po_lines.columns else pd.DataFrame()
+            polykeg_ready = True
+            if not polykeg_lines.empty:
+                st.warning("⚠️ This PO contains PolyKeg items. Select the coupler type for each before creating the PO.")
+                for row_idx, pk_row in polykeg_lines.iterrows():
+                    sel = st.selectbox(
+                        f"Coupler type — {pk_row['Product']} ({pk_row.get('Variant_Match', '')})",
+                        ["— select —", "Sankey Coupler", "KeyKeg Coupler"],
+                        key=f"pk_sel_{row_idx}",
+                        index=["— select —", "Sankey Coupler", "KeyKeg Coupler"].index(
+                            st.session_state.polykeg_selections.get(row_idx, "— select —")
+                        )
+                    )
+                    if sel != "— select —":
+                        st.session_state.polykeg_selections[row_idx] = sel
+                    elif row_idx in st.session_state.polykeg_selections:
+                        del st.session_state.polykeg_selections[row_idx]
+                polykeg_ready = all(
+                    st.session_state.polykeg_selections.get(i, "— select —") != "— select —"
+                    for i in polykeg_lines.index
+                )
+                if not polykeg_ready:
+                    st.error("Please select a coupler type for every PolyKeg line before creating the PO.")
 
             all_suppliers = st.session_state.cin7_all_suppliers
             supplier_names = [s['Name'] for s in all_suppliers]
@@ -2460,13 +2527,24 @@ if st.session_state.header_data is not None:
                     st.session_state.header_data.at[0, 'Cin7_Supplier_ID'] = supplier_obj['ID']
                     st.session_state.header_data.at[0, 'Cin7_Supplier_Name'] = supplier_obj['Name']
 
-            if st.button("📤 Create Purchase Order in Cin7", type="primary"):
+            if st.button("📤 Create Purchase Order in Cin7", type="primary", disabled=not polykeg_ready):
                 if not selected_supplier:
                     st.error("Please select a supplier.")
                 else:
+                    # Apply coupler selections: swap Cin7 IDs to the chosen connector's SKU
+                    final_po_lines = po_lines.copy()
+                    for row_idx, connector in st.session_state.polykeg_selections.items():
+                        if row_idx not in final_po_lines.index: continue
+                        new_end = "KKT" if connector == "KeyKeg Coupler" else "ST"
+                        l_sku = final_po_lines.at[row_idx, 'London_SKU']
+                        g_sku = final_po_lines.at[row_idx, 'Gloucester_SKU']
+                        new_l = swap_polykeg_sku_end(l_sku, new_end)
+                        new_g = swap_polykeg_sku_end(g_sku, new_end)
+                        final_po_lines.at[row_idx, 'Cin7_London_ID'] = get_cin7_product_id(new_l)
+                        final_po_lines.at[row_idx, 'Cin7_Glou_ID'] = get_cin7_product_id(new_g)
                     with st.spinner("Creating PO..."):
                         success, message, logs, task_id = create_cin7_purchase_order(
-                            st.session_state.header_data, po_lines, location_choice
+                            st.session_state.header_data, final_po_lines, location_choice
                         )
                         if success:
                             st.session_state.po_success = True
