@@ -588,7 +588,8 @@ def update_shopify_product_details(sku, new_product_title, new_variant_title, ol
             errors.append(f"ABV metafield: {e}")
 
     if errors: return False, " | ".join(errors)
-    return True, "OK"
+    title_msg = f"title: '{current_title}' → '{updated_title}'" if updated_title != current_title else f"no title change (current: '{current_title}')"
+    return True, title_msg
 
 def update_cin7_price(product_id, new_price):
     headers = get_cin7_headers()
