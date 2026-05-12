@@ -461,17 +461,18 @@ def update_cin7_product_details(product_id, cin7_full_name, old_product, new_pro
             payload.pop(ro, None)
     except Exception as e:
         return False, f"GET error: {e}"
-    # Apply name changes via string replacement on the live name
+    # Apply name changes via segment-safe replacement (includes " / " delimiters
+    # to avoid matching substrings, e.g. "Foo" inside "Foo Bar").
     current_name = str(payload.get("Name", "")) or cin7_full_name
     updated_name = current_name
     if new_product and old_product and old_product != new_product:
-        updated_name = updated_name.replace(old_product, new_product, 1)
+        updated_name = updated_name.replace(f" / {old_product} / ", f" / {new_product} / ", 1)
     if new_variant and old_variant and old_variant != new_variant:
-        updated_name = updated_name.replace(old_variant, new_variant, 1)
+        updated_name = updated_name.replace(f" / {old_variant}", f" / {new_variant}", 1)
     if new_abv and old_abv and str(old_abv).strip() != str(new_abv).strip():
         old_abv_str = str(old_abv).replace("%", "").strip() + "%"
         new_abv_str = str(new_abv).replace("%", "").strip() + "%"
-        updated_name = updated_name.replace(old_abv_str, new_abv_str, 1)
+        updated_name = updated_name.replace(f" / {old_abv_str} / ", f" / {new_abv_str} / ", 1)
     if updated_name:
         payload["Name"] = updated_name
     if new_abv is not None and str(new_abv).strip() and str(new_abv).strip().lower() != 'nan':
@@ -484,7 +485,11 @@ def update_cin7_product_details(product_id, cin7_full_name, old_product, new_pro
             body = r.json() if r.text.strip() else {}
             errs = body.get("Errors", []) if isinstance(body, dict) else []
             if errs: return False, f"Cin7 errors: {errs}"
-            return True, "OK"
+            changes_made = []
+            if updated_name != current_name: changes_made.append(f"name: '{current_name}' → '{updated_name}'")
+            if new_abv is not None and str(new_abv).strip() and str(new_abv).strip().lower() != 'nan': changes_made.append(f"ABV attr: {new_abv}")
+            if new_description is not None and str(new_description).strip(): changes_made.append("description updated")
+            return True, "  |  ".join(changes_made) if changes_made else "no changes sent"
         else: return False, r.text[:200]
     except Exception as e:
         return False, str(e)
