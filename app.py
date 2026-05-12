@@ -2773,13 +2773,22 @@ if st.session_state.header_data is not None:
                         new_abv     = row.get('ABV', '')
                         cin7_name   = row.get('Cin7_Name', '')
                         prod_id     = row.get('Cin7_ID')
+                        if prod_id and not cin7_name:
+                            _, _, cin7_name, _, _ = fetch_cin7_product_details_by_sku(sku)
+                        # Build readable header showing what's changing
+                        label = cin7_name if cin7_name else sku
+                        changes = []
+                        if old_product != new_product: changes.append(f"Product: {old_product} → {new_product}")
+                        if str(old_abv).strip() != str(new_abv).strip(): changes.append(f"ABV: {old_abv} → {new_abv}")
+                        if old_variant != new_variant: changes.append(f"Variant: {old_variant} → {new_variant}")
+                        change_str = "  |  ".join(changes) if changes else "no field changes"
+                        detail_log.append(f"\n── {label}")
+                        detail_log.append(f"   Changes: {change_str}")
                         if prod_id:
-                            if not cin7_name:
-                                _, _, cin7_name, _, _ = fetch_cin7_product_details_by_sku(sku)
                             ok, msg = update_cin7_product_details(prod_id, cin7_name, old_product, new_product, old_variant, new_variant, old_abv, new_abv)
-                            detail_log.append(f"{'✅' if ok else '❌'} Cin7 {sku}: {msg}")
+                            detail_log.append(f"  {'✅' if ok else '❌'} Cin7:    {msg}")
                         ok, msg = update_shopify_product_details(sku, new_product, new_variant, old_abv, new_abv, old_product=old_product)
-                        detail_log.append(f"{'✅' if ok else '❌'} Shopify {sku}: {msg}")
+                        detail_log.append(f"  {'✅' if ok else '❌'} Shopify: {msg}")
                     st.code("\n".join(detail_log), language="text")
                     st.success("Product detail update complete.")
 
