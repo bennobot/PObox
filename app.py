@@ -2176,7 +2176,9 @@ if st.session_state.header_data is not None:
                         st.session_state.matrix_data = create_product_matrix(updated_lines)
                         st.session_state.line_items_key += 1
                         st.session_state.matrix_key += 1
-                        st.session_state.price_check_data = build_price_check_from_matched_lines(updated_lines)
+                        _pc = build_price_check_from_matched_lines(updated_lines)
+                        st.session_state.price_check_data = _pc
+                        st.session_state.price_check_original = _pc.copy()
                         st.success("Check Complete!")
                         st.rerun()
         with col2:
@@ -2191,7 +2193,9 @@ if st.session_state.header_data is not None:
                         st.session_state.matrix_data = create_product_matrix(updated_lines)
                         st.session_state.line_items_key += 1
                         st.session_state.matrix_key += 1
-                        st.session_state.price_check_data = build_price_check_from_matched_lines(updated_lines)
+                        _pc = build_price_check_from_matched_lines(updated_lines)
+                        st.session_state.price_check_data = _pc
+                        st.session_state.price_check_original = _pc.copy()
                         st.success("Recheck Complete!")
                         st.rerun()
         with col3:
@@ -2687,7 +2691,9 @@ if st.session_state.header_data is not None:
         if st.button("🔄 Rerun Price Check", help="Re-fetch current Cin7 prices and recalculate recommendations"):
             updated_lines = st.session_state.get('line_items', None)
             if updated_lines is not None and not updated_lines.empty:
-                st.session_state.price_check_data = build_price_check_from_matched_lines(updated_lines)
+                _pc = build_price_check_from_matched_lines(updated_lines)
+                st.session_state.price_check_data = _pc
+                st.session_state.price_check_original = _pc.copy()
                 st.rerun()
             else:
                 st.warning("No matched lines found — run Check Inventory in Tab 1 first.")
@@ -2708,6 +2714,8 @@ if st.session_state.header_data is not None:
                 cols = ['Update'] + [c for c in pc_df.columns if c != 'Update']
                 pc_df = pc_df[cols]
                 st.session_state.price_check_data = pc_df
+                if 'price_check_original' not in st.session_state:
+                    st.session_state.price_check_original = pc_df.copy()
 
             col_cfg = {
                 "Update":               st.column_config.CheckboxColumn("Update?", width="small"),
@@ -2776,15 +2784,19 @@ if st.session_state.header_data is not None:
                     prog2 = st.progress(0)
                     saved_pc = st.session_state.price_check_data
                     rows_to_update = saved_pc[saved_pc['Update'] == True]
-                    orig = saved_pc
+                    orig_pc = st.session_state.get('price_check_original', saved_pc)
                     for i, (idx, row) in enumerate(rows_to_update.iterrows()):
                         prog2.progress((i + 1) / max(len(rows_to_update), 1))
                         sku = row['SKU']
-                        orig_row = orig.loc[idx] if idx in orig.index else None
-                        old_product     = orig_row['Product'] if orig_row is not None else row['Product']
-                        old_variant     = orig_row['Variant'] if orig_row is not None else row['Variant']
-                        old_abv         = orig_row.get('ABV', '') if orig_row is not None else row.get('ABV', '')
-                        old_description = orig_row.get('Description', '') if orig_row is not None else row.get('Description', '')
+                        orig_row = orig_pc.loc[idx] if idx in orig_pc.index else None
+                        # Derive old values from original snapshot so edits are correctly detected.
+                        # Cin7_Name is the live Cin7 record and never overwritten by user edits.
+                        cin7_name_raw = str(orig_row.get('Cin7_Name', '') if orig_row is not None else row.get('Cin7_Name', ''))
+                        cin7_parts = [p.strip() for p in cin7_name_raw.split('/')]
+                        old_product     = cin7_parts[1] if len(cin7_parts) >= 2 else (orig_row['Product'] if orig_row is not None else row['Product'])
+                        old_variant     = cin7_parts[-1] if len(cin7_parts) >= 2 else (orig_row['Variant'] if orig_row is not None else row['Variant'])
+                        old_abv         = cin7_parts[2].replace('%', '').strip() if len(cin7_parts) >= 3 else str(orig_row.get('ABV', '') if orig_row is not None else row.get('ABV', ''))
+                        old_description = str(orig_row.get('Description', '') if orig_row is not None else row.get('Description', ''))
                         new_product     = row['Product']
                         new_variant     = row['Variant']
                         new_abv         = row.get('ABV', '')
