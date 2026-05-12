@@ -1414,22 +1414,34 @@ def run_reconciliation_check(lines_df, recheck_only=False):
             match_score_val = "Manual"
             logs.append(f"   📌 Manual override: `{london_sku}`")
             if "shopify" in st.secrets:
-                variant_gid, _ = fetch_shopify_price_by_sku(london_sku)
-                if variant_gid:
-                    try:
-                        creds = st.secrets["shopify"]
-                        gql_ep = f"https://{creds['shop_url']}/admin/api/{creds.get('api_version','2024-04')}/graphql.json"
-                        gql_h = {"X-Shopify-Access-Token": creds["access_token"], "Content-Type": "application/json"}
-                        q = """query($id: ID!) { productVariant(id: $id) { title product { title featuredImage { url } } } }"""
-                        r = requests.post(gql_ep, json={"query": q, "variables": {"id": variant_gid}}, headers=gql_h)
-                        vdata = r.json().get("data", {}).get("productVariant", {})
-                        full_title = vdata.get("product", {}).get("title", "")
+                try:
+                    creds = st.secrets["shopify"]
+                    gql_ep = f"https://{creds['shop_url']}/admin/api/{creds.get('api_version','2024-04')}/graphql.json"
+                    gql_h = {"X-Shopify-Access-Token": creds["access_token"], "Content-Type": "application/json"}
+                    # Single query: search by SKU and return variant title + product info in one call
+                    q = """
+                    query($q: String!) {
+                      productVariants(first: 1, query: $q) {
+                        edges { node {
+                          title
+                          product { title featuredImage { url } }
+                        }}
+                      }
+                    }"""
+                    r = requests.post(gql_ep, json={"query": q, "variables": {"q": f"sku:{london_sku}"}}, headers=gql_h)
+                    edges = r.json().get("data", {}).get("productVariants", {}).get("edges", [])
+                    if edges:
+                        node = edges[0]["node"]
+                        full_title = node.get("product", {}).get("title", "")
                         matched_prod_name = full_title[2:] if full_title[:2] in ("L-", "G-") else full_title
-                        matched_var_name = vdata.get("title", "")
-                        img_node = vdata.get("product", {}).get("featuredImage")
+                        matched_var_name = node.get("title", "")
+                        img_node = node.get("product", {}).get("featuredImage")
                         if img_node: img_url = img_node.get("url", "")
-                    except Exception as ex:
-                        logs.append(f"   ⚠️ Could not fetch Shopify details: {ex}")
+                        logs.append(f"   ✅ Shopify details: `{matched_prod_name}` / `{matched_var_name}`")
+                    else:
+                        logs.append(f"   ⚠️ No Shopify variant found for SKU `{london_sku}` — check the SKU is correct")
+                except Exception as ex:
+                    logs.append(f"   ⚠️ Could not fetch Shopify details: {ex}")
         elif supplier in shopify_cache and shopify_cache[supplier]:
             candidates = shopify_cache[supplier]
             scored_candidates = []
@@ -1534,8 +1546,9 @@ def run_reconciliation_check(lines_df, recheck_only=False):
         row['Cin7_London_ID'] = cin7_l_id
         row['Gloucester_SKU'] = glou_sku
         row['Cin7_Glou_ID'] = cin7_g_id
-        # Clear recheck flag when matched; keep it set if still unmatched so it stays ticked
-        row['Recheck'] = status not in ("✅ Match", "✅ Match (Manual)")
+        # Clear recheck flag only when fully resolved (matched + both Cin7 IDs populated)
+        fully_resolved = status in ("✅ Match", "✅ Match (Manual)") and bool(cin7_l_id) and bool(cin7_g_id)
+        row['Recheck'] = not fully_resolved
         results.append(row)
 
     return pd.DataFrame(results), logs
