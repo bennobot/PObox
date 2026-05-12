@@ -2696,7 +2696,7 @@ if st.session_state.header_data is not None:
         st.subheader("6. Price Check")
         st.caption("Auto-populated from matched lines after inventory check. Review any flagged items before finalising the PO.")
 
-        if st.button("🔄 Rerun Price Check", help="Re-fetch current Cin7 prices and recalculate recommendations"):
+        if st.button("🔄 Refresh Data", help="Re-fetch current Cin7 prices and recalculate recommendations"):
             updated_lines = st.session_state.get('line_items', None)
             if updated_lines is not None and not updated_lines.empty:
                 _pc = build_price_check_from_matched_lines(updated_lines)
@@ -2755,6 +2755,10 @@ if st.session_state.header_data is not None:
                 st.success("✅ Changes saved.")
 
             st.divider()
+            if 'pc_update_log' in st.session_state and st.session_state['pc_update_log']:
+                st.code("\n".join(st.session_state['pc_update_log']), language="text")
+            if 'pc_detail_log' in st.session_state and st.session_state['pc_detail_log']:
+                st.code("\n".join(st.session_state['pc_detail_log']), language="text")
             btn_col1, btn_col2 = st.columns(2)
 
             with btn_col1:
@@ -2782,8 +2786,8 @@ if st.session_state.header_data is not None:
                         if variant_id:
                             ok, msg = update_shopify_price(variant_id, new_price)
                             update_log.append(f"  {'✅' if ok else '❌'} Shopify: {msg}")
-                    st.code("\n".join(update_log), language="text")
-                    st.success("Price update complete.")
+                    st.session_state['pc_update_log'] = update_log
+                    st.rerun()
 
             with btn_col2:
                 if st.button("✏️ Update Product Details in Cin7 & Shopify"):
@@ -2855,8 +2859,7 @@ if st.session_state.header_data is not None:
                                     orig.at[idx, 'ABV'] = str(new_abv)
                                     if send_desc:
                                         orig.at[idx, '_orig_description'] = new_description
-                    st.code("\n".join(detail_log), language="text")
-                    st.success("Product detail update complete.")
+                    st.session_state['pc_detail_log'] = detail_log
                     st.rerun()
 
             st.download_button("📥 Download Price Check CSV", st.session_state.price_check_data.to_csv(index=False), "price_check.csv")
