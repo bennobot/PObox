@@ -446,7 +446,21 @@ def fetch_cin7_product_details_by_sku(sku):
 def update_cin7_product_details(product_id, cin7_full_name, old_product, new_product, old_variant, new_variant, old_abv, new_abv):
     headers = get_cin7_headers()
     if not headers: return False, "No headers found."
-    updated_name = cin7_full_name
+    base_url = get_cin7_base_url()
+    # Fetch full product so the PUT includes all existing fields (Cin7 replaces on PUT)
+    try:
+        r_get = make_cin7_request("GET", f"{base_url}/product?ID={product_id}", headers=headers)
+        if r_get.status_code != 200:
+            return False, f"GET failed: {r_get.text[:100]}"
+        prods = r_get.json().get("Products", [])
+        if not prods:
+            return False, "Product not found"
+        payload = prods[0].copy()
+    except Exception as e:
+        return False, f"GET error: {e}"
+    # Apply name changes via string replacement on the live name
+    current_name = str(payload.get("Name", "")) or cin7_full_name
+    updated_name = current_name
     if new_product and old_product and old_product != new_product:
         updated_name = updated_name.replace(old_product, new_product, 1)
     if new_variant and old_variant and old_variant != new_variant:
@@ -455,15 +469,18 @@ def update_cin7_product_details(product_id, cin7_full_name, old_product, new_pro
         old_abv_str = str(old_abv).replace("%", "").strip() + "%"
         new_abv_str = str(new_abv).replace("%", "").strip() + "%"
         updated_name = updated_name.replace(old_abv_str, new_abv_str, 1)
-    payload = {"ID": product_id}
     if updated_name:
         payload["Name"] = updated_name
-    if new_abv is not None and str(new_abv).strip():
+    if new_abv is not None and str(new_abv).strip() and str(new_abv).strip().lower() != 'nan':
         payload["AdditionalAttribute10"] = str(new_abv).replace("%", "").strip()
     try:
-        r = make_cin7_request("PUT", f"{get_cin7_base_url()}/product", headers=headers, json=payload)
-        if r.status_code == 200: return True, "OK"
-        else: return False, r.text
+        r = make_cin7_request("PUT", f"{base_url}/product", headers=headers, json=payload)
+        if r.status_code == 200:
+            body = r.json() if r.text.strip() else {}
+            errs = body.get("Errors", []) if isinstance(body, dict) else []
+            if errs: return False, f"Cin7 errors: {errs}"
+            return True, "OK"
+        else: return False, r.text[:200]
     except Exception as e:
         return False, str(e)
 
@@ -524,30 +541,6 @@ def update_shopify_product_details(sku, new_product_title, new_variant_title, ol
             if r.status_code != 200: errors.append(f"Variant: {r.text[:100]}")
         except Exception as e:
             errors.append(f"Variant: {e}")
-
-    if new_abv is not None and str(new_abv).strip():
-        abv_clean = str(new_abv).replace("%", "").strip()
-        mutation = """
-        mutation MetafieldsSet($metafields: [MetafieldsSetInput!]!) {
-          metafieldsSet(metafields: $metafields) {
-            metafields { key namespace value }
-            userErrors { field message code }
-          }
-        }
-        """
-        variables = {"metafields": [{
-            "ownerId": product_gid,
-            "namespace": "custom",
-            "key": "abv",
-            "value": abv_clean,
-            "type": "number_decimal"
-        }]}
-        try:
-            r = requests.post(gql_endpoint, json={"query": mutation, "variables": variables}, headers=gql_headers)
-            gql_errors = r.json().get("data", {}).get("metafieldsSet", {}).get("userErrors", [])
-            if gql_errors: errors.append(f"ABV: {gql_errors}")
-        except Exception as e:
-            errors.append(f"ABV: {e}")
 
     if errors: return False, " | ".join(errors)
     return True, "OK"
