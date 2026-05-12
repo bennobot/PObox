@@ -1743,7 +1743,7 @@ def build_price_check_from_matched_lines(line_items_df):
             recommended_price = calculate_sell_price(invoice_cost, attr_5, str(row.get('Format', '')))
             price_diff = round(recommended_price - current_cin7_price, 2)
             pct_change = round((price_diff / current_cin7_price) * 100, 1) if current_cin7_price else 0
-            flag = "⚠️ Review" if abs(pct_change) > 5 else "✅ OK"
+            flag = "⚠️ Review" if abs(pct_change) > 0 else "✅ OK"
             rows.append({
                 "SKU": sku,
                 "Product": str(row.get('Product_Name', '')),
