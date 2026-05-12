@@ -2816,6 +2816,7 @@ if st.session_state.header_data is not None:
                         if desc_changed: changes.append(f"Description updated")
                         change_str = "  |  ".join(changes) if changes else "no field changes"
                         detail_log.append(f"\n── {label}")
+                        detail_log.append(f"   [debug] old='{old_product}' new='{new_product}' abv_old='{old_abv}' abv_new='{new_abv}'")
                         detail_log.append(f"   Changes: {change_str}")
                         send_desc = new_description if desc_changed else None
                         if prod_id:
