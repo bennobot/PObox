@@ -2789,23 +2789,23 @@ if st.session_state.header_data is not None:
                     for i, (idx, row) in enumerate(rows_to_update.iterrows()):
                         prog2.progress((i + 1) / max(len(rows_to_update), 1))
                         sku = row['SKU']
-                        # Cin7_Name is hidden/uneditable — always holds the live Cin7 record.
-                        # Use it as the source of truth for old values.
-                        cin7_name_raw = str(row.get('Cin7_Name', ''))
-                        cin7_parts = [p.strip() for p in cin7_name_raw.split('/')]
-                        old_product     = cin7_parts[1] if len(cin7_parts) >= 2 else row['Product']
-                        old_variant     = cin7_parts[-1] if len(cin7_parts) >= 2 else row['Variant']
-                        old_abv         = cin7_parts[2].replace('%', '').strip() if len(cin7_parts) >= 3 else str(row.get('ABV', ''))
-                        # _orig_description is a hidden column set at build time, never overwritten by edits
-                        old_description = str(row.get('_orig_description', row.get('Description', '')))
                         new_product     = row['Product']
                         new_variant     = row['Variant']
                         new_abv         = row.get('ABV', '')
                         new_description = row.get('Description', '')
-                        cin7_name       = row.get('Cin7_Name', '')
                         prod_id         = row.get('Cin7_ID')
+                        # Resolve cin7_name first — fetch from API if the column was dropped or is empty
+                        cin7_name = str(row.get('Cin7_Name', '') or '')
+                        if cin7_name.lower() == 'nan': cin7_name = ''
                         if prod_id and not cin7_name:
                             _, _, cin7_name, _, _, _ = fetch_cin7_product_details_by_sku(sku)
+                        # Derive old values from cin7_name (the live Cin7 record, never edited by user)
+                        cin7_parts = [p.strip() for p in cin7_name.split('/')]
+                        old_product     = cin7_parts[1] if len(cin7_parts) >= 2 else new_product
+                        old_variant     = cin7_parts[-1] if len(cin7_parts) >= 2 else new_variant
+                        old_abv         = cin7_parts[2].replace('%', '').strip() if len(cin7_parts) >= 3 else str(new_abv)
+                        # _orig_description stored at build time; fall back to current value if absent
+                        old_description = str(row.get('_orig_description', row.get('Description', '')) or '')
                         desc_changed = str(old_description).strip() != str(new_description).strip()
                         # Build readable header showing what's changing
                         label = cin7_name if cin7_name else sku
