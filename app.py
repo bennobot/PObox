@@ -2735,19 +2735,17 @@ if st.session_state.header_data is not None:
                 "Description":          st.column_config.TextColumn("Description", width="large"),
             }
 
-            with st.form(key="price_check_form"):
-                edited_pc = st.data_editor(
-                    pc_df,
-                    column_config=col_cfg,
-                    column_order=["Update", "SKU", "Product", "Variant", "ABV", "Description", "Invoice_Cost", "Current_Cin7_Price", "Recommended_Price", "Change_%", "Flag"],
-                    num_rows="fixed",
-                    use_container_width=True,
-                    key="price_check_editor"
-                )
-                if st.form_submit_button("💾 Save Changes", type="primary"):
-                    st.session_state.price_check_data = edited_pc
-                    st.success("✅ Changes saved.")
-                    st.rerun()
+            edited_pc = st.data_editor(
+                pc_df,
+                column_config=col_cfg,
+                column_order=["Update", "SKU", "Product", "Variant", "ABV", "Description", "Invoice_Cost", "Current_Cin7_Price", "Recommended_Price", "Change_%", "Flag"],
+                num_rows="fixed",
+                use_container_width=True,
+                key="price_check_editor"
+            )
+            if st.button("💾 Save Changes", type="primary"):
+                st.session_state.price_check_data = edited_pc
+                st.success("✅ Changes saved.")
 
             st.divider()
             btn_col1, btn_col2 = st.columns(2)
@@ -2756,7 +2754,7 @@ if st.session_state.header_data is not None:
                 if st.button("💰 Update Prices in Cin7 & Shopify"):
                     update_log = []
                     prog = st.progress(0)
-                    rows_to_update = st.session_state.price_check_data[st.session_state.price_check_data['Update'] == True]
+                    rows_to_update = edited_pc[edited_pc['Update'] == True]
                     for i, (_, row) in enumerate(rows_to_update.iterrows()):
                         prog.progress((i + 1) / max(len(rows_to_update), 1))
                         new_price = row['Recommended_Price']
@@ -2784,8 +2782,7 @@ if st.session_state.header_data is not None:
                 if st.button("✏️ Update Product Details in Cin7 & Shopify"):
                     detail_log = []
                     prog2 = st.progress(0)
-                    saved_pc = st.session_state.price_check_data
-                    rows_to_update = saved_pc[saved_pc['Update'] == True]
+                    rows_to_update = edited_pc[edited_pc['Update'] == True]
                     for i, (idx, row) in enumerate(rows_to_update.iterrows()):
                         prog2.progress((i + 1) / max(len(rows_to_update), 1))
                         sku = row['SKU']
