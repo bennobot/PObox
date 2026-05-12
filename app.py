@@ -528,19 +528,23 @@ def update_shopify_product_details(sku, new_product_title, new_variant_title, ol
     if new_abv is not None and str(new_abv).strip():
         abv_clean = str(new_abv).replace("%", "").strip()
         mutation = """
-        mutation UpdateABV($input: ProductInput!) {
-          productUpdate(input: $input) {
-            product { id }
-            userErrors { field message }
+        mutation MetafieldsSet($metafields: [MetafieldsSetInput!]!) {
+          metafieldsSet(metafields: $metafields) {
+            metafields { key namespace value }
+            userErrors { field message code }
           }
         }
         """
-        metafield_input = {"id": product_gid, "metafields": [
-            {"namespace": "custom", "key": "ABV", "value": abv_clean, "type": "number_decimal"}
-        ]}
+        variables = {"metafields": [{
+            "ownerId": product_gid,
+            "namespace": "custom",
+            "key": "abv",
+            "value": abv_clean,
+            "type": "number_decimal"
+        }]}
         try:
-            r = requests.post(gql_endpoint, json={"query": mutation, "variables": {"input": metafield_input}}, headers=gql_headers)
-            gql_errors = r.json().get("data", {}).get("productUpdate", {}).get("userErrors", [])
+            r = requests.post(gql_endpoint, json={"query": mutation, "variables": variables}, headers=gql_headers)
+            gql_errors = r.json().get("data", {}).get("metafieldsSet", {}).get("userErrors", [])
             if gql_errors: errors.append(f"ABV: {gql_errors}")
         except Exception as e:
             errors.append(f"ABV: {e}")
