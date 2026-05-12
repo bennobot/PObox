@@ -1810,7 +1810,7 @@ def build_price_check_from_matched_lines(line_items_df):
             flag = "⚠️ Review" if abs(pct_change) > 0 else "✅ OK"
             rows.append({
                 "SKU": sku,
-                "Product": str(row.get('Product_Name', '')),
+                "Product": ([p.strip() for p in cin7_full_name.split("/")][1] if cin7_full_name and len(cin7_full_name.split("/")) >= 2 else str(row.get('Product_Name', ''))),
                 "Variant": str(row.get('Matched_Variant', '')),
                 "ABV": cin7_abv,
                 "Invoice_Cost": invoice_cost,
