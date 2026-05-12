@@ -424,7 +424,7 @@ def make_cin7_request(method, url, headers=None, status_placeholder=None, **kwar
 # --- PRICE CHECKING & UPDATING HELPERS ---
 def fetch_cin7_product_details_by_sku(sku):
     headers = get_cin7_headers()
-    if not headers: return None, 0.0, "", "Rotational Product", ""
+    if not headers: return None, 0.0, "", "Rotational Product", "", ""
     safe_sku = quote(sku)
     url = f"{get_cin7_base_url()}/product?Sku={safe_sku}"
     try:
@@ -439,11 +439,12 @@ def fetch_cin7_product_details_by_sku(sku):
                     str(p.get("Name", "")),
                     str(p.get("AdditionalAttribute5", "Rotational Product")),
                     str(p.get("AdditionalAttribute10", "")),
+                    str(p.get("Description", "")),
                 )
     except: pass
-    return None, 0.0, "", "Rotational Product", ""
+    return None, 0.0, "", "Rotational Product", "", ""
 
-def update_cin7_product_details(product_id, cin7_full_name, old_product, new_product, old_variant, new_variant, old_abv, new_abv):
+def update_cin7_product_details(product_id, cin7_full_name, old_product, new_product, old_variant, new_variant, old_abv, new_abv, new_description=None):
     headers = get_cin7_headers()
     if not headers: return False, "No headers found."
     base_url = get_cin7_base_url()
@@ -475,6 +476,8 @@ def update_cin7_product_details(product_id, cin7_full_name, old_product, new_pro
         payload["Name"] = updated_name
     if new_abv is not None and str(new_abv).strip() and str(new_abv).strip().lower() != 'nan':
         payload["AdditionalAttribute10"] = str(new_abv).replace("%", "").strip()
+    if new_description is not None and str(new_description).strip():
+        payload["Description"] = str(new_description).strip()
     try:
         r = make_cin7_request("PUT", f"{base_url}/product", headers=headers, json=payload)
         if r.status_code == 200:
@@ -486,7 +489,7 @@ def update_cin7_product_details(product_id, cin7_full_name, old_product, new_pro
     except Exception as e:
         return False, str(e)
 
-def update_shopify_product_details(sku, new_product_title, new_variant_title, old_abv, new_abv, old_product=None):
+def update_shopify_product_details(sku, new_product_title, new_variant_title, old_abv, new_abv, old_product=None, new_description=None):
     if "shopify" not in st.secrets: return False, "No secrets."
     creds = st.secrets["shopify"]
     shop_url = creds.get("shop_url")
@@ -522,16 +525,21 @@ def update_shopify_product_details(sku, new_product_title, new_variant_title, ol
         new_abv_str = str(new_abv).replace("%", "").strip() + "%"
         updated_title = updated_title.replace(old_abv_str, new_abv_str, 1)
 
+    product_updates = {"id": int(numeric_product_id)}
     if updated_title and updated_title != current_title:
+        product_updates["title"] = updated_title
+    if new_description is not None and str(new_description).strip():
+        product_updates["body_html"] = str(new_description).strip()
+    if len(product_updates) > 1:
         try:
             r = requests.put(
                 f"https://{shop_url}/admin/api/{version}/products/{numeric_product_id}.json",
-                json={"product": {"id": int(numeric_product_id), "title": updated_title}},
+                json={"product": product_updates},
                 headers=rest_headers
             )
-            if r.status_code != 200: errors.append(f"Title: {r.text[:100]}")
+            if r.status_code != 200: errors.append(f"Product: {r.text[:100]}")
         except Exception as e:
-            errors.append(f"Title: {e}")
+            errors.append(f"Product: {e}")
 
     if new_variant_title:
         try:
@@ -1795,7 +1803,7 @@ def build_price_check_from_matched_lines(line_items_df):
                 sku = london_sku if prefix == "L-" else "G-" + london_sku[2:]
             else:
                 sku = london_sku if prefix == "G-" else "L-" + london_sku[2:]
-            prod_id, current_cin7_price, cin7_full_name, attr_5, cin7_abv = fetch_cin7_product_details_by_sku(sku)
+            prod_id, current_cin7_price, cin7_full_name, attr_5, cin7_abv, cin7_desc = fetch_cin7_product_details_by_sku(sku)
             recommended_price = calculate_sell_price(invoice_cost, attr_5, str(row.get('Format', '')))
             price_diff = round(recommended_price - current_cin7_price, 2)
             pct_change = round((price_diff / current_cin7_price) * 100, 1) if current_cin7_price else 0
@@ -1813,6 +1821,7 @@ def build_price_check_from_matched_lines(line_items_df):
                 "Cin7_ID": prod_id or "",
                 "Cin7_Name": cin7_full_name,
                 "Attr5": attr_5,
+                "Description": cin7_desc,
             })
     return pd.DataFrame(rows)
 
@@ -2713,12 +2722,13 @@ if st.session_state.header_data is not None:
                 "Cin7_ID":              st.column_config.TextColumn("Cin7_ID", disabled=True),
                 "Cin7_Name":            None,
                 "Attr5":                st.column_config.TextColumn("Attr5", disabled=True),
+                "Description":          st.column_config.TextColumn("Description", width="large"),
             }
 
             edited_pc = st.data_editor(
                 pc_df,
                 column_config=col_cfg,
-                column_order=["Update", "SKU", "Product", "Variant", "ABV", "Invoice_Cost", "Current_Cin7_Price", "Recommended_Price", "Change_%", "Flag"],
+                column_order=["Update", "SKU", "Product", "Variant", "ABV", "Description", "Invoice_Cost", "Current_Cin7_Price", "Recommended_Price", "Change_%", "Flag"],
                 num_rows="fixed",
                 use_container_width=True,
                 key="price_check_editor"
@@ -2765,29 +2775,34 @@ if st.session_state.header_data is not None:
                         prog2.progress((i + 1) / max(len(rows_to_update), 1))
                         sku = row['SKU']
                         orig_row = orig.loc[idx] if idx in orig.index else None
-                        old_product = orig_row['Product'] if orig_row is not None else row['Product']
-                        old_variant = orig_row['Variant'] if orig_row is not None else row['Variant']
-                        old_abv     = orig_row.get('ABV', '') if orig_row is not None else row.get('ABV', '')
-                        new_product = row['Product']
-                        new_variant = row['Variant']
-                        new_abv     = row.get('ABV', '')
-                        cin7_name   = row.get('Cin7_Name', '')
-                        prod_id     = row.get('Cin7_ID')
+                        old_product     = orig_row['Product'] if orig_row is not None else row['Product']
+                        old_variant     = orig_row['Variant'] if orig_row is not None else row['Variant']
+                        old_abv         = orig_row.get('ABV', '') if orig_row is not None else row.get('ABV', '')
+                        old_description = orig_row.get('Description', '') if orig_row is not None else row.get('Description', '')
+                        new_product     = row['Product']
+                        new_variant     = row['Variant']
+                        new_abv         = row.get('ABV', '')
+                        new_description = row.get('Description', '')
+                        cin7_name       = row.get('Cin7_Name', '')
+                        prod_id         = row.get('Cin7_ID')
                         if prod_id and not cin7_name:
-                            _, _, cin7_name, _, _ = fetch_cin7_product_details_by_sku(sku)
+                            _, _, cin7_name, _, _, _ = fetch_cin7_product_details_by_sku(sku)
+                        desc_changed = str(old_description).strip() != str(new_description).strip()
                         # Build readable header showing what's changing
                         label = cin7_name if cin7_name else sku
                         changes = []
                         if old_product != new_product: changes.append(f"Product: {old_product} → {new_product}")
                         if str(old_abv).strip() != str(new_abv).strip(): changes.append(f"ABV: {old_abv} → {new_abv}")
                         if old_variant != new_variant: changes.append(f"Variant: {old_variant} → {new_variant}")
+                        if desc_changed: changes.append(f"Description updated")
                         change_str = "  |  ".join(changes) if changes else "no field changes"
                         detail_log.append(f"\n── {label}")
                         detail_log.append(f"   Changes: {change_str}")
+                        send_desc = new_description if desc_changed else None
                         if prod_id:
-                            ok, msg = update_cin7_product_details(prod_id, cin7_name, old_product, new_product, old_variant, new_variant, old_abv, new_abv)
+                            ok, msg = update_cin7_product_details(prod_id, cin7_name, old_product, new_product, old_variant, new_variant, old_abv, new_abv, new_description=send_desc)
                             detail_log.append(f"  {'✅' if ok else '❌'} Cin7:    {msg}")
-                        ok, msg = update_shopify_product_details(sku, new_product, new_variant, old_abv, new_abv, old_product=old_product)
+                        ok, msg = update_shopify_product_details(sku, new_product, new_variant, old_abv, new_abv, old_product=old_product, new_description=send_desc)
                         detail_log.append(f"  {'✅' if ok else '❌'} Shopify: {msg}")
                     st.code("\n".join(detail_log), language="text")
                     st.success("Product detail update complete.")
