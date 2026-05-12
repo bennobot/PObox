@@ -542,6 +542,41 @@ def update_shopify_product_details(sku, new_product_title, new_variant_title, ol
         except Exception as e:
             errors.append(f"Variant: {e}")
 
+    # Update ABV metafield only if it already exists on this product
+    if new_abv is not None and str(new_abv).strip() and str(new_abv).strip().lower() != 'nan' and product_gid:
+        abv_clean = str(new_abv).replace("%", "").strip()
+        check_query = """
+        query($id: ID!) {
+          product(id: $id) {
+            metafield(namespace: "custom", key: "abv") { id }
+          }
+        }
+        """
+        try:
+            r = requests.post(gql_endpoint, json={"query": check_query, "variables": {"id": product_gid}}, headers=gql_headers)
+            existing = r.json().get("data", {}).get("product", {}).get("metafield")
+            if existing:
+                mutation = """
+                mutation MetafieldsSet($metafields: [MetafieldsSetInput!]!) {
+                  metafieldsSet(metafields: $metafields) {
+                    metafields { key namespace value }
+                    userErrors { field message code }
+                  }
+                }
+                """
+                variables = {"metafields": [{
+                    "ownerId": product_gid,
+                    "namespace": "custom",
+                    "key": "abv",
+                    "value": abv_clean,
+                    "type": "number_decimal"
+                }]}
+                r2 = requests.post(gql_endpoint, json={"query": mutation, "variables": variables}, headers=gql_headers)
+                gql_errors = r2.json().get("data", {}).get("metafieldsSet", {}).get("userErrors", [])
+                if gql_errors: errors.append(f"ABV metafield: {gql_errors}")
+        except Exception as e:
+            errors.append(f"ABV metafield: {e}")
+
     if errors: return False, " | ".join(errors)
     return True, "OK"
 
