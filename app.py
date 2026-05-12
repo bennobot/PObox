@@ -1389,7 +1389,33 @@ def run_reconciliation_check(lines_df):
         debug_mode = "(Strict)" if is_strict else "(Fuzzy)"
         logs.append(f"Checking: **{inv_prod_name}** {debug_mode} | Target Pack: {target_pack} | ABV: {inv_abv or 'unknown'}")
 
-        if supplier in shopify_cache and shopify_cache[supplier]:
+        # Manual SKU override — bypasses fuzzy matching entirely
+        manual_sku = str(row.get('Manual_Shopify_SKU', '')).strip()
+        if manual_sku:
+            base_sku = manual_sku[2:] if manual_sku[:2] in ("L-", "G-") else manual_sku
+            london_sku = f"L-{base_sku}"
+            glou_sku = f"G-{base_sku}"
+            status = "✅ Match (Manual)"
+            match_score_val = "Manual"
+            logs.append(f"   📌 Manual override: `{london_sku}`")
+            if "shopify" in st.secrets:
+                variant_gid, _ = fetch_shopify_price_by_sku(london_sku)
+                if variant_gid:
+                    try:
+                        creds = st.secrets["shopify"]
+                        gql_ep = f"https://{creds['shop_url']}/admin/api/{creds.get('api_version','2024-04')}/graphql.json"
+                        gql_h = {"X-Shopify-Access-Token": creds["access_token"], "Content-Type": "application/json"}
+                        q = """query($id: ID!) { productVariant(id: $id) { title product { title featuredImage { url } } } }"""
+                        r = requests.post(gql_ep, json={"query": q, "variables": {"id": variant_gid}}, headers=gql_h)
+                        vdata = r.json().get("data", {}).get("productVariant", {})
+                        full_title = vdata.get("product", {}).get("title", "")
+                        matched_prod_name = full_title[2:] if full_title[:2] in ("L-", "G-") else full_title
+                        matched_var_name = vdata.get("title", "")
+                        img_node = vdata.get("product", {}).get("featuredImage")
+                        if img_node: img_url = img_node.get("url", "")
+                    except Exception as ex:
+                        logs.append(f"   ⚠️ Could not fetch Shopify details: {ex}")
+        elif supplier in shopify_cache and shopify_cache[supplier]:
             candidates = shopify_cache[supplier]
             scored_candidates = []
 
@@ -1974,9 +2000,10 @@ if st.button("🚀 Process Invoice", type="primary"):
                 df_lines['Shopify_Status'] = "Pending"
                 df_lines['Use_Split'] = False
                 df_lines['Strict_Search'] = False
+                df_lines['Manual_Shopify_SKU'] = ""
 
                 cols = ["Use_Split", "Strict_Search", "Supplier_Name", "Collaborator", "Product_Name", "ABV",
-                        "Format", "Pack_Size", "Volume", "Item_Price", "Line_Total", "Quantity"]
+                        "Format", "Pack_Size", "Volume", "Item_Price", "Line_Total", "Quantity", "Manual_Shopify_SKU"]
                 existing = [c for c in cols if c in df_lines.columns]
                 st.session_state.line_items = df_lines[existing]
 
@@ -2025,6 +2052,7 @@ if st.session_state.header_data is not None:
             'Matched_Product', 'Matched_Variant', 'Image',
             'Supplier_Name', 'Collaborator', 'Product_Name', 'ABV', 'Format',
             'Pack_Size', 'Volume', 'Quantity', 'Item_Price', 'Line_Total',
+            'Manual_Shopify_SKU',
             'Shopify_Variant_ID', 'London_SKU', 'Gloucester_SKU'
         ]
         final_cols = [c for c in ideal_order if c in display_df.columns]
@@ -2040,7 +2068,9 @@ if st.session_state.header_data is not None:
             "Matched_Variant": st.column_config.TextColumn("Variant Match", disabled=True),
             "Use_Split": st.column_config.CheckboxColumn("Order Split?", width="small", help="Tick to order half-case"),
             "Strict_Search": st.column_config.CheckboxColumn("Strict?", width="small", help="Tick to force exact name matching"),
-            "Line_Total": st.column_config.NumberColumn("Line Total", format="£%.2f")
+            "Line_Total": st.column_config.NumberColumn("Line Total", format="£%.2f"),
+            "Manual_Shopify_SKU": st.column_config.TextColumn("Manual SKU Override", width="medium",
+                help="Paste any L- or G- SKU from Shopify to force-match this line and skip fuzzy search")
         }
 
         with st.form(key=f"line_items_form_{st.session_state.line_items_key}"):
