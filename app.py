@@ -2823,13 +2823,41 @@ if st.session_state.header_data is not None:
                         detail_log.append(f"   [debug] old='{old_product}' new='{new_product}' abv_old='{old_abv}' abv_new='{new_abv}'")
                         detail_log.append(f"   Changes: {change_str}")
                         send_desc = new_description if desc_changed else None
+                        cin7_ok = False
                         if prod_id:
-                            ok, msg = update_cin7_product_details(prod_id, cin7_name, old_product, new_product, old_variant, new_variant, old_abv, new_abv, new_description=send_desc)
-                            detail_log.append(f"  {'✅' if ok else '❌'} Cin7:    {msg}")
+                            cin7_ok, msg = update_cin7_product_details(prod_id, cin7_name, old_product, new_product, old_variant, new_variant, old_abv, new_abv, new_description=send_desc)
+                            detail_log.append(f"  {'✅' if cin7_ok else '❌'} Cin7:    {msg}")
                         ok, msg = update_shopify_product_details(sku, new_product, new_variant, old_abv, new_abv, old_product=old_product, new_description=send_desc)
                         detail_log.append(f"  {'✅' if ok else '❌'} Shopify: {msg}")
+                        # Refresh Cin7_Name and related columns in session state so the next
+                        # edit in this session sees the new state as the "old" baseline.
+                        if cin7_ok:
+                            new_cin7_name = cin7_name
+                            if new_product != old_product:
+                                new_cin7_name = new_cin7_name.replace(f" / {old_product} / ", f" / {new_product} / ", 1)
+                            if str(new_abv).strip() != str(old_abv).strip():
+                                old_abv_fmt = str(old_abv).replace("%","").strip() + "%"
+                                new_abv_fmt = str(new_abv).replace("%","").strip() + "%"
+                                new_cin7_name = new_cin7_name.replace(f" / {old_abv_fmt} / ", f" / {new_abv_fmt} / ", 1)
+                            pc = st.session_state.price_check_data
+                            if idx in pc.index:
+                                pc.at[idx, 'Cin7_Name'] = new_cin7_name
+                                pc.at[idx, 'Product'] = new_product
+                                pc.at[idx, 'ABV'] = str(new_abv)
+                                if send_desc:
+                                    pc.at[idx, 'Description'] = new_description
+                                    pc.at[idx, '_orig_description'] = new_description
+                            if 'price_check_original' in st.session_state:
+                                orig = st.session_state.price_check_original
+                                if idx in orig.index:
+                                    orig.at[idx, 'Cin7_Name'] = new_cin7_name
+                                    orig.at[idx, 'Product'] = new_product
+                                    orig.at[idx, 'ABV'] = str(new_abv)
+                                    if send_desc:
+                                        orig.at[idx, '_orig_description'] = new_description
                     st.code("\n".join(detail_log), language="text")
                     st.success("Product detail update complete.")
+                    st.rerun()
 
             st.download_button("📥 Download Price Check CSV", st.session_state.price_check_data.to_csv(index=False), "price_check.csv")
 
