@@ -72,6 +72,7 @@ DEFAULT_STATE = {
     'cin7_links': [],
     'shopify_links': [],
     'polykeg_selections': {},
+    'lab_custom_rule': "",
 }
 
 # ==========================================
@@ -1775,7 +1776,7 @@ with st.sidebar:
     st.subheader("🧪 The Lab")
     with st.form("teaching_form"):
         st.caption("Test a new rule here. Press Ctrl+Enter to apply.")
-        custom_rule = st.text_area("Inject Temporary Rule:", height=100)
+        custom_rule = st.text_area("Inject Temporary Rule:", height=100, key="lab_custom_rule")
         st.form_submit_button("Set Rule")
 
     if custom_rule:
