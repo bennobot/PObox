@@ -516,14 +516,15 @@ def update_shopify_product_details(sku, new_product_title, new_variant_title, ol
 
     errors = []
 
-    # Reconstruct title via string replacement rather than overwriting
+    # Reconstruct title by replacing exact slash-delimited segments to avoid
+    # substring matches (e.g. replacing "Foo" inside "Foo Bar").
     updated_title = current_title
     if new_product_title and old_product and old_product != new_product_title:
-        updated_title = updated_title.replace(old_product, new_product_title, 1)
+        updated_title = updated_title.replace(f" / {old_product} / ", f" / {new_product_title} / ", 1)
     if new_abv and old_abv and str(old_abv).strip() != str(new_abv).strip():
         old_abv_str = str(old_abv).replace("%", "").strip() + "%"
         new_abv_str = str(new_abv).replace("%", "").strip() + "%"
-        updated_title = updated_title.replace(old_abv_str, new_abv_str, 1)
+        updated_title = updated_title.replace(f" / {old_abv_str} / ", f" / {new_abv_str} / ", 1)
 
     product_updates = {"id": int(numeric_product_id)}
     if updated_title and updated_title != current_title:
