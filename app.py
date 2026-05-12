@@ -1326,34 +1326,49 @@ def _format_is_compatible(inv_fmt, shop_keg_meta, combined_shop_tags):
                 return False
     return True
 
-def run_reconciliation_check(lines_df):
+def run_reconciliation_check(lines_df, recheck_only=False):
     if lines_df.empty: return lines_df, ["No Lines to check."]
     logs = []
     df = lines_df.copy()
     if 'Use_Split' not in df.columns: df['Use_Split'] = False
     if 'Strict_Search' not in df.columns: df['Strict_Search'] = False
+    if 'Recheck' not in df.columns: df['Recheck'] = True
 
-    df['Shopify_Status'] = "Pending"
-    df['Match_Score'] = ""          # NEW: visible confidence score
-    df['Matched_Product'] = ""
-    df['Matched_Variant'] = ""
-    df['Image'] = ""
-    df['London_SKU'] = ""
-    df['Cin7_London_ID'] = ""
-    df['Gloucester_SKU'] = ""
-    df['Cin7_Glou_ID'] = ""
+    if recheck_only:
+        # Ensure match columns exist for rows we'll skip
+        for col in ('Shopify_Status', 'Match_Score', 'Matched_Product', 'Matched_Variant',
+                    'Image', 'London_SKU', 'Cin7_London_ID', 'Gloucester_SKU', 'Cin7_Glou_ID'):
+            if col not in df.columns: df[col] = ""
+        recheck_mask = df['Recheck'].fillna(True).astype(bool)
+        suppliers = [s for s in df.loc[recheck_mask, 'Supplier_Name'].unique()
+                     if isinstance(s, str) and s.strip()]
+        logs.append(f"🔄 Rechecking {recheck_mask.sum()} selected row(s) across {len(suppliers)} supplier(s).")
+    else:
+        df['Shopify_Status'] = "Pending"
+        df['Match_Score'] = ""
+        df['Matched_Product'] = ""
+        df['Matched_Variant'] = ""
+        df['Image'] = ""
+        df['London_SKU'] = ""
+        df['Cin7_London_ID'] = ""
+        df['Gloucester_SKU'] = ""
+        df['Cin7_Glou_ID'] = ""
+        suppliers = [s for s in df['Supplier_Name'].unique() if isinstance(s, str) and s.strip()]
 
-    suppliers = [s for s in df['Supplier_Name'].unique() if isinstance(s, str) and s.strip()]
     shopify_cache = {}
     progress_bar = st.progress(0)
     for i, supplier in enumerate(suppliers):
-        progress_bar.progress((i) / len(suppliers))
+        progress_bar.progress((i) / max(len(suppliers), 1))
         logs.append(f"🔎 **Fetching Shopify Data:** `{supplier}`")
         shopify_cache[supplier] = fetch_shopify_products_by_vendor(supplier)
     progress_bar.progress(1.0)
 
     results = []
     for _, row in df.iterrows():
+        # In recheck_only mode, pass through rows not marked for recheck
+        if recheck_only and not bool(row.get('Recheck', True)):
+            results.append(row)
+            continue
         status = "❓ Vendor Not Found"
         match_score_val = ""
         london_sku, glou_sku, cin7_l_id, cin7_g_id, img_url = "", "", "", "", ""
@@ -1519,6 +1534,8 @@ def run_reconciliation_check(lines_df):
         row['Cin7_London_ID'] = cin7_l_id
         row['Gloucester_SKU'] = glou_sku
         row['Cin7_Glou_ID'] = cin7_g_id
+        # Clear recheck flag when matched; keep it set if still unmatched so it stays ticked
+        row['Recheck'] = status not in ("✅ Match", "✅ Match (Manual)")
         results.append(row)
 
     return pd.DataFrame(results), logs
@@ -2001,9 +2018,11 @@ if st.button("🚀 Process Invoice", type="primary"):
                 df_lines['Use_Split'] = False
                 df_lines['Strict_Search'] = False
                 df_lines['Manual_Shopify_SKU'] = ""
+                df_lines['Recheck'] = True
 
-                cols = ["Use_Split", "Strict_Search", "Supplier_Name", "Collaborator", "Product_Name", "ABV",
-                        "Format", "Pack_Size", "Volume", "Item_Price", "Line_Total", "Quantity", "Manual_Shopify_SKU"]
+                cols = ["Recheck", "Manual_Shopify_SKU", "Use_Split", "Strict_Search", "Supplier_Name",
+                        "Collaborator", "Product_Name", "ABV", "Format", "Pack_Size", "Volume",
+                        "Item_Price", "Line_Total", "Quantity"]
                 existing = [c for c in cols if c in df_lines.columns]
                 st.session_state.line_items = df_lines[existing]
 
@@ -2048,11 +2067,11 @@ if st.session_state.header_data is not None:
         display_df = st.session_state.line_items.copy()
 
         ideal_order = [
+            'Recheck', 'Manual_Shopify_SKU',
             'Use_Split', 'Strict_Search', 'Shopify_Status', 'Match_Score',
             'Matched_Product', 'Matched_Variant', 'Image',
             'Supplier_Name', 'Collaborator', 'Product_Name', 'ABV', 'Format',
             'Pack_Size', 'Volume', 'Quantity', 'Item_Price', 'Line_Total',
-            'Manual_Shopify_SKU',
             'Shopify_Variant_ID', 'London_SKU', 'Gloucester_SKU'
         ]
         final_cols = [c for c in ideal_order if c in display_df.columns]
@@ -2066,11 +2085,13 @@ if st.session_state.header_data is not None:
                 help="Fuzzy match confidence. Green ≥ 90, amber 70–89, red < 70."),
             "Matched_Product": st.column_config.TextColumn("Shopify Match", disabled=True),
             "Matched_Variant": st.column_config.TextColumn("Variant Match", disabled=True),
+            "Recheck": st.column_config.CheckboxColumn("Recheck?", width="small",
+                help="Tick to include this line in Recheck Selected. Auto-ticked for unmatched rows."),
+            "Manual_Shopify_SKU": st.column_config.TextColumn("Manual SKU Override", width="medium",
+                help="Paste any L- or G- SKU from Shopify to force-match this line and skip fuzzy search"),
             "Use_Split": st.column_config.CheckboxColumn("Order Split?", width="small", help="Tick to order half-case"),
             "Strict_Search": st.column_config.CheckboxColumn("Strict?", width="small", help="Tick to force exact name matching"),
-            "Line_Total": st.column_config.NumberColumn("Line Total", format="£%.2f"),
-            "Manual_Shopify_SKU": st.column_config.TextColumn("Manual SKU Override", width="medium",
-                help="Paste any L- or G- SKU from Shopify to force-match this line and skip fuzzy search")
+            "Line_Total": st.column_config.NumberColumn("Line Total", format="£%.2f")
         }
 
         with st.form(key=f"line_items_form_{st.session_state.line_items_key}"):
@@ -2122,10 +2143,10 @@ if st.session_state.header_data is not None:
                 st.rerun()
 
         st.divider()
-        col1, col2 = st.columns([1, 4])
+        col1, col2, col3 = st.columns([1, 1, 3])
         with col1:
             if "shopify" in st.secrets:
-                if st.button("🛒 Check Inventory"):
+                if st.button("🛒 Check Inventory", help="Full check — resets and rematches all lines"):
                     with st.spinner("Checking..."):
                         updated_lines, logs = run_reconciliation_check(st.session_state.line_items)
                         st.session_state.line_items = updated_lines
@@ -2133,13 +2154,25 @@ if st.session_state.header_data is not None:
                         st.session_state.matrix_data = create_product_matrix(updated_lines)
                         st.session_state.line_items_key += 1
                         st.session_state.matrix_key += 1
-
-                        # Auto-populate price check from matched lines
                         st.session_state.price_check_data = build_price_check_from_matched_lines(updated_lines)
-
                         st.success("Check Complete!")
                         st.rerun()
         with col2:
+            if "shopify" in st.secrets:
+                recheck_count = int(st.session_state.line_items.get('Recheck', pd.Series(dtype=bool)).fillna(True).sum()) \
+                    if 'Recheck' in st.session_state.line_items.columns else len(st.session_state.line_items)
+                if st.button(f"🔄 Recheck Selected ({recheck_count})", help="Only recheck ticked rows — preserves existing matches"):
+                    with st.spinner("Rechecking selected lines..."):
+                        updated_lines, logs = run_reconciliation_check(st.session_state.line_items, recheck_only=True)
+                        st.session_state.line_items = updated_lines
+                        st.session_state.shopify_logs = logs
+                        st.session_state.matrix_data = create_product_matrix(updated_lines)
+                        st.session_state.line_items_key += 1
+                        st.session_state.matrix_key += 1
+                        st.session_state.price_check_data = build_price_check_from_matched_lines(updated_lines)
+                        st.success("Recheck Complete!")
+                        st.rerun()
+        with col3:
             st.download_button("📥 Download Lines CSV", st.session_state.line_items.to_csv(index=False), "lines.csv")
 
         if st.session_state.shopify_logs:
