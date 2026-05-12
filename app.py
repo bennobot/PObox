@@ -2599,6 +2599,14 @@ if st.session_state.header_data is not None:
         st.subheader("6. Price Check")
         st.caption("Auto-populated from matched lines after inventory check. Review any flagged items before finalising the PO.")
 
+        if st.button("🔄 Rerun Price Check", help="Re-fetch current Cin7 prices and recalculate recommendations"):
+            updated_lines = st.session_state.get('line_items', None)
+            if updated_lines is not None and not updated_lines.empty:
+                st.session_state.price_check_data = build_price_check_from_matched_lines(updated_lines)
+                st.rerun()
+            else:
+                st.warning("No matched lines found — run Check Inventory in Tab 1 first.")
+
         pc_df = st.session_state.price_check_data
 
         if pc_df is None or pc_df.empty:
