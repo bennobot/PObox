@@ -2736,10 +2736,14 @@ if st.session_state.header_data is not None:
                         prog.progress((i + 1) / max(len(rows_to_update), 1))
                         new_price = row['Recommended_Price']
                         old_price = row.get('Current_Cin7_Price', 0)
-                        abv = str(row.get('ABV', '')).strip()
-                        abv_str = f" / {abv}%" if abv and abv.lower() not in ('', 'nan') else ""
-                        readable = f"{row.get('Product', row['SKU'])}{abv_str} / {row.get('Variant', '')}  £{old_price:.2f} → £{new_price:.2f}"
-                        update_log.append(f"\n── {readable}")
+                        cin7_name = str(row.get('Cin7_Name', '')).strip()
+                        if cin7_name:
+                            readable = cin7_name
+                        else:
+                            abv = str(row.get('ABV', '')).strip()
+                            abv_str = f" / {abv}%" if abv and abv.lower() not in ('', 'nan') else ""
+                            readable = f"{row['SKU'].split('-')[0]}-{row.get('Product', row['SKU'])}{abv_str} / {row.get('Variant', '')}"
+                        update_log.append(f"\n── {readable}  £{old_price:.2f} → £{new_price:.2f}")
                         prod_id = row.get('Cin7_ID')
                         if prod_id:
                             ok, msg = update_cin7_price(prod_id, new_price)
