@@ -1822,6 +1822,7 @@ def build_price_check_from_matched_lines(line_items_df):
                 "Cin7_Name": cin7_full_name,
                 "Attr5": attr_5,
                 "Description": cin7_desc,
+                "_orig_description": cin7_desc,
             })
     return pd.DataFrame(rows)
 
@@ -2729,6 +2730,7 @@ if st.session_state.header_data is not None:
                 "Flag":                 st.column_config.TextColumn("Flag", disabled=True),
                 "Cin7_ID":              st.column_config.TextColumn("Cin7_ID", disabled=True),
                 "Cin7_Name":            None,
+                "_orig_description":    None,
                 "Attr5":                st.column_config.TextColumn("Attr5", disabled=True),
                 "Description":          st.column_config.TextColumn("Description", width="large"),
             }
@@ -2784,19 +2786,18 @@ if st.session_state.header_data is not None:
                     prog2 = st.progress(0)
                     saved_pc = st.session_state.price_check_data
                     rows_to_update = saved_pc[saved_pc['Update'] == True]
-                    orig_pc = st.session_state.get('price_check_original', saved_pc)
                     for i, (idx, row) in enumerate(rows_to_update.iterrows()):
                         prog2.progress((i + 1) / max(len(rows_to_update), 1))
                         sku = row['SKU']
-                        orig_row = orig_pc.loc[idx] if idx in orig_pc.index else None
-                        # Derive old values from original snapshot so edits are correctly detected.
-                        # Cin7_Name is the live Cin7 record and never overwritten by user edits.
-                        cin7_name_raw = str(orig_row.get('Cin7_Name', '') if orig_row is not None else row.get('Cin7_Name', ''))
+                        # Cin7_Name is hidden/uneditable — always holds the live Cin7 record.
+                        # Use it as the source of truth for old values.
+                        cin7_name_raw = str(row.get('Cin7_Name', ''))
                         cin7_parts = [p.strip() for p in cin7_name_raw.split('/')]
-                        old_product     = cin7_parts[1] if len(cin7_parts) >= 2 else (orig_row['Product'] if orig_row is not None else row['Product'])
-                        old_variant     = cin7_parts[-1] if len(cin7_parts) >= 2 else (orig_row['Variant'] if orig_row is not None else row['Variant'])
-                        old_abv         = cin7_parts[2].replace('%', '').strip() if len(cin7_parts) >= 3 else str(orig_row.get('ABV', '') if orig_row is not None else row.get('ABV', ''))
-                        old_description = str(orig_row.get('Description', '') if orig_row is not None else row.get('Description', ''))
+                        old_product     = cin7_parts[1] if len(cin7_parts) >= 2 else row['Product']
+                        old_variant     = cin7_parts[-1] if len(cin7_parts) >= 2 else row['Variant']
+                        old_abv         = cin7_parts[2].replace('%', '').strip() if len(cin7_parts) >= 3 else str(row.get('ABV', ''))
+                        # _orig_description is a hidden column set at build time, never overwritten by edits
+                        old_description = str(row.get('_orig_description', row.get('Description', '')))
                         new_product     = row['Product']
                         new_variant     = row['Variant']
                         new_abv         = row.get('ABV', '')
