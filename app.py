@@ -1518,7 +1518,10 @@ def run_reconciliation_check(lines_df, recheck_only=False):
 
                     pack_match = False
                     if target_pack == 1:
-                        pack_match = not ("x" in v_tokens and any(t.isdigit() and int(t) > 1 for t in v_tokens))
+                        # Match single-unit variants: "75cl", "1x75cl" — but not "12x330ml"
+                        # Check only the digit immediately before "x" (the pack count), not volume numbers
+                        pack_prefix = re.search(r'(\d+)x', v_title)
+                        pack_match = int(pack_prefix.group(1)) <= 1 if pack_prefix else True
                     else:
                         pack_match = str(target_pack) in v_tokens
 
