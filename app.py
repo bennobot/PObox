@@ -2122,7 +2122,7 @@ if st.session_state.header_data is not None:
                 help="Tick to include this line in Recheck Selected. Auto-ticked for unmatched rows."),
             "Manual_Shopify_SKU": st.column_config.TextColumn("Manual SKU Override", width="medium",
                 help="Paste any L- or G- SKU from Shopify to force-match this line and skip fuzzy search"),
-            "Use_Split": st.column_config.CheckboxColumn("Order Split?", width="small", help="Tick to order half-case"),
+            "Use_Split": st.column_config.CheckboxColumn("Half Case?", width="small", help="Tick to order half-case"),
             "Strict_Search": st.column_config.CheckboxColumn("Strict?", width="small", help="Tick to force exact name matching"),
             "Line_Total": st.column_config.NumberColumn("Line Total", format="£%.2f")
         }
@@ -2259,7 +2259,7 @@ if st.session_state.header_data is not None:
                 prep_config[f"Pack_Size{i}"] = st.column_config.TextColumn(f"Pack {i}", width="small")
                 prep_config[f"Volume{i}"] = st.column_config.TextColumn(f"Vol {i}", width="small")
                 prep_config[f"Item_Price{i}"] = st.column_config.NumberColumn(f"Cost {i}", format="£%.2f", width="small")
-                prep_config[f"Split_Case{i}"] = st.column_config.CheckboxColumn(f"Split {i}?", width="small")
+                prep_config[f"Split_Case{i}"] = st.column_config.CheckboxColumn(f"Half Case {i}?", width="small")
 
             if search_has_run:
                 base_cols = ['Ignore_UT', 'Retry', 'Manual_UT_ID', 'Untappd_Status', 'UT_Confidence', 'Match_Check', 'Supplier_Name', 'Type', 'Collaborator', 'Product_Name', 'ABV']
