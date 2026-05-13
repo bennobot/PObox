@@ -2434,17 +2434,23 @@ if st.session_state.header_data is not None:
                     pack_nums = re.findall(r'\d+', pack_raw)
                     pack_int = int(pack_nums[0]) if pack_nums else 1
                     is_split = bool(row.get('is_split_case', False))
-                    if is_split: pack_int = pack_int * 2
 
                     keg_info = keg_map.get(fmt_name.lower(), {})
-                    cost_price = float(str(row.get('item_price', 0)).replace('£', '').strip() or 0)
-                    if is_split: cost_price = cost_price / 2
-                    sales_price = calculate_sell_price(cost_price, attr_5, fmt_name)
+                    full_cost = float(str(row.get('item_price', 0)).replace('£', '').strip() or 0)
 
                     abv_str = f"{abv_val}%" if abv_val else ""
                     family_name = f"{display_supplier} / {prod_name} / {abv_str} / {fmt_name}" if abv_str else f"{display_supplier} / {prod_name} / {fmt_name}"
 
-                    # PolyKeg generates two variants (Sankey + KeyKeg); all others generate one
+                    # Split packs produce two variants: original invoice size + half size.
+                    # Non-split produces one variant at the invoice pack size.
+                    pack_variants = [
+                        {"pack_int": pack_int,     "cost": full_cost},
+                        {"pack_int": pack_int // 2, "cost": full_cost / 2},
+                    ] if is_split else [
+                        {"pack_int": pack_int, "cost": full_cost},
+                    ]
+
+                    # PolyKeg generates two coupler variants (Sankey + KeyKeg); all others one
                     is_polykeg = fmt_name.lower() == "polykeg"
                     coupler_variants = [
                         {"connector": "Sankey Coupler", "sku_end": "ST"},
@@ -2453,29 +2459,33 @@ if st.session_state.header_data is not None:
                         {"connector": keg_info.get("connector", ""), "sku_end": keg_info.get("sku_end", "")}
                     ]
 
-                    for coupler in coupler_variants:
-                        keg_connector = coupler["connector"]
-                        keg_sku_end = coupler["sku_end"]
-                        if pack_int and pack_int > 1:
-                            variant_name = f"{pack_int}x{vol_name}"
-                        elif keg_connector:
-                            variant_name = f"{vol_name} - {keg_connector}"
-                        else:
-                            variant_name = vol_name
-                        sku_size = f"{pack_int}X{size_code}" if pack_int > 1 else f"{size_code}{keg_sku_end}"
-                        variant_sku_base = f"{family_sku}-{sku_size}"
-                        processed_rows.append({
-                            **row.to_dict(),
-                            'Family_SKU': family_sku,
-                            'Variant_SKU': variant_sku_base,
-                            'Family_Name': family_name,
-                            'Variant_Name': variant_name,
-                            'Weight': unit_weight * pack_int,
-                            'Keg_Connector': keg_connector,
-                            'Sales_Price': sales_price,
-                            'item_price': cost_price,
-                            'untappd_abv': abv_val,
-                        })
+                    for pv in pack_variants:
+                        cur_pack = pv["pack_int"]
+                        cost_price = pv["cost"]
+                        sales_price = calculate_sell_price(cost_price, attr_5, fmt_name)
+                        for coupler in coupler_variants:
+                            keg_connector = coupler["connector"]
+                            keg_sku_end = coupler["sku_end"]
+                            if cur_pack and cur_pack > 1:
+                                variant_name = f"{cur_pack}x{vol_name}"
+                            elif keg_connector:
+                                variant_name = f"{vol_name} - {keg_connector}"
+                            else:
+                                variant_name = vol_name
+                            sku_size = f"{cur_pack}X{size_code}" if cur_pack > 1 else f"{size_code}{keg_sku_end}"
+                            variant_sku_base = f"{family_sku}-{sku_size}"
+                            processed_rows.append({
+                                **row.to_dict(),
+                                'Family_SKU': family_sku,
+                                'Variant_SKU': variant_sku_base,
+                                'Family_Name': family_name,
+                                'Variant_Name': variant_name,
+                                'Weight': unit_weight * cur_pack,
+                                'Keg_Connector': keg_connector,
+                                'Sales_Price': sales_price,
+                                'item_price': cost_price,
+                                'untappd_abv': abv_val,
+                            })
 
                 st.session_state.upload_data = pd.DataFrame(processed_rows)
                 st.session_state.upload_generated = True
