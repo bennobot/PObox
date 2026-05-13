@@ -1812,6 +1812,7 @@ def build_price_check_from_matched_lines(line_items_df):
                 sku = london_sku if prefix == "G-" else "L-" + london_sku[2:]
             prod_id, current_cin7_price, cin7_full_name, attr_5, cin7_abv, cin7_desc = fetch_cin7_product_details_by_sku(sku)
             recommended_price = calculate_sell_price(invoice_cost, attr_5, str(row.get('Format', '')))
+            if row.get('Use_Split', False): recommended_price = round(recommended_price + 0.50, 2)
             price_diff = round(recommended_price - current_cin7_price, 2)
             pct_change = round((price_diff / current_cin7_price) * 100, 1) if current_cin7_price else 0
             flag = "⚠️ Review" if abs(pct_change) > 0 else "✅ OK"
@@ -2464,6 +2465,7 @@ if st.session_state.header_data is not None:
                         cost_price = pv["cost"]
                         cur_is_split = pv["is_split"]
                         sales_price = calculate_sell_price(cost_price, attr_5, fmt_name)
+                        if cur_is_split: sales_price = round(sales_price + 0.50, 2)
                         for coupler in coupler_variants:
                             keg_connector = coupler["connector"]
                             keg_sku_end = coupler["sku_end"]
