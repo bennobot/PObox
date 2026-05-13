@@ -787,10 +787,18 @@ def prepare_final_po_lines(line_items_df):
         raw_price = float(row.get('Item_Price', 0))
         # Invoice Line_Total is the authoritative figure — use it to anchor the PO total
         line_total = float(row.get('Line_Total') or (raw_qty * raw_price))
-        if row.get('Use_Split', False):
+        split_type = str(row.get('Split_Type', '') or '')
+        if split_type == 'Half Case':
             final_qty = raw_qty * 2
             final_price = raw_price / 2
-            notes = "⚠️ Split Case (Half Size)"
+            notes = "⚠️ Half Case"
+        elif split_type == 'Single Unit':
+            raw_pack_str_po = str(row.get('Pack_Size', '1'))
+            pack_nums_po = re.findall(r'\d+', raw_pack_str_po)
+            pack_size_po = int(pack_nums_po[0]) if pack_nums_po else 1
+            final_qty = raw_qty * pack_size_po
+            final_price = raw_price / pack_size_po
+            notes = "⚠️ Single Unit"
         else:
             final_qty = raw_qty
             final_price = raw_price
@@ -1345,7 +1353,7 @@ def run_reconciliation_check(lines_df, recheck_only=False):
     if lines_df.empty: return lines_df, ["No Lines to check."]
     logs = []
     df = lines_df.copy()
-    if 'Use_Split' not in df.columns: df['Use_Split'] = False
+    if 'Split_Type' not in df.columns: df['Split_Type'] = ""
     if 'Strict_Search' not in df.columns: df['Strict_Search'] = False
     if 'Recheck' not in df.columns: df['Recheck'] = True
 
@@ -1391,7 +1399,7 @@ def run_reconciliation_check(lines_df, recheck_only=False):
 
         supplier = str(row.get('Supplier_Name', ''))
         inv_prod_name = row['Product_Name']
-        use_split = row.get('Use_Split', False)
+        split_type = str(row.get('Split_Type', '') or '')
         is_strict = row.get('Strict_Search', False)
         match_threshold = 95 if is_strict else 65
 
@@ -1399,9 +1407,12 @@ def run_reconciliation_check(lines_df, recheck_only=False):
         pack_nums = re.findall(r'\d+', raw_pack_str)
         original_pack = float(pack_nums[0]) if pack_nums else 1.0
 
-        if use_split and original_pack > 1:
+        if split_type == 'Half Case' and original_pack > 1:
             target_pack = int(original_pack / 2)
-            logs.append(f"   ✂️ Splitting: Invoice {int(original_pack)} -> Looking for {target_pack}")
+            logs.append(f"   ✂️ Half Case: Invoice {int(original_pack)} -> Looking for {target_pack}")
+        elif split_type == 'Single Unit':
+            target_pack = 1
+            logs.append(f"   1️⃣ Single Unit: Looking for 1x variant")
         else:
             target_pack = int(original_pack)
 
@@ -1718,7 +1729,7 @@ def create_product_matrix(df):
             row[f'Pack_Size{suffix}'] = item['Pack_Size']
             row[f'Volume{suffix}'] = item['Volume']
             row[f'Item_Price{suffix}'] = item['Item_Price']
-            row[f'Split_Case{suffix}'] = item.get('Use_Split', False)
+            row[f'Split_Case{suffix}'] = item.get('Split_Type', '')
         row['Retry'] = False
         row['Match_Check'] = ""
         row['Manual_UT_ID'] = ""
@@ -1780,7 +1791,7 @@ def stage_products_for_upload(matrix_df):
                     'untappd_style': row.get('Untappd_Style', ''), 'description': row.get('Untappd_Desc', ''),
                     'format': fmt_val, 'pack_size': row.get(f'Pack_Size{i}', ''),
                     'volume': row.get(f'Volume{i}', ''), 'item_price': row.get(f'Item_Price{i}', ''),
-                    'is_split_case': row.get(f'Split_Case{i}', False), 'Label_Thumb': img_url,
+                    'is_split_case': row.get(f'Split_Case{i}', ''), 'Label_Thumb': img_url,
                     'Untappd_ID': row.get('Untappd_ID', ''), 'Brewery_Loc': row.get('Brewery_Loc', ''),
                     'Family_SKU': '', 'Variant_SKU': '', 'Family_Name': '', 'Variant_Name': '',
                     'Weight': 0.0, 'Keg_Connector': '', 'Attribute_5': 'Rotational Product',
@@ -1806,7 +1817,16 @@ def build_price_check_from_matched_lines(line_items_df):
         if not london_sku:
             continue
         raw_price = float(row.get('Item_Price', 0))
-        invoice_cost = raw_price / 2 if row.get('Use_Split', False) else raw_price
+        split_type_pc = str(row.get('Split_Type', '') or '')
+        if split_type_pc == 'Half Case':
+            invoice_cost = raw_price / 2
+        elif split_type_pc == 'Single Unit':
+            raw_pack_str_pc = str(row.get('Pack_Size', '1'))
+            pack_nums_pc = re.findall(r'\d+', raw_pack_str_pc)
+            pack_size_pc = int(pack_nums_pc[0]) if pack_nums_pc else 1
+            invoice_cost = raw_price / pack_size_pc
+        else:
+            invoice_cost = raw_price
         # Emit one row for each depot prefix (L and G)
         for prefix, other in [("L-", "G-"), ("G-", "L-")]:
             if london_sku.startswith("L-"):
@@ -1815,7 +1835,7 @@ def build_price_check_from_matched_lines(line_items_df):
                 sku = london_sku if prefix == "G-" else "L-" + london_sku[2:]
             prod_id, current_cin7_price, cin7_full_name, attr_5, cin7_abv, cin7_desc = fetch_cin7_product_details_by_sku(sku)
             recommended_price = calculate_sell_price(invoice_cost, attr_5, str(row.get('Format', '')))
-            if row.get('Use_Split', False): recommended_price = round(recommended_price + 0.50, 2)
+            if split_type_pc in ('Half Case', 'Single Unit'): recommended_price = round(recommended_price + 0.50, 2)
             price_diff = round(recommended_price - current_cin7_price, 2)
             pct_change = round((price_diff / current_cin7_price) * 100, 1) if current_cin7_price else 0
             flag = "⚠️ Review" if abs(pct_change) > 0 else "✅ OK"
@@ -2049,12 +2069,12 @@ if st.button("🚀 Process Invoice", type="primary"):
                     df_lines = normalize_supplier_names(df_lines, st.session_state.master_suppliers)
 
                 df_lines['Shopify_Status'] = "Pending"
-                df_lines['Use_Split'] = False
+                df_lines['Split_Type'] = ""
                 df_lines['Strict_Search'] = False
                 df_lines['Manual_Shopify_SKU'] = ""
                 df_lines['Recheck'] = True
 
-                cols = ["Recheck", "Manual_Shopify_SKU", "Use_Split", "Strict_Search", "Supplier_Name",
+                cols = ["Recheck", "Manual_Shopify_SKU", "Split_Type", "Strict_Search", "Supplier_Name",
                         "Collaborator", "Product_Name", "ABV", "Format", "Pack_Size", "Volume",
                         "Item_Price", "Line_Total", "Quantity"]
                 existing = [c for c in cols if c in df_lines.columns]
@@ -2104,7 +2124,7 @@ if st.session_state.header_data is not None:
 
         ideal_order = [
             'Recheck', 'Manual_Shopify_SKU',
-            'Use_Split', 'Strict_Search', 'Shopify_Status', 'Match_Score',
+            'Split_Type', 'Strict_Search', 'Shopify_Status', 'Match_Score',
             'Matched_Product', 'Matched_Variant', 'Image',
             'Supplier_Name', 'Collaborator', 'Product_Name', 'ABV', 'Format',
             'Pack_Size', 'Volume', 'Quantity', 'Item_Price', 'Line_Total',
@@ -2125,7 +2145,7 @@ if st.session_state.header_data is not None:
                 help="Tick to include this line in Recheck Selected. Auto-ticked for unmatched rows."),
             "Manual_Shopify_SKU": st.column_config.TextColumn("Manual SKU Override", width="medium",
                 help="Paste any L- or G- SKU from Shopify to force-match this line and skip fuzzy search"),
-            "Use_Split": st.column_config.CheckboxColumn("Half Case?", width="small", help="Tick to order half-case"),
+            "Split_Type": st.column_config.SelectboxColumn("Split Type", options=["", "Half Case", "Single Unit"], width="small", help="Half Case: order half pack size. Single Unit: order individual units."),
             "Strict_Search": st.column_config.CheckboxColumn("Strict?", width="small", help="Tick to force exact name matching"),
             "Line_Total": st.column_config.NumberColumn("Line Total", format="£%.2f")
         }
@@ -2262,7 +2282,7 @@ if st.session_state.header_data is not None:
                 prep_config[f"Pack_Size{i}"] = st.column_config.TextColumn(f"Pack {i}", width="small")
                 prep_config[f"Volume{i}"] = st.column_config.TextColumn(f"Vol {i}", width="small")
                 prep_config[f"Item_Price{i}"] = st.column_config.NumberColumn(f"Cost {i}", format="£%.2f", width="small")
-                prep_config[f"Split_Case{i}"] = st.column_config.CheckboxColumn(f"Half Case {i}?", width="small")
+                prep_config[f"Split_Case{i}"] = st.column_config.SelectboxColumn(f"Split Type {i}", options=["", "Half Case", "Single Unit"], width="small")
 
             if search_has_run:
                 base_cols = ['Ignore_UT', 'Retry', 'Manual_UT_ID', 'Untappd_Status', 'UT_Confidence', 'Match_Check', 'Supplier_Name', 'Type', 'Collaborator', 'Product_Name', 'ABV']
@@ -2439,7 +2459,7 @@ if st.session_state.header_data is not None:
                     pack_raw = str(row.get('pack_size', '1'))
                     pack_nums = re.findall(r'\d+', pack_raw)
                     pack_int = int(pack_nums[0]) if pack_nums else 1
-                    is_split = bool(row.get('is_split_case', False))
+                    split_type_upload = str(row.get('is_split_case', '') or '')
 
                     keg_info = keg_map.get(fmt_name.lower(), {})
                     full_cost = float(str(row.get('item_price', 0)).replace('£', '').strip() or 0)
@@ -2447,14 +2467,20 @@ if st.session_state.header_data is not None:
                     abv_str = f"{abv_val}%" if abv_val else ""
                     family_name = f"{display_supplier} / {prod_name} / {abv_str} / {fmt_name}" if abv_str else f"{display_supplier} / {prod_name} / {fmt_name}"
 
-                    # Split packs produce two variants: original invoice size + half size.
-                    # Non-split produces one variant at the invoice pack size.
-                    pack_variants = [
-                        {"pack_int": pack_int,      "cost": full_cost,     "is_split": False},
-                        {"pack_int": pack_int // 2, "cost": full_cost / 2, "is_split": True},
-                    ] if is_split else [
-                        {"pack_int": pack_int, "cost": full_cost, "is_split": False},
-                    ]
+                    if split_type_upload == 'Half Case':
+                        pack_variants = [
+                            {"pack_int": pack_int,      "cost": full_cost,            "is_split": False},
+                            {"pack_int": pack_int // 2, "cost": full_cost / 2,        "is_split": True},
+                        ]
+                    elif split_type_upload == 'Single Unit':
+                        pack_variants = [
+                            {"pack_int": pack_int, "cost": full_cost,                 "is_split": False},
+                            {"pack_int": 1,        "cost": full_cost / pack_int,      "is_split": True},
+                        ]
+                    else:
+                        pack_variants = [
+                            {"pack_int": pack_int, "cost": full_cost, "is_split": False},
+                        ]
 
                     # PolyKeg generates two coupler variants (Sankey + KeyKeg); all others one
                     is_polykeg = fmt_name.lower() == "polykeg"
