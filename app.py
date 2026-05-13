@@ -25,7 +25,7 @@ from knowledge_base import GLOBAL_RULES_TEXT, SUPPLIER_RULEBOOK
 # --- SUPPRESS GOOGLE WARNING ---
 warnings.filterwarnings("ignore", category=FutureWarning, module="google.generativeai")
 
-st.set_page_config(layout="wide", page_title="Brewery Invoice Parser")
+st.set_page_config(layout="wide", page_title="I AM PO BOT 🤖")
 
 # ==========================================
 # CUSTOM STYLING
@@ -97,7 +97,7 @@ if not check_password(): st.stop()
 col_head_1, col_head_2 = st.columns([4, 1])
 
 with col_head_1:
-    st.title("Brewery Invoice Parser ⚡")
+    st.title("I AM PO BOT 🤖")
 
 with col_head_2:
     st.markdown("<div style='margin-top: 30px;'></div>", unsafe_allow_html=True)
