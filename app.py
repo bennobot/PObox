@@ -2444,10 +2444,10 @@ if st.session_state.header_data is not None:
                     # Split packs produce two variants: original invoice size + half size.
                     # Non-split produces one variant at the invoice pack size.
                     pack_variants = [
-                        {"pack_int": pack_int,     "cost": full_cost},
-                        {"pack_int": pack_int // 2, "cost": full_cost / 2},
+                        {"pack_int": pack_int,      "cost": full_cost,     "is_split": False},
+                        {"pack_int": pack_int // 2, "cost": full_cost / 2, "is_split": True},
                     ] if is_split else [
-                        {"pack_int": pack_int, "cost": full_cost},
+                        {"pack_int": pack_int, "cost": full_cost, "is_split": False},
                     ]
 
                     # PolyKeg generates two coupler variants (Sankey + KeyKeg); all others one
@@ -2462,6 +2462,7 @@ if st.session_state.header_data is not None:
                     for pv in pack_variants:
                         cur_pack = pv["pack_int"]
                         cost_price = pv["cost"]
+                        cur_is_split = pv["is_split"]
                         sales_price = calculate_sell_price(cost_price, attr_5, fmt_name)
                         for coupler in coupler_variants:
                             keg_connector = coupler["connector"]
@@ -2481,6 +2482,7 @@ if st.session_state.header_data is not None:
                                 'Family_Name': family_name,
                                 'Variant_Name': variant_name,
                                 'pack_size': cur_pack if pack_nums else row.get('pack_size', ''),
+                                'is_split_case': cur_is_split,
                                 'Weight': unit_weight * cur_pack,
                                 'Keg_Connector': keg_connector,
                                 'Sales_Price': sales_price,
