@@ -2480,6 +2480,7 @@ if st.session_state.header_data is not None:
                                 'Variant_SKU': variant_sku_base,
                                 'Family_Name': family_name,
                                 'Variant_Name': variant_name,
+                                'pack_size': cur_pack,
                                 'Weight': unit_weight * cur_pack,
                                 'Keg_Connector': keg_connector,
                                 'Sales_Price': sales_price,
