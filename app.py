@@ -780,7 +780,7 @@ def prepare_final_po_lines(line_items_df):
         return pd.DataFrame()
     po_rows = []
     for _, row in line_items_df.iterrows():
-        if row.get('Shopify_Status') != "✅ Match": continue
+        if row.get('Shopify_Status') not in ("✅ Match", "✅ Match (Manual)"): continue
         prod_name = row['Product_Name']
         matched_sku = row.get('Matched_Variant', '')
         raw_qty = float(row.get('Quantity', 0))
@@ -1696,7 +1696,7 @@ def create_product_matrix(df):
     if df is None or df.empty: return pd.DataFrame()
     df = df.fillna("")
     if 'Shopify_Status' in df.columns:
-        df = df[df['Shopify_Status'] != "✅ Match"]
+        df = df[~df['Shopify_Status'].isin(("✅ Match", "✅ Match (Manual)"))]
     if df.empty: return pd.DataFrame()
     group_cols = ['Supplier_Name', 'Collaborator', 'Product_Name', 'ABV']
     grouped = df.groupby(group_cols, sort=False)
@@ -1792,7 +1792,7 @@ def build_price_check_from_matched_lines(line_items_df):
     """
     if line_items_df is None or line_items_df.empty:
         return pd.DataFrame()
-    matched = line_items_df[line_items_df.get('Shopify_Status', '') == "✅ Match"].copy() if 'Shopify_Status' in line_items_df.columns else pd.DataFrame()
+    matched = line_items_df[line_items_df['Shopify_Status'].isin(("✅ Match", "✅ Match (Manual)"))].copy() if 'Shopify_Status' in line_items_df.columns else pd.DataFrame()
     if matched.empty:
         return pd.DataFrame()
     # One price-check row per SKU — mirrors the final PO (no duplicates across pack sizes)
@@ -2081,7 +2081,7 @@ if st.session_state.header_data is not None:
     st.divider()
 
     df = st.session_state.line_items
-    if 'Shopify_Status' in df.columns: unmatched_count = len(df[df['Shopify_Status'] != "✅ Match"])
+    if 'Shopify_Status' in df.columns: unmatched_count = len(df[~df['Shopify_Status'].isin(("✅ Match", "✅ Match (Manual)"))])
     else: unmatched_count = len(df)
     all_matched = (unmatched_count == 0) and ('Shopify_Status' in df.columns)
 
