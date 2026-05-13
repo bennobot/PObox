@@ -2063,6 +2063,8 @@ if st.button("🚀 Process Invoice", type="primary"):
                 st.session_state.upload_data = None
                 st.session_state.upload_generated = False
                 st.session_state.price_check_data = None
+                st.session_state.pop('pc_update_log', None)
+                st.session_state.pop('pc_detail_log', None)
                 st.session_state.polykeg_selections = {}
                 st.session_state.line_items_key += 1
 
