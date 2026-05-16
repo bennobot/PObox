@@ -1986,6 +1986,12 @@ def _render_product_clone_ui():
     st.success(f"📦 Source: **{lu['cin7_name']}**")
     st.divider()
 
+    # Fetch reference maps before columns so volume dropdown can react to format
+    _wmap, _smap = fetch_weight_map()
+    _kmap = fetch_keg_codes()
+    _cur_fmt_key = st.session_state.get("pc_format", format_raw)
+    _vol_opts = sorted(set(v for (f, v) in _smap.keys() if f == _cur_fmt_key.lower()))
+
     col_left, col_right = st.columns(2)
 
     with col_left:
@@ -2008,7 +2014,8 @@ def _render_product_clone_ui():
         except: _fmt_idx = 0
         pc_format = st.selectbox("Format", options=_fmt_opts, index=_fmt_idx, key="pc_format")
         pc_pack   = st.text_input("Pack Size", value="", placeholder="e.g. 12 (blank for kegs/casks)", key="pc_pack")
-        pc_vol    = st.text_input("Volume", placeholder="e.g. 44cl", key="pc_vol")
+        pc_vol    = st.selectbox("Volume", options=[""] + _vol_opts, key="pc_vol",
+                                 help="Options populated from reference sheet for the selected format")
         pc_cost   = st.number_input("Cost Price £", min_value=0.0, format="%.2f", step=0.01, key="pc_cost")
 
         st.markdown("**Depots**")
@@ -2017,7 +2024,7 @@ def _render_product_clone_ui():
         with _dc2: pc_glou   = st.checkbox("Gloucester", value=True, key="pc_glou")
 
     # ── Preview ──────────────────────────────────────────
-    if pc_vol.strip() and pc_cost > 0:
+    if pc_vol and pc_cost > 0:
         _fmt_code_map = {"cans": "CAN", "bottles": "BTL", "steel keg": "SK",
                          "keykeg": "KK", "polykeg": "PK", "cask": "CSK", "bag in box": "BIB"}
         _f_code_new = _fmt_code_map.get(pc_format.lower(), "UN")
@@ -2031,10 +2038,8 @@ def _render_product_clone_ui():
             _base_no_fmt = _sku_segs[0].rsplit('-', 1)[0] if len(_sku_segs) > 1 else _raw_base
             family_base_sku = f"{_base_no_fmt}-{_f_code_new}"
 
-        _wmap, _smap = fetch_weight_map()
-        _kmap = fetch_keg_codes()
-        _lk = (pc_format.lower(), pc_vol.strip().lower())
-        size_code_pc   = _smap.get(_lk, pc_vol.strip().upper().replace(' ', ''))
+        _lk = (pc_format.lower(), pc_vol.lower())
+        size_code_pc   = _smap.get(_lk, pc_vol.upper().replace(' ', ''))
         unit_weight_pc = _wmap.get(_lk, 0.0)
         _keg_info      = _kmap.get(pc_format.lower(), {})
         _is_polykeg    = pc_format.lower() == "polykeg"
@@ -2058,13 +2063,13 @@ def _render_product_clone_ui():
             _kc = _cv["connector"]
             _ks = _cv["sku_end"]
             if _pack_int > 1:
-                _vname = f"{_pack_int}x{pc_vol.strip()}"
+                _vname = f"{_pack_int}x{pc_vol}"
                 _vsku  = f"{_pack_int}X{size_code_pc}"
             elif _kc:
-                _vname = f"{pc_vol.strip()} - {_kc}"
+                _vname = f"{pc_vol} - {_kc}"
                 _vsku  = f"{size_code_pc}{_ks}"
             else:
-                _vname = pc_vol.strip()
+                _vname = pc_vol
                 _vsku  = size_code_pc
             _variants_to_create.append({
                 "variant_name": _vname,
@@ -2097,17 +2102,40 @@ def _render_product_clone_ui():
         _depots_check = (["L", "G"] if pc_london and pc_glou else ["L"] if pc_london else ["G"])
         if st.button("🔍 Check Existence", key="pc_check_btn"):
             _check_results = []
-            with st.spinner("Checking Cin7 and Shopify..."):
+            with st.spinner("Checking Cin7 and Shopify by name..."):
+                # Shopify: fetch all products for this vendor once, then fuzzy-match
+                _sh_products = fetch_shopify_products_by_vendor(brand_raw)
                 for _dp in _depots_check:
+                    _dp_family_title = f"{_dp}-{family_name_new}"
+                    # Find best-matching Shopify product by title
+                    _sh_prod_match = None
+                    for _edge in _sh_products:
+                        _p = _edge['node']
+                        if fuzz.token_sort_ratio(_dp_family_title, _p['title']) >= 85:
+                            _sh_prod_match = _p
+                            break
+                    # Cin7: check family by name
+                    _cin7_fam = check_cin7_exists("productFamily", _dp_family_title, is_sku=False)
                     for _vc in _variants_to_create:
-                        _full_sku = f"{_dp}-{_vc['variant_sku']}"
-                        _cin7_id, _, _, _, _, _ = fetch_cin7_product_details_by_sku(_full_sku)
-                        _cin7_status = "⚠️ Already exists" if _cin7_id else "✅ New"
-                        _sh_gid, _ = fetch_shopify_price_by_sku(_full_sku)
-                        _sh_status = "⚠️ Already exists" if _sh_gid else "✅ New"
+                        # Shopify variant match
+                        if _sh_prod_match:
+                            _var_scores = [
+                                fuzz.token_sort_ratio(_vc['variant_name'], _ve['node']['title'])
+                                for _ve in _sh_prod_match['variants']['edges']
+                            ]
+                            _best_var = max(_var_scores) if _var_scores else 0
+                            _sh_status = (f"⚠️ Product + variant exists ({_best_var}%)" if _best_var >= 85
+                                          else "⚠️ Product exists, variant appears new")
+                        else:
+                            _sh_status = "✅ New"
+                        # Cin7 variant match by name
+                        _cin7_var_name = f"{_dp}-{family_name_new} / {_vc['variant_name']}"
+                        _cin7_var = check_cin7_exists("product", _cin7_var_name, is_sku=False)
+                        _cin7_status = ("⚠️ Variant exists" if _cin7_var
+                                        else "⚠️ Family exists, variant new" if _cin7_fam
+                                        else "✅ New")
                         _check_results.append({
                             "Depot": f"{'🏙️ London' if _dp == 'L' else '🌳 Gloucester'}",
-                            "SKU": _full_sku,
                             "Variant": _vc['variant_name'],
                             "Cin7": _cin7_status,
                             "Shopify": _sh_status,
@@ -2120,10 +2148,10 @@ def _render_product_clone_ui():
             with st.container(border=True):
                 st.caption("**Existence Check**")
                 _xh0, _xh1, _xh2, _xh3 = st.columns([2, 3, 3, 2])
-                _xh0.write("Depot"); _xh1.write("SKU"); _xh2.write("Cin7"); _xh3.write("Shopify")
+                _xh0.write("Depot"); _xh1.write("Variant"); _xh2.write("Cin7"); _xh3.write("Shopify")
                 for _r in _cr:
                     _xc0, _xc1, _xc2, _xc3 = st.columns([2, 3, 3, 2])
-                    _xc0.write(_r["Depot"]); _xc1.write(_r["SKU"])
+                    _xc0.write(_r["Depot"]); _xc1.write(_r["Variant"])
                     _xc2.write(_r["Cin7"]); _xc3.write(_r["Shopify"])
             if _any_exists:
                 st.warning("⚠️ One or more variants already exist. Creating will add to existing products where possible, or skip duplicates in Cin7.")
@@ -2155,7 +2183,7 @@ def _render_product_clone_ui():
                             'description':     pc_desc,
                             'format':          pc_format,
                             'pack_size':       _pack_int if _pack_int > 1 else '',
-                            'volume':          pc_vol.strip(),
+                            'volume':          pc_vol,
                             'item_price':      pc_cost,
                             'Sales_Price':     sales_price_new,
                             'Weight':          _vc['weight'],
