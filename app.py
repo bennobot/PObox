@@ -1120,7 +1120,10 @@ def create_or_extend_shopify_product(row_data, location_prefix, sales_price, log
                     ok = set_variant_location(inv_item_id, target_loc, loc_ids['all_ids'])
                     logs_out.append(f"   {'✅' if ok else '❌'} Inventory → {loc_label}")
             else:
-                logs_out.append(f"   ❌ Add variant failed [{r.status_code}]: {r.text[:200]}")
+                if r.status_code == 422 and "already exists" in r.text.lower():
+                    logs_out.append(f"   ⚠️ Variant already exists in Shopify — skipping")
+                else:
+                    logs_out.append(f"   ❌ Add variant failed [{r.status_code}]: {r.text[:200]}")
         except Exception as e:
             logs_out.append(f"   💥 Exception: {e}")
     else:
@@ -1215,8 +1218,11 @@ def create_cin7_product_only(row_data, family_id, family_base_sku, family_base_n
         r_check = make_cin7_request("GET", check_url, headers=headers)
         if r_check.status_code == 200:
             data = r_check.json()
-            if data.get("Products"):
-                return data["Products"][0]["ID"], f"🔍 Found Existing Product: {full_var_sku}"
+            # Exact SKU match only — Cin7 API does partial/contains search so we
+            # must filter to avoid picking up old products with similar SKU strings
+            for _p in data.get("Products", []):
+                if _p.get("SKU", "").lower() == full_var_sku.lower():
+                    return _p["ID"], f"⚠️ Product already exists in Cin7 (SKU: {full_var_sku}) — skipping"
     except Exception as e:
         return None, f"💥 Check Ex: {e}"
     brand_name = row_data['untappd_brewery']
