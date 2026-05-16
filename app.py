@@ -829,6 +829,49 @@ def fetch_fallback_images():
     except Exception: pass
     return {}
 
+def fetch_shopify_source_data(sku):
+    """Fetch metafields and images from Shopify for a given SKU (used by Product Clone)."""
+    if "shopify" not in st.secrets: return {}
+    creds = st.secrets["shopify"]
+    endpoint = f"https://{creds['shop_url']}/admin/api/{creds.get('api_version','2024-04')}/graphql.json"
+    headers = {"X-Shopify-Access-Token": creds["access_token"], "Content-Type": "application/json"}
+    q = """query($q: String!) {
+      productVariants(first: 1, query: $q) {
+        edges { node {
+          product {
+            featuredImage { url }
+            images(first: 10) { edges { node { url } } }
+            metafields(first: 30, namespace: "custom") {
+              edges { node { key value } }
+            }
+          }
+        }}
+      }
+    }"""
+    try:
+        r = requests.post(endpoint, json={"query": q, "variables": {"q": f"sku:{sku}"}}, headers=headers)
+        edges = r.json().get("data", {}).get("productVariants", {}).get("edges", [])
+        if not edges: return {}
+        prod = edges[0]["node"]["product"]
+        mf = {e["node"]["key"]: e["node"]["value"] for e in prod.get("metafields", {}).get("edges", [])}
+        images = [e["node"]["url"] for e in prod.get("images", {}).get("edges", [])]
+        feat = (prod.get("featuredImage") or {})
+        prim = mf.get("primary_style", "")
+        sec  = mf.get("secondary_style", "")
+        style = f"{prim} - {sec}" if prim and sec else prim
+        return {
+            "untappd_style":   style,
+            "untappd_country": mf.get("ut_brewery_country", ""),
+            "untappd_ibu":     mf.get("ut_ibu", 0),
+            "Untappd_ID":      mf.get("ut_id", ""),
+            "Label_Thumb":     mf.get("ut_img_small", "") or feat.get("url", ""),
+            "Brewery_Loc":     mf.get("brewery_location", ""),
+            "collaborator":    mf.get("collaboration", ""),
+            "shopify_images":  images,
+        }
+    except Exception:
+        return {}
+
 def fetch_shopify_products_by_vendor(vendor):
     if "shopify" not in st.secrets: return []
     if not vendor or not isinstance(vendor, str): return []
@@ -1001,7 +1044,11 @@ def create_shopify_product_payload(row, location_prefix, variants_list):
                  style_prim, style_sec, abv_cat, row.get('Attribute_5', 'Rotational Product'), filter_val]
     tags_str = ",".join([str(t) for t in tags_list if t])
     images = []
-    if row.get('Label_Thumb'):
+    # Use all images from the source Shopify product if available (Product Clone flow)
+    for _img in row.get('shopify_images', []):
+        if _img: images.append({"src": _img})
+    # Fall back to Untappd label thumbnail if no source images carried over
+    if not images and row.get('Label_Thumb'):
         img_url = row['Label_Thumb']
         if "Icon.png" in img_url: img_url = img_url.replace("Icon.png", "HD.png") + "?size=hd"
         images.append({"src": img_url})
@@ -1960,8 +2007,9 @@ def _render_product_clone_ui():
 
     if pc_lookup:
         if pc_source_sku.strip():
-            with st.spinner("Looking up in Cin7..."):
+            with st.spinner("Looking up in Cin7 and Shopify..."):
                 _id, _price, _name, _attr5, _abv, _desc = fetch_cin7_product_details_by_sku(pc_source_sku.strip())
+                _sh_source = fetch_shopify_source_data(pc_source_sku.strip())
             if _name:
                 st.session_state.tb_lookup = {
                     'source_sku': pc_source_sku.strip(),
@@ -1969,6 +2017,7 @@ def _render_product_clone_ui():
                     'attr_5': _attr5,
                     'abv': _abv,
                     'desc': _desc,
+                    **_sh_source,
                 }
                 st.session_state.tb_create_log = []
                 st.session_state.tb_existence_check = []
@@ -2165,9 +2214,9 @@ def _render_product_clone_ui():
                             'untappd_brewery': brand_raw,
                             'untappd_product': pc_product,
                             'untappd_abv':     pc_abv,
-                            'untappd_ibu':     0,
-                            'untappd_style':   '',
-                            'untappd_country': '',
+                            'untappd_ibu':     lu.get('untappd_ibu', 0),
+                            'untappd_style':   lu.get('untappd_style', ''),
+                            'untappd_country': lu.get('untappd_country', ''),
                             'description':     pc_desc,
                             'format':          pc_format,
                             'pack_size':       _pack_int if _pack_int > 1 else '',
@@ -2178,10 +2227,11 @@ def _render_product_clone_ui():
                             'Keg_Connector':   _vc['keg_connector'],
                             'Attribute_5':     pc_attr5,
                             'Type':            pc_prod_type,
-                            'Untappd_ID':      '',
-                            'Label_Thumb':     '',
-                            'Brewery_Loc':     '',
-                            'collaborator':    '',
+                            'Untappd_ID':      lu.get('Untappd_ID', ''),
+                            'Label_Thumb':     lu.get('Label_Thumb', ''),
+                            'Brewery_Loc':     lu.get('Brewery_Loc', ''),
+                            'collaborator':    lu.get('collaborator', ''),
+                            'shopify_images':  lu.get('shopify_images', []),
                         }
                         if _fam_id:
                             _, _prod_log = create_cin7_product_only(_pc_row, _fam_id, family_base_sku, family_name_new, _pfx)
