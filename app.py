@@ -2102,7 +2102,7 @@ def _render_product_clone_ui():
         _depots_check = (["L", "G"] if pc_london and pc_glou else ["L"] if pc_london else ["G"])
         if st.button("🔍 Check Existence", key="pc_check_btn"):
             _check_results = []
-            with st.spinner("Checking Cin7 and Shopify by name..."):
+            with st.spinner("Checking Shopify by name..."):
                 # Shopify: fetch all products for this vendor once, then fuzzy-match
                 _sh_products = fetch_shopify_products_by_vendor(brand_raw)
                 for _dp in _depots_check:
@@ -2114,10 +2114,7 @@ def _render_product_clone_ui():
                         if fuzz.token_sort_ratio(_dp_family_title, _p['title']) >= 85:
                             _sh_prod_match = _p
                             break
-                    # Cin7: check family by name
-                    _cin7_fam = check_cin7_exists("productFamily", _dp_family_title, is_sku=False)
                     for _vc in _variants_to_create:
-                        # Shopify variant match
                         if _sh_prod_match:
                             _var_scores = [
                                 fuzz.token_sort_ratio(_vc['variant_name'], _ve['node']['title'])
@@ -2128,33 +2125,25 @@ def _render_product_clone_ui():
                                           else "⚠️ Product exists, variant appears new")
                         else:
                             _sh_status = "✅ New"
-                        # Cin7 variant match by name
-                        _cin7_var_name = f"{_dp}-{family_name_new} / {_vc['variant_name']}"
-                        _cin7_var = check_cin7_exists("product", _cin7_var_name, is_sku=False)
-                        _cin7_status = ("⚠️ Variant exists" if _cin7_var
-                                        else "⚠️ Family exists, variant new" if _cin7_fam
-                                        else "✅ New")
                         _check_results.append({
                             "Depot": f"{'🏙️ London' if _dp == 'L' else '🌳 Gloucester'}",
                             "Variant": _vc['variant_name'],
-                            "Cin7": _cin7_status,
                             "Shopify": _sh_status,
                         })
             st.session_state.tb_existence_check = _check_results
 
         if st.session_state.get('tb_existence_check'):
             _cr = st.session_state.tb_existence_check
-            _any_exists = any("⚠️" in r["Cin7"] or "⚠️" in r["Shopify"] for r in _cr)
+            _any_exists = any("⚠️" in r["Shopify"] for r in _cr)
             with st.container(border=True):
                 st.caption("**Existence Check**")
-                _xh0, _xh1, _xh2, _xh3 = st.columns([2, 3, 3, 2])
-                _xh0.write("Depot"); _xh1.write("Variant"); _xh2.write("Cin7"); _xh3.write("Shopify")
+                _xh0, _xh1, _xh2 = st.columns([2, 3, 3])
+                _xh0.write("Depot"); _xh1.write("Variant"); _xh2.write("Shopify")
                 for _r in _cr:
-                    _xc0, _xc1, _xc2, _xc3 = st.columns([2, 3, 3, 2])
-                    _xc0.write(_r["Depot"]); _xc1.write(_r["Variant"])
-                    _xc2.write(_r["Cin7"]); _xc3.write(_r["Shopify"])
+                    _xc0, _xc1, _xc2 = st.columns([2, 3, 3])
+                    _xc0.write(_r["Depot"]); _xc1.write(_r["Variant"]); _xc2.write(_r["Shopify"])
             if _any_exists:
-                st.warning("⚠️ One or more variants already exist. Creating will add to existing products where possible, or skip duplicates in Cin7.")
+                st.warning("⚠️ One or more variants already exist in Shopify. Creating will add to existing products where possible.")
 
         if st.button("🆕 Create in Cin7 + Shopify", type="primary", key="pc_create_btn"):
             if not pc_london and not pc_glou:
