@@ -2102,72 +2102,41 @@ def _render_product_clone_ui():
         _depots_check = (["L", "G"] if pc_london and pc_glou else ["L"] if pc_london else ["G"])
         if st.button("🔍 Check Existence", key="pc_check_btn"):
             _check_results = []
-            with st.spinner("Checking Shopify by name..."):
+            with st.spinner("Checking Shopify..."):
                 _sh_products = fetch_shopify_products_by_vendor(brand_raw)
-                # Same number-stripping as PO parser
-                def _strip_nums_ex(s):
-                    return re.sub(r'\b\d+[\d.,]*\b', '', str(s)).strip()
-                _search_name_clean = _strip_nums_ex(family_name_new)
+                # Build a fast lookup: exact title → product node
+                _sh_by_title = {_e['node']['title']: _e['node'] for _e in _sh_products}
                 for _dp in _depots_check:
-                    # Score all same-depot products — same logic as PO parser
-                    _prod_scores = []
-                    for _edge in _sh_products:
-                        _p = _edge['node']
-                        _p_title = _p['title']
-                        if not _p_title.startswith(f"{_dp}-"):
-                            continue  # only compare same-depot products
-                        _p_name = _p_title[2:].strip()  # strip depot prefix
-                        _p_name_clean = _strip_nums_ex(_p_name)
-                        _score = fuzz.token_sort_ratio(_search_name_clean, _p_name_clean)
-                        # Containment bonuses (identical to PO parser)
-                        _sl = _search_name_clean.lower(); _pl = _p_name_clean.lower()
-                        if _sl in _pl: _score += 20
-                        elif all(w in _pl for w in _sl.split() if len(w) > 2): _score += 10
-                        if _score > 65:
-                            _prod_scores.append((_score, _p))
-                    _prod_scores.sort(key=lambda x: x[0], reverse=True)
-                    _best_prod_entry = _prod_scores[0] if _prod_scores else None
+                    _expected_title = f"{_dp}-{family_name_new}"
+                    _matched_p = _sh_by_title.get(_expected_title)
                     for _vc in _variants_to_create:
-                        if _best_prod_entry:
-                            _prod_score, _matched_p = _best_prod_entry
-                            _matched_p_title = _matched_p['title']
-                            # Score all variants of the matched product
-                            _var_scored = [
-                                (fuzz.token_sort_ratio(_vc['variant_name'], _ve['node']['title']), _ve['node']['title'])
-                                for _ve in _matched_p['variants']['edges']
-                            ]
-                            _var_scored.sort(key=lambda x: x[0], reverse=True)
-                            _bvs, _bvt = _var_scored[0] if _var_scored else (0, "")
-                            if _bvs >= 80:
-                                _sh_status = f"⚠️ Exists ({_bvs}/100)"
-                                _match_info = f"{_matched_p_title} / {_bvt}"
+                        if _matched_p:
+                            _existing_variants = [_ve['node']['title'] for _ve in _matched_p['variants']['edges']]
+                            if _vc['variant_name'] in _existing_variants:
+                                _sh_status = "⚠️ Product + variant already exists"
                             else:
-                                _sh_status = f"🟡 Product found ({_prod_score}/100), variant new"
-                                _match_info = _matched_p_title
+                                _sh_status = "🟡 Product exists, variant appears new"
                         else:
                             _sh_status = "✅ New"
-                            _match_info = ""
                         _check_results.append({
                             "Depot": f"{'🏙️ London' if _dp == 'L' else '🌳 Gloucester'}",
                             "Variant": _vc['variant_name'],
                             "Shopify": _sh_status,
-                            "Matched": _match_info,
                         })
             st.session_state.tb_existence_check = _check_results
 
         if st.session_state.get('tb_existence_check'):
             _cr = st.session_state.tb_existence_check
-            _any_exists = any("⚠️" in r["Shopify"] for r in _cr)
+            _any_exists = any("⚠️" in r["Shopify"] or "🟡" in r["Shopify"] for r in _cr)
             with st.container(border=True):
                 st.caption("**Existence Check**")
-                _xh0, _xh1, _xh2, _xh3 = st.columns([2, 2, 3, 4])
-                _xh0.write("Depot"); _xh1.write("Variant"); _xh2.write("Status"); _xh3.write("Matched")
+                _xh0, _xh1, _xh2 = st.columns([2, 3, 4])
+                _xh0.write("Depot"); _xh1.write("Variant"); _xh2.write("Shopify")
                 for _r in _cr:
-                    _xc0, _xc1, _xc2, _xc3 = st.columns([2, 2, 3, 4])
-                    _xc0.write(_r["Depot"]); _xc1.write(_r["Variant"])
-                    _xc2.write(_r["Shopify"]); _xc3.write(_r.get("Matched", ""))
+                    _xc0, _xc1, _xc2 = st.columns([2, 3, 4])
+                    _xc0.write(_r["Depot"]); _xc1.write(_r["Variant"]); _xc2.write(_r["Shopify"])
             if _any_exists:
-                st.warning("⚠️ One or more variants already exist in Shopify. Creating will add to existing products where possible.")
+                st.warning("⚠️ One or more products or variants may already exist in Shopify.")
 
         if st.button("🆕 Create in Cin7 + Shopify", type="primary", key="pc_create_btn"):
             if not pc_london and not pc_glou:
