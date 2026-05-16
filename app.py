@@ -2236,7 +2236,12 @@ def _render_product_clone_ui():
                         if _fam_id:
                             _, _prod_log = create_cin7_product_only(_pc_row, _fam_id, family_base_sku, family_name_new, _pfx)
                             _logs.append(f"Cin7 Variant: {_prod_log}")
-                        create_or_extend_shopify_product(_pc_row, _pfx, sales_price_new, _logs)
+                        _sh_logs = []
+                        create_or_extend_shopify_product(_pc_row, _pfx, sales_price_new, _sh_logs)
+                        if _sh_logs:
+                            _logs.append(f"Shopify: {_sh_logs[0].strip()}")
+                            for _sl in _sh_logs[1:]:
+                                _logs.append(f"   {_sl.strip()}")
                 st.session_state.tb_create_log = _logs
                 st.rerun()
 
