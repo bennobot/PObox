@@ -2031,19 +2031,47 @@ def _render_product_clone_ui():
             family_base_sku = f"{_base_no_fmt}-{_f_code_new}"
 
         _wmap, _smap = fetch_weight_map()
+        _kmap = fetch_keg_codes()
         _lk = (pc_format.lower(), pc_vol.strip().lower())
         size_code_pc   = _smap.get(_lk, pc_vol.strip().upper().replace(' ', ''))
         unit_weight_pc = _wmap.get(_lk, 0.0)
+        _keg_info      = _kmap.get(pc_format.lower(), {})
+        _is_polykeg    = pc_format.lower() == "polykeg"
 
         _pack_int = int(pc_pack.strip()) if pc_pack.strip().isdigit() else 0
-        if _pack_int > 1:
-            variant_name_new = f"{_pack_int}x{pc_vol.strip()}"
-            sku_size_new     = f"{_pack_int}X{size_code_pc}"
-        else:
-            variant_name_new = pc_vol.strip()
-            sku_size_new     = size_code_pc
 
-        variant_sku_new = f"{family_base_sku}-{sku_size_new}"
+        # Mirror upload tab coupler logic exactly
+        if _is_polykeg:
+            _coupler_variants = [
+                {"connector": "Sankey Coupler", "sku_end": "ST"},
+                {"connector": "KeyKeg Coupler",  "sku_end": "KKT"},
+            ]
+        else:
+            _coupler_variants = [
+                {"connector": _keg_info.get("connector", ""), "sku_end": _keg_info.get("sku_end", "")}
+            ]
+
+        # Build one entry per coupler variant
+        _variants_to_create = []
+        for _cv in _coupler_variants:
+            _kc = _cv["connector"]
+            _ks = _cv["sku_end"]
+            if _pack_int > 1:
+                _vname = f"{_pack_int}x{pc_vol.strip()}"
+                _vsku  = f"{_pack_int}X{size_code_pc}"
+            elif _kc:
+                _vname = f"{pc_vol.strip()} - {_kc}"
+                _vsku  = f"{size_code_pc}{_ks}"
+            else:
+                _vname = pc_vol.strip()
+                _vsku  = size_code_pc
+            _variants_to_create.append({
+                "variant_name": _vname,
+                "variant_sku":  f"{family_base_sku}-{_vsku}",
+                "keg_connector": _kc,
+                "weight": unit_weight_pc * max(1, _pack_int),
+            })
+
         _abv_str        = f"{pc_abv}%" if pc_abv else ""
         family_name_new = (f"{brand_raw} / {pc_product} / {_abv_str} / {pc_format}"
                            if _abv_str else f"{brand_raw} / {pc_product} / {pc_format}")
@@ -2053,14 +2081,14 @@ def _render_product_clone_ui():
         with st.container(border=True):
             _ph, _psku, _pname, _pprice = st.columns([1, 2, 4, 1])
             _ph.write(""); _psku.write("SKU"); _pname.write("Name"); _pprice.write("Price")
-            for _dp in (["L", "G"] if pc_london and pc_glou else ["L"] if pc_london else ["G"]):
-                _dp_sku  = f"{_dp}-{variant_sku_new}"
-                _dp_name = f"{_dp}-{family_name_new} / {variant_name_new}"
-                _r0, _r1, _r2, _r3 = st.columns([1, 2, 4, 1])
-                _r0.write(f"{'🏙️' if _dp == 'L' else '🌳'} {_dp}")
-                _r1.write(_dp_sku)
-                _r2.write(_dp_name)
-                _r3.write(f"£{sales_price_new:.2f}")
+            _depots = (["L", "G"] if pc_london and pc_glou else ["L"] if pc_london else ["G"])
+            for _dp in _depots:
+                for _vc in _variants_to_create:
+                    _r0, _r1, _r2, _r3 = st.columns([1, 2, 4, 1])
+                    _r0.write(f"{'🏙️' if _dp == 'L' else '🌳'} {_dp}")
+                    _r1.write(f"{_dp}-{_vc['variant_sku']}")
+                    _r2.write(f"{_dp}-{family_name_new} / {_vc['variant_name']}")
+                    _r3.write(f"£{sales_price_new:.2f}")
             if not same_format:
                 st.warning("⚠️ Format changed — a new product family will be created in Cin7 and a new product in Shopify.")
 
@@ -2069,32 +2097,6 @@ def _render_product_clone_ui():
             if not pc_london and not pc_glou:
                 st.error("Select at least one depot.")
             else:
-                _pc_row = {
-                    'Variant_SKU':     variant_sku_new,
-                    'Variant_Name':    variant_name_new,
-                    'Family_Name':     family_name_new,
-                    'Family_SKU':      family_base_sku,
-                    'untappd_brewery': brand_raw,
-                    'untappd_product': pc_product,
-                    'untappd_abv':     pc_abv,
-                    'untappd_ibu':     0,
-                    'untappd_style':   '',
-                    'untappd_country': '',
-                    'description':     pc_desc,
-                    'format':          pc_format,
-                    'pack_size':       _pack_int if _pack_int > 1 else '',
-                    'volume':          pc_vol.strip(),
-                    'item_price':      pc_cost,
-                    'Sales_Price':     sales_price_new,
-                    'Weight':          unit_weight_pc * max(1, _pack_int),
-                    'Keg_Connector':   '',
-                    'Attribute_5':     pc_attr5,
-                    'Type':            pc_prod_type,
-                    'Untappd_ID':      '',
-                    'Label_Thumb':     '',
-                    'Brewery_Loc':     '',
-                    'collaborator':    '',
-                }
                 _prefixes = []
                 if pc_london: _prefixes.append("L")
                 if pc_glou:   _prefixes.append("G")
@@ -2103,10 +2105,37 @@ def _render_product_clone_ui():
                     _logs.append(f"\n── {_pfx} ({'London' if _pfx == 'L' else 'Gloucester'}) ──")
                     _fam_id, _fam_log = create_cin7_family_node(family_base_sku, family_name_new, brand_raw, _pfx)
                     _logs.append(f"Cin7 Family: {_fam_log}")
-                    if _fam_id:
-                        _, _prod_log = create_cin7_product_only(_pc_row, _fam_id, family_base_sku, family_name_new, _pfx)
-                        _logs.append(f"Cin7 Variant: {_prod_log}")
-                    create_or_extend_shopify_product(_pc_row, _pfx, sales_price_new, _logs)
+                    for _vc in _variants_to_create:
+                        _pc_row = {
+                            'Variant_SKU':     _vc['variant_sku'],
+                            'Variant_Name':    _vc['variant_name'],
+                            'Family_Name':     family_name_new,
+                            'Family_SKU':      family_base_sku,
+                            'untappd_brewery': brand_raw,
+                            'untappd_product': pc_product,
+                            'untappd_abv':     pc_abv,
+                            'untappd_ibu':     0,
+                            'untappd_style':   '',
+                            'untappd_country': '',
+                            'description':     pc_desc,
+                            'format':          pc_format,
+                            'pack_size':       _pack_int if _pack_int > 1 else '',
+                            'volume':          pc_vol.strip(),
+                            'item_price':      pc_cost,
+                            'Sales_Price':     sales_price_new,
+                            'Weight':          _vc['weight'],
+                            'Keg_Connector':   _vc['keg_connector'],
+                            'Attribute_5':     pc_attr5,
+                            'Type':            pc_prod_type,
+                            'Untappd_ID':      '',
+                            'Label_Thumb':     '',
+                            'Brewery_Loc':     '',
+                            'collaborator':    '',
+                        }
+                        if _fam_id:
+                            _, _prod_log = create_cin7_product_only(_pc_row, _fam_id, family_base_sku, family_name_new, _pfx)
+                            _logs.append(f"Cin7 Variant: {_prod_log}")
+                        create_or_extend_shopify_product(_pc_row, _pfx, sales_price_new, _logs)
                 st.session_state.tb_create_log = _logs
                 st.rerun()
 
