@@ -1965,6 +1965,7 @@ def _render_product_clone_ui():
                     'desc': _desc,
                 }
                 st.session_state.tb_create_log = []
+                st.session_state.tb_existence_check = []
             else:
                 st.error("SKU not found in Cin7.")
                 st.session_state.tb_lookup = None
@@ -2093,6 +2094,40 @@ def _render_product_clone_ui():
                 st.warning("⚠️ Format changed — a new product family will be created in Cin7 and a new product in Shopify.")
 
         st.divider()
+        _depots_check = (["L", "G"] if pc_london and pc_glou else ["L"] if pc_london else ["G"])
+        if st.button("🔍 Check Existence", key="pc_check_btn"):
+            _check_results = []
+            with st.spinner("Checking Cin7 and Shopify..."):
+                for _dp in _depots_check:
+                    for _vc in _variants_to_create:
+                        _full_sku = f"{_dp}-{_vc['variant_sku']}"
+                        _cin7_id, _, _, _, _, _ = fetch_cin7_product_details_by_sku(_full_sku)
+                        _cin7_status = "⚠️ Already exists" if _cin7_id else "✅ New"
+                        _sh_gid, _ = fetch_shopify_price_by_sku(_full_sku)
+                        _sh_status = "⚠️ Already exists" if _sh_gid else "✅ New"
+                        _check_results.append({
+                            "Depot": f"{'🏙️ London' if _dp == 'L' else '🌳 Gloucester'}",
+                            "SKU": _full_sku,
+                            "Variant": _vc['variant_name'],
+                            "Cin7": _cin7_status,
+                            "Shopify": _sh_status,
+                        })
+            st.session_state.tb_existence_check = _check_results
+
+        if st.session_state.get('tb_existence_check'):
+            _cr = st.session_state.tb_existence_check
+            _any_exists = any("⚠️" in r["Cin7"] or "⚠️" in r["Shopify"] for r in _cr)
+            with st.container(border=True):
+                st.caption("**Existence Check**")
+                _xh0, _xh1, _xh2, _xh3 = st.columns([2, 3, 3, 2])
+                _xh0.write("Depot"); _xh1.write("SKU"); _xh2.write("Cin7"); _xh3.write("Shopify")
+                for _r in _cr:
+                    _xc0, _xc1, _xc2, _xc3 = st.columns([2, 3, 3, 2])
+                    _xc0.write(_r["Depot"]); _xc1.write(_r["SKU"])
+                    _xc2.write(_r["Cin7"]); _xc3.write(_r["Shopify"])
+            if _any_exists:
+                st.warning("⚠️ One or more variants already exist. Creating will add to existing products where possible, or skip duplicates in Cin7.")
+
         if st.button("🆕 Create in Cin7 + Shopify", type="primary", key="pc_create_btn"):
             if not pc_london and not pc_glou:
                 st.error("Select at least one depot.")
@@ -2152,6 +2187,7 @@ if 'line_items_key' not in st.session_state: st.session_state.line_items_key = 0
 if 'matrix_key' not in st.session_state: st.session_state.matrix_key = 0
 if 'tb_lookup' not in st.session_state: st.session_state.tb_lookup = None
 if 'tb_create_log' not in st.session_state: st.session_state.tb_create_log = []
+if 'tb_existence_check' not in st.session_state: st.session_state.tb_existence_check = []
 if 'app_mode' not in st.session_state: st.session_state.app_mode = "📄 PO Bot"
 
 with st.sidebar:
