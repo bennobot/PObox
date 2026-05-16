@@ -2051,13 +2051,16 @@ def _render_product_clone_ui():
 
         st.divider()
         with st.container(border=True):
-            st.markdown("**Preview**")
-            _pc1, _pc2 = st.columns([3, 1])
-            with _pc1:
-                st.markdown(f"**`L-{family_name_new} / {variant_name_new}`**")
-                st.caption(f"G-{family_name_new} / {variant_name_new}")
-            with _pc2:
-                st.metric("Sell Price", f"£{sales_price_new:.2f}")
+            _ph, _psku, _pname, _pprice = st.columns([1, 2, 4, 1])
+            _ph.write(""); _psku.write("SKU"); _pname.write("Name"); _pprice.write("Price")
+            for _dp in (["L", "G"] if pc_london and pc_glou else ["L"] if pc_london else ["G"]):
+                _dp_sku  = f"{_dp}-{variant_sku_new}"
+                _dp_name = f"{_dp}-{family_name_new} / {variant_name_new}"
+                _r0, _r1, _r2, _r3 = st.columns([1, 2, 4, 1])
+                _r0.write(f"{'🏙️' if _dp == 'L' else '🌳'} {_dp}")
+                _r1.write(_dp_sku)
+                _r2.write(_dp_name)
+                _r3.write(f"£{sales_price_new:.2f}")
             if not same_format:
                 st.warning("⚠️ Format changed — a new product family will be created in Cin7 and a new product in Shopify.")
 
