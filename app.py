@@ -1958,7 +1958,7 @@ with st.sidebar:
             except: _fmt_idx = 0
 
             tb_format  = st.selectbox("Format", options=_fmt_opts, index=_fmt_idx, key="tb_format")
-            tb_pack    = st.number_input("Pack Size", min_value=1, value=12, step=1, key="tb_pack")
+            tb_pack    = st.text_input("Pack Size", value="", placeholder="e.g. 12 (leave blank for kegs/casks)", key="tb_pack")
             tb_vol     = st.text_input("Volume", placeholder="e.g. 44cl", key="tb_vol")
             tb_cost    = st.number_input("Cost Price £", min_value=0.0, format="%.2f", step=0.01, key="tb_cost")
             tb_product = st.text_input("Product Name", value=product_raw, key="tb_product")
@@ -1996,7 +1996,7 @@ with st.sidebar:
                 size_code_tb  = _smap.get(_lk, tb_vol.strip().upper().replace(' ', ''))
                 unit_weight_tb = _wmap.get(_lk, 0.0)
 
-                _pack_int = int(tb_pack)
+                _pack_int = int(tb_pack.strip()) if tb_pack.strip().isdigit() else 0
                 if _pack_int > 1:
                     variant_name_new = f"{_pack_int}x{tb_vol.strip()}"
                     sku_size_new     = f"{_pack_int}X{size_code_tb}"
@@ -2033,10 +2033,10 @@ with st.sidebar:
                             'untappd_style':   '',
                             'description':     lu['desc'],
                             'format':          tb_format,
-                            'pack_size':       _pack_int,
+                            'pack_size':       _pack_int if _pack_int > 1 else '',
                             'volume':          tb_vol.strip(),
                             'item_price':      tb_cost,
-                            'Weight':          unit_weight_tb * _pack_int,
+                            'Weight':          unit_weight_tb * max(1, _pack_int),
                             'Keg_Connector':   '',
                             'Attribute_5':     tb_attr5,
                             'Type':            'Beer',
