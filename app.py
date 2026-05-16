@@ -1076,6 +1076,82 @@ def set_variant_location(inventory_item_id, target_location_id, all_location_ids
             except: pass
     return True
 
+def create_or_extend_shopify_product(row_data, location_prefix, sales_price, logs_out):
+    """
+    If a Shopify product with the matching title already exists, add a new variant to it.
+    Otherwise create a brand-new product. Handles location assignment and publication.
+    logs_out is a list that messages are appended to.
+    """
+    if "shopify" not in st.secrets:
+        logs_out.append("❌ No Shopify secrets configured.")
+        return
+    creds = st.secrets["shopify"]
+    shop_url = creds.get("shop_url")
+    token = creds.get("access_token")
+    version = creds.get("api_version", "2024-04")
+    s_headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
+    is_london = location_prefix == "L"
+    loc_label = "London" if is_london else "Gloucester"
+
+    # Inject sales price so payload helpers pick it up
+    rd = dict(row_data)
+    rd['Sales_Price'] = sales_price
+
+    full_title = f"{location_prefix}-{rd['Family_Name']}"
+    variant_payload = create_shopify_variant_payload(rd, location_prefix)
+    loc_ids = fetch_shopify_location_ids()
+    pub_ids = fetch_publication_ids()
+
+    existing_prod_id, _ = check_shopify_title(full_title)
+
+    if existing_prod_id:
+        logs_out.append(f"   📦 Existing Shopify product found (ID: {existing_prod_id}) — adding variant")
+        try:
+            r = requests.post(
+                f"https://{shop_url}/admin/api/{version}/products/{existing_prod_id}/variants.json",
+                json={"variant": variant_payload}, headers=s_headers)
+            if r.status_code == 201:
+                new_var = r.json().get('variant', {})
+                variant_id = new_var.get('id')
+                logs_out.append(f"   ✅ Variant added (ID: {variant_id})")
+                if variant_id and loc_ids:
+                    inv_item_id = new_var.get('inventory_item_id')
+                    target_loc = loc_ids['london'] if is_london else loc_ids['gloucester']
+                    ok = set_variant_location(inv_item_id, target_loc, loc_ids['all_ids'])
+                    logs_out.append(f"   {'✅' if ok else '❌'} Inventory → {loc_label}")
+            else:
+                logs_out.append(f"   ❌ Add variant failed [{r.status_code}]: {r.text[:200]}")
+        except Exception as e:
+            logs_out.append(f"   💥 Exception: {e}")
+    else:
+        logs_out.append(f"   🆕 No existing product — creating new Shopify product")
+        product_payload = create_shopify_product_payload(rd, location_prefix, [variant_payload])
+        try:
+            r = requests.post(
+                f"https://{shop_url}/admin/api/{version}/products.json",
+                json=product_payload, headers=s_headers)
+            if r.status_code == 201:
+                new_prod = r.json().get('product', {})
+                prod_id = new_prod.get('id')
+                variants = new_prod.get('variants', [])
+                logs_out.append(f"   ✅ Product created (ID: {prod_id})")
+                if prod_id and pub_ids:
+                    pub_id = pub_ids['london'] if is_london else pub_ids['gloucester']
+                    if pub_id:
+                        ok = publish_product_to_app(prod_id, pub_id)
+                        logs_out.append(f"   {'✅' if ok else '❌'} Published to {loc_label} catalogue")
+                    else:
+                        logs_out.append(f"   ⚠️ No publication ID for {loc_label}")
+                if loc_ids and variants:
+                    inv_item_id = variants[0].get('inventory_item_id')
+                    target_loc = loc_ids['london'] if is_london else loc_ids['gloucester']
+                    ok = set_variant_location(inv_item_id, target_loc, loc_ids['all_ids'])
+                    logs_out.append(f"   {'✅' if ok else '❌'} Inventory → {loc_label}")
+            else:
+                logs_out.append(f"   ❌ Create failed [{r.status_code}]: {r.text[:200]}")
+        except Exception as e:
+            logs_out.append(f"   💥 Exception: {e}")
+
 def check_cin7_exists(endpoint, name_or_sku, is_sku=False):
     headers = get_cin7_headers()
     if not headers: return None
@@ -1866,6 +1942,175 @@ for k, v in DEFAULT_STATE.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
+def _render_product_clone_ui():
+    st.subheader("🛠️ Product Clone")
+    st.caption("Look up any existing SKU to pre-fill product details, then configure and create a new variant in Cin7 and Shopify.")
+
+    _col_sku, _col_btn = st.columns([4, 1])
+    with _col_sku:
+        pc_source_sku = st.text_input("Source SKU", placeholder="L-BREW...", key="pc_source_sku", label_visibility="collapsed")
+    with _col_btn:
+        pc_lookup = st.button("🔍 Lookup", key="pc_lookup_btn", use_container_width=True)
+
+    if pc_lookup:
+        if pc_source_sku.strip():
+            with st.spinner("Looking up in Cin7..."):
+                _id, _price, _name, _attr5, _abv, _desc = fetch_cin7_product_details_by_sku(pc_source_sku.strip())
+            if _name:
+                st.session_state.tb_lookup = {
+                    'source_sku': pc_source_sku.strip(),
+                    'cin7_name': _name,
+                    'attr_5': _attr5,
+                    'abv': _abv,
+                    'desc': _desc,
+                }
+                st.session_state.tb_create_log = []
+            else:
+                st.error("SKU not found in Cin7.")
+                st.session_state.tb_lookup = None
+        else:
+            st.warning("Enter a SKU first.")
+
+    if not st.session_state.get('tb_lookup'):
+        st.info("Enter an existing SKU above and click Lookup to begin.")
+        return
+
+    lu = st.session_state.tb_lookup
+    _parts = [p.strip() for p in lu['cin7_name'].split('/')]
+    brand_raw   = re.sub(r'^[LG]-', '', _parts[0]).strip() if _parts else ''
+    product_raw = _parts[1] if len(_parts) > 1 else ''
+    abv_raw     = _parts[2].replace('%', '').strip() if len(_parts) > 2 else lu['abv']
+    format_raw  = _parts[3] if len(_parts) > 3 else ''
+
+    st.success(f"📦 Source: **{lu['cin7_name']}**")
+    st.divider()
+
+    col_left, col_right = st.columns(2)
+
+    with col_left:
+        st.markdown("**Product Details**")
+        pc_product = st.text_input("Product Name", value=product_raw, key="pc_product")
+        pc_abv     = st.text_input("ABV", value=abv_raw, key="pc_abv")
+        pc_attr5   = st.selectbox("Product Type",
+                                  options=["Rotational Product", "Core Product"],
+                                  index=0 if 'Rotational' in lu.get('attr_5', '') else 1,
+                                  key="pc_attr5")
+        pc_prod_type = st.selectbox("Drink Type",
+                                    options=["Beer", "Wine", "Spirits", "Cider", "Soft Drink", "Other"],
+                                    key="pc_prod_type")
+        pc_desc = st.text_area("Description", value=lu.get('desc', ''), height=120, key="pc_desc")
+
+    with col_right:
+        st.markdown("**New Variant**")
+        _fmt_opts = ["Cans", "Bottles", "Steel Keg", "KeyKeg", "PolyKeg", "Cask", "Bag in Box"]
+        try: _fmt_idx = [f.lower() for f in _fmt_opts].index(format_raw.lower())
+        except: _fmt_idx = 0
+        pc_format = st.selectbox("Format", options=_fmt_opts, index=_fmt_idx, key="pc_format")
+        pc_pack   = st.text_input("Pack Size", value="", placeholder="e.g. 12 (blank for kegs/casks)", key="pc_pack")
+        pc_vol    = st.text_input("Volume", placeholder="e.g. 44cl", key="pc_vol")
+        pc_cost   = st.number_input("Cost Price £", min_value=0.0, format="%.2f", step=0.01, key="pc_cost")
+
+        st.markdown("**Depots**")
+        _dc1, _dc2 = st.columns(2)
+        with _dc1: pc_london = st.checkbox("London",     value=True, key="pc_london")
+        with _dc2: pc_glou   = st.checkbox("Gloucester", value=True, key="pc_glou")
+
+    # ── Preview ──────────────────────────────────────────
+    if pc_vol.strip() and pc_cost > 0:
+        _fmt_code_map = {"cans": "CAN", "bottles": "BTL", "steel keg": "SK",
+                         "keykeg": "KK", "polykeg": "PK", "cask": "CSK", "bag in box": "BIB"}
+        _f_code_new = _fmt_code_map.get(pc_format.lower(), "UN")
+        same_format = pc_format.lower() == format_raw.lower()
+
+        _raw_base = re.sub(r'^[LG]-', '', lu['source_sku'])
+        _sku_segs = _raw_base.rsplit('-', 1)
+        if same_format:
+            family_base_sku = _sku_segs[0] if len(_sku_segs) > 1 else _raw_base
+        else:
+            _base_no_fmt = _sku_segs[0].rsplit('-', 1)[0] if len(_sku_segs) > 1 else _raw_base
+            family_base_sku = f"{_base_no_fmt}-{_f_code_new}"
+
+        _wmap, _smap = fetch_weight_map()
+        _lk = (pc_format.lower(), pc_vol.strip().lower())
+        size_code_pc   = _smap.get(_lk, pc_vol.strip().upper().replace(' ', ''))
+        unit_weight_pc = _wmap.get(_lk, 0.0)
+
+        _pack_int = int(pc_pack.strip()) if pc_pack.strip().isdigit() else 0
+        if _pack_int > 1:
+            variant_name_new = f"{_pack_int}x{pc_vol.strip()}"
+            sku_size_new     = f"{_pack_int}X{size_code_pc}"
+        else:
+            variant_name_new = pc_vol.strip()
+            sku_size_new     = size_code_pc
+
+        variant_sku_new = f"{family_base_sku}-{sku_size_new}"
+        _abv_str        = f"{pc_abv}%" if pc_abv else ""
+        family_name_new = (f"{brand_raw} / {pc_product} / {_abv_str} / {pc_format}"
+                           if _abv_str else f"{brand_raw} / {pc_product} / {pc_format}")
+        sales_price_new = calculate_sell_price(pc_cost, pc_attr5, pc_format)
+
+        st.divider()
+        with st.container(border=True):
+            st.markdown("**Preview**")
+            p1, p2, p3 = st.columns(3)
+            p1.metric("Sell Price", f"£{sales_price_new:.2f}")
+            p2.metric("Variant", variant_name_new)
+            p3.metric("SKU (base)", variant_sku_new[:28] + "…" if len(variant_sku_new) > 28 else variant_sku_new)
+            st.caption(f"Full name: `L-{family_name_new} / {variant_name_new}`")
+            if not same_format:
+                st.warning("⚠️ Format changed — a new product family will be created in Cin7 and a new product in Shopify.")
+
+        st.divider()
+        if st.button("🆕 Create in Cin7 + Shopify", type="primary", key="pc_create_btn"):
+            if not pc_london and not pc_glou:
+                st.error("Select at least one depot.")
+            else:
+                _pc_row = {
+                    'Variant_SKU':     variant_sku_new,
+                    'Variant_Name':    variant_name_new,
+                    'Family_Name':     family_name_new,
+                    'Family_SKU':      family_base_sku,
+                    'untappd_brewery': brand_raw,
+                    'untappd_product': pc_product,
+                    'untappd_abv':     pc_abv,
+                    'untappd_ibu':     0,
+                    'untappd_style':   '',
+                    'untappd_country': '',
+                    'description':     pc_desc,
+                    'format':          pc_format,
+                    'pack_size':       _pack_int if _pack_int > 1 else '',
+                    'volume':          pc_vol.strip(),
+                    'item_price':      pc_cost,
+                    'Sales_Price':     sales_price_new,
+                    'Weight':          unit_weight_pc * max(1, _pack_int),
+                    'Keg_Connector':   '',
+                    'Attribute_5':     pc_attr5,
+                    'Type':            pc_prod_type,
+                    'Untappd_ID':      '',
+                    'Label_Thumb':     '',
+                    'Brewery_Loc':     '',
+                    'collaborator':    '',
+                }
+                _prefixes = []
+                if pc_london: _prefixes.append("L")
+                if pc_glou:   _prefixes.append("G")
+                _logs = []
+                for _pfx in _prefixes:
+                    _logs.append(f"\n── {_pfx} ({'London' if _pfx == 'L' else 'Gloucester'}) ──")
+                    _fam_id, _fam_log = create_cin7_family_node(family_base_sku, family_name_new, brand_raw, _pfx)
+                    _logs.append(f"Cin7 Family: {_fam_log}")
+                    if _fam_id:
+                        _, _prod_log = create_cin7_product_only(_pc_row, _fam_id, family_base_sku, family_name_new, _pfx)
+                        _logs.append(f"Cin7 Variant: {_prod_log}")
+                    create_or_extend_shopify_product(_pc_row, _pfx, sales_price_new, _logs)
+                st.session_state.tb_create_log = _logs
+                st.rerun()
+
+    if st.session_state.get('tb_create_log'):
+        st.divider()
+        st.markdown("**Creation Log**")
+        st.code("\n".join(st.session_state.tb_create_log), language="text")
+
 # Keys that need counters (not in DEFAULT_STATE)
 if 'master_suppliers' not in st.session_state: st.session_state.master_suppliers = fetch_cin7_brands()
 if 'drive_files' not in st.session_state: st.session_state.drive_files = []
@@ -1874,8 +2119,18 @@ if 'line_items_key' not in st.session_state: st.session_state.line_items_key = 0
 if 'matrix_key' not in st.session_state: st.session_state.matrix_key = 0
 if 'tb_lookup' not in st.session_state: st.session_state.tb_lookup = None
 if 'tb_create_log' not in st.session_state: st.session_state.tb_create_log = []
+if 'app_mode' not in st.session_state: st.session_state.app_mode = "📄 PO Bot"
 
 with st.sidebar:
+    # ── Mode selector ────────────────────────────────────
+    app_mode = st.radio(
+        "App Mode",
+        options=["📄 PO Bot", "🛠️ Product Clone"],
+        key="app_mode",
+        horizontal=False,
+        label_visibility="collapsed",
+    )
+
     # API key — set silently from secrets; only show input if missing
     if "GOOGLE_API_KEY" in st.secrets:
         api_key = st.secrets["GOOGLE_API_KEY"]
@@ -1896,172 +2151,24 @@ with st.sidebar:
 
     st.divider()
 
-    st.subheader("📋 Invoice Rules")
-    with st.form("teaching_form"):
-        st.caption("Test a new rule here. Press Ctrl+Enter to apply.")
-        custom_rule = st.text_area("Inject Temporary Rule:", height=100, key="lab_custom_rule")
-        st.form_submit_button("Set Rule")
+    if app_mode == "📄 PO Bot":
+        st.subheader("📋 Invoice Rules")
+        with st.form("teaching_form"):
+            st.caption("Test a new rule here. Press Ctrl+Enter to apply.")
+            custom_rule = st.text_area("Inject Temporary Rule:", height=100, key="lab_custom_rule")
+            st.form_submit_button("Set Rule")
 
-    if custom_rule:
-        st.markdown("---")
-        st.caption("💾 **Save to Knowledge Base**")
-        st.caption("Copy this snippet into `SUPPLIER_RULEBOOK`:")
-        current_supplier = "Unknown Supplier"
-        if st.session_state.header_data is not None and not st.session_state.header_data.empty:
-            current_supplier = st.session_state.header_data.iloc[0].get('Payable_To', 'Unknown Supplier')
-        formatted_rule = f'   "{current_supplier}": """\n   {custom_rule.strip()}\n   """,\n'
-        st.code(formatted_rule, language="python")
-
-    st.divider()
-
-    # ── TOOLBOX ──────────────────────────────────────────────
-    st.subheader("🛠️ Toolbox")
-
-    with st.expander("➕ Create Product / Variant", expanded=False):
-        st.caption("Look up an existing SKU to pre-fill product details, then configure a new variant.")
-
-        tb_sku = st.text_input("Source SKU", placeholder="L-BREW...", key="tb_source_sku")
-        if st.button("🔍 Lookup", key="tb_lookup_btn"):
-            if tb_sku.strip():
-                with st.spinner("Looking up in Cin7..."):
-                    _tb_id, _tb_price, _tb_name, _tb_attr5, _tb_abv, _tb_desc = fetch_cin7_product_details_by_sku(tb_sku.strip())
-                if _tb_name:
-                    st.session_state.tb_lookup = {
-                        'source_sku': tb_sku.strip(),
-                        'cin7_name': _tb_name,
-                        'attr_5': _tb_attr5,
-                        'abv': _tb_abv,
-                        'desc': _tb_desc,
-                    }
-                    st.session_state.pop('tb_create_log', None)
-                else:
-                    st.error("SKU not found in Cin7.")
-                    st.session_state.pop('tb_lookup', None)
-            else:
-                st.warning("Enter a SKU first.")
-
-        if st.session_state.get('tb_lookup'):
-            lu = st.session_state.tb_lookup
-
-            # Parse Cin7 name: "L-Brand / Product / ABV% / Format / Variant"
-            _parts = [p.strip() for p in lu['cin7_name'].split('/')]
-            brand_raw  = re.sub(r'^[LG]-', '', _parts[0]).strip() if _parts else ''
-            product_raw = _parts[1] if len(_parts) > 1 else ''
-            abv_raw     = _parts[2].replace('%', '').strip() if len(_parts) > 2 else lu['abv']
-            format_raw  = _parts[3] if len(_parts) > 3 else ''
-
-            st.info(f"📦 **{brand_raw}** — {product_raw}\n\n_{format_raw}_ | {abv_raw}%")
-            st.markdown("**New Variant Details**")
-
-            _fmt_opts = ["Cans", "Bottles", "Steel Keg", "KeyKeg", "PolyKeg", "Cask", "Bag in Box"]
-            try: _fmt_idx = [f.lower() for f in _fmt_opts].index(format_raw.lower())
-            except: _fmt_idx = 0
-
-            tb_format  = st.selectbox("Format", options=_fmt_opts, index=_fmt_idx, key="tb_format")
-            tb_pack    = st.text_input("Pack Size", value="", placeholder="e.g. 12 (leave blank for kegs/casks)", key="tb_pack")
-            tb_vol     = st.text_input("Volume", placeholder="e.g. 44cl", key="tb_vol")
-            tb_cost    = st.number_input("Cost Price £", min_value=0.0, format="%.2f", step=0.01, key="tb_cost")
-            tb_product = st.text_input("Product Name", value=product_raw, key="tb_product")
-            tb_abv     = st.text_input("ABV", value=abv_raw, key="tb_abv")
-            tb_attr5   = st.selectbox("Product Type",
-                                      options=["Rotational Product", "Core Product"],
-                                      index=0 if 'Rotational' in lu.get('attr_5', '') else 1,
-                                      key="tb_attr5")
-
-            st.caption("**Depots**")
-            _dc1, _dc2 = st.columns(2)
-            with _dc1: tb_london = st.checkbox("London",      value=True, key="tb_london")
-            with _dc2: tb_glou   = st.checkbox("Gloucester",  value=True, key="tb_glou")
-
-            # ── Preview ──────────────────────────────────────
-            if tb_vol.strip() and tb_cost > 0:
-                _fmt_code_map = {"cans": "CAN", "bottles": "BTL", "steel keg": "SK",
-                                 "keykeg": "KK", "polykeg": "PK", "cask": "CSK", "bag in box": "BIB"}
-                _f_code_new = _fmt_code_map.get(tb_format.lower(), "UN")
-                same_format = tb_format.lower() == format_raw.lower()
-
-                # Derive family_base_sku from source SKU
-                _raw_base = re.sub(r'^[LG]-', '', lu['source_sku'])
-                _sku_segs = _raw_base.rsplit('-', 1)
-                if same_format:
-                    family_base_sku = _sku_segs[0] if len(_sku_segs) > 1 else _raw_base
-                else:
-                    _base_no_fmt = (_sku_segs[0].rsplit('-', 1)[0]
-                                    if len(_sku_segs) > 1 else _raw_base)
-                    family_base_sku = f"{_base_no_fmt}-{_f_code_new}"
-
-                # Size code & weight from reference sheet
-                _wmap, _smap = fetch_weight_map()
-                _lk = (tb_format.lower(), tb_vol.strip().lower())
-                size_code_tb  = _smap.get(_lk, tb_vol.strip().upper().replace(' ', ''))
-                unit_weight_tb = _wmap.get(_lk, 0.0)
-
-                _pack_int = int(tb_pack.strip()) if tb_pack.strip().isdigit() else 0
-                if _pack_int > 1:
-                    variant_name_new = f"{_pack_int}x{tb_vol.strip()}"
-                    sku_size_new     = f"{_pack_int}X{size_code_tb}"
-                else:
-                    variant_name_new = tb_vol.strip()
-                    sku_size_new     = size_code_tb
-
-                variant_sku_new  = f"{family_base_sku}-{sku_size_new}"
-                _abv_str         = f"{tb_abv}%" if tb_abv else ""
-                family_name_new  = (f"{brand_raw} / {tb_product} / {_abv_str} / {tb_format}"
-                                    if _abv_str else f"{brand_raw} / {tb_product} / {tb_format}")
-                sales_price_new  = calculate_sell_price(tb_cost, tb_attr5, tb_format)
-
-                with st.container(border=True):
-                    st.caption("**Preview**")
-                    st.text(f"SKU:     {variant_sku_new}")
-                    st.text(f"Family:  {family_base_sku}")
-                    st.text(f"Name:    L-{family_name_new} / {variant_name_new}")
-                    st.text(f"Price:   £{sales_price_new:.2f}")
-                    if not same_format:
-                        st.warning("⚠️ Format changed — a new product family will be created.")
-
-                if st.button("🆕 Create in Cin7", key="tb_create_btn", type="primary"):
-                    if not tb_london and not tb_glou:
-                        st.error("Select at least one depot.")
-                    else:
-                        _tb_row = {
-                            'Variant_SKU':    variant_sku_new,
-                            'Variant_Name':   variant_name_new,
-                            'untappd_brewery': brand_raw,
-                            'untappd_product': tb_product,
-                            'untappd_abv':     tb_abv,
-                            'untappd_ibu':     0,
-                            'untappd_style':   '',
-                            'description':     lu['desc'],
-                            'format':          tb_format,
-                            'pack_size':       _pack_int if _pack_int > 1 else '',
-                            'volume':          tb_vol.strip(),
-                            'item_price':      tb_cost,
-                            'Weight':          unit_weight_tb * max(1, _pack_int),
-                            'Keg_Connector':   '',
-                            'Attribute_5':     tb_attr5,
-                            'Type':            'Beer',
-                        }
-                        _prefixes = []
-                        if tb_london: _prefixes.append("L")
-                        if tb_glou:   _prefixes.append("G")
-                        _tb_logs = []
-                        for _pfx in _prefixes:
-                            _fam_id, _fam_log = create_cin7_family_node(
-                                family_base_sku, family_name_new, brand_raw, _pfx)
-                            _tb_logs.append(_fam_log)
-                            if _fam_id:
-                                _, _prod_log = create_cin7_product_only(
-                                    _tb_row, _fam_id, family_base_sku, family_name_new, _pfx)
-                                _tb_logs.append(_prod_log)
-                        st.session_state.tb_create_log = _tb_logs
-                        st.rerun()
-
-        if st.session_state.get('tb_create_log'):
-            for _log in st.session_state.tb_create_log:
-                st.write(_log)
-
-    # Add further tools here as new st.expander blocks
-    # ─────────────────────────────────────────────────────────
+        if custom_rule:
+            st.markdown("---")
+            st.caption("💾 **Save to Knowledge Base**")
+            st.caption("Copy this snippet into `SUPPLIER_RULEBOOK`:")
+            current_supplier = "Unknown Supplier"
+            if st.session_state.header_data is not None and not st.session_state.header_data.empty:
+                current_supplier = st.session_state.header_data.iloc[0].get('Payable_To', 'Unknown Supplier')
+            formatted_rule = f'   "{current_supplier}": """\n   {custom_rule.strip()}\n   """,\n'
+            st.code(formatted_rule, language="python")
+    else:
+        custom_rule = ""
 
     st.divider()
     if st.button("Log Out"):
@@ -2071,6 +2178,10 @@ with st.sidebar:
 # ==========================================
 # 3. MAIN UI
 # ==========================================
+
+if st.session_state.app_mode == "🛠️ Product Clone":
+    _render_product_clone_ui()
+    st.stop()
 
 st.subheader("1. Select Invoice Source")
 tab_upload, tab_drive = st.tabs(["⬆️ Manual Upload", "☁️ Google Drive"])
