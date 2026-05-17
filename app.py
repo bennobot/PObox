@@ -743,16 +743,22 @@ def push_shopify_product_update(old_sku, new_sku, new_product_title, new_variant
     except Exception as e:
         return False, f"Lookup failed: {e}"
     errors = []
+    updated = []   # tracks what was actually sent successfully
     # Product level: title + description
     prod_p = {"id": int(num_prod)}
     if new_product_title: prod_p["title"] = new_product_title
-    if new_desc and str(new_desc).strip(): prod_p["body_html"] = str(new_desc).strip()
+    if new_desc is not None and str(new_desc).strip(): prod_p["body_html"] = str(new_desc).strip()
     if len(prod_p) > 1:
         try:
             r = requests.put(f"https://{shop_url}/admin/api/{version}/products/{num_prod}.json",
                              json={"product": prod_p}, headers=rest_h)
-            if r.status_code != 200: errors.append(f"Title: {r.text[:100]}")
-        except Exception as e: errors.append(f"Title: {e}")
+            if r.status_code == 200:
+                if "title"     in prod_p: updated.append("title")
+                if "body_html" in prod_p: updated.append("description")
+            else:
+                if "title"     in prod_p: errors.append(f"title [{r.status_code}]: {r.text[:80]}")
+                if "body_html" in prod_p: errors.append(f"description [{r.status_code}]: {r.text[:80]}")
+        except Exception as e: errors.append(f"product PUT: {e}")
     # Variant level: option1 (displayed title) + SKU
     var_p = {"id": int(num_var)}
     if new_variant_title:              var_p["option1"] = new_variant_title
@@ -761,12 +767,17 @@ def push_shopify_product_update(old_sku, new_sku, new_product_title, new_variant
         try:
             r = requests.put(f"https://{shop_url}/admin/api/{version}/variants/{num_var}.json",
                              json={"variant": var_p}, headers=rest_h)
-            if r.status_code != 200: errors.append(f"Variant: {r.text[:100]}")
-        except Exception as e: errors.append(f"Variant: {e}")
+            if r.status_code == 200:
+                if "option1" in var_p: updated.append("variant title")
+                if "sku"     in var_p: updated.append("SKU")
+            else:
+                errors.append(f"variant [{r.status_code}]: {r.text[:80]}")
+        except Exception as e: errors.append(f"variant PUT: {e}")
     # Price
     if new_price is not None:
         ok, msg = update_shopify_price(variant_gid, new_price)
-        if not ok: errors.append(f"Price: {msg}")
+        if ok: updated.append("price")
+        else: errors.append(f"price: {msg}")
     # ABV metafield
     if new_abv and str(new_abv).strip():
         mut = """mutation MetafieldsSet($m:[MetafieldsSetInput!]!){metafieldsSet(metafields:$m){userErrors{field message}}}"""
@@ -776,10 +787,12 @@ def push_shopify_product_update(old_sku, new_sku, new_product_title, new_variant
                 "value": str(new_abv).replace("%","").strip(), "type": "number_decimal"
             }]}}, headers=gql_h)
             errs = r.json().get("data", {}).get("metafieldsSet", {}).get("userErrors", [])
-            if errs: errors.append(f"ABV: {errs}")
+            if errs: errors.append(f"ABV metafield: {errs}")
+            else: updated.append("ABV")
         except Exception as e: errors.append(f"ABV: {e}")
-    if errors: return False, " | ".join(errors)
-    return True, "✅ Updated"
+    updated_str = ", ".join(updated) if updated else "nothing sent"
+    if errors: return False, f"❌ Errors: {' | '.join(errors)} (sent: {updated_str})"
+    return True, f"✅ Updated ({updated_str})"
 
 # ─────────────────────────────────────────────────────────────────────────────
 
