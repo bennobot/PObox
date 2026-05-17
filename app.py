@@ -500,7 +500,6 @@ def update_shopify_product_details(sku, new_product_title, new_variant_title, ol
     shop_url = creds.get("shop_url")
     token = creds.get("access_token")
     version = creds.get("api_version", "2024-04")
-    rest_headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
     gql_endpoint = f"https://{shop_url}/admin/api/{version}/graphql.json"
     gql_headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
 
@@ -531,67 +530,61 @@ def update_shopify_product_details(sku, new_product_title, new_variant_title, ol
         new_abv_str = str(new_abv).replace("%", "").strip() + "%"
         updated_title = updated_title.replace(f" / {old_abv_str} / ", f" / {new_abv_str} / ", 1)
 
-    product_updates = {"id": int(numeric_product_id)}
-    if updated_title and updated_title != current_title:
-        product_updates["title"] = updated_title
-    if new_description is not None and str(new_description).strip():
-        product_updates["body_html"] = str(new_description).strip()
-    if len(product_updates) > 1:
+    _has_new_desc = new_description is not None and str(new_description).strip()
+    _prod_input = {"id": product_gid}
+    if updated_title and updated_title != current_title: _prod_input["title"] = updated_title
+    if _has_new_desc: _prod_input["descriptionHtml"] = str(new_description).strip()
+    if len(_prod_input) > 1:
+        _prod_mut = """mutation productUpdate($input: ProductInput!) {
+          productUpdate(input: $input) { product { id } userErrors { field message } }
+        }"""
         try:
-            r = requests.put(
-                f"https://{shop_url}/admin/api/{version}/products/{numeric_product_id}.json",
-                json={"product": product_updates},
-                headers=rest_headers
-            )
-            if r.status_code != 200: errors.append(f"Product: {r.text[:100]}")
-        except Exception as e:
-            errors.append(f"Product: {e}")
+            r = requests.post(gql_endpoint, json={"query": _prod_mut, "variables": {"input": _prod_input}}, headers=gql_headers)
+            _perrs = r.json().get("data", {}).get("productUpdate", {}).get("userErrors", [])
+            if _perrs: errors.append(f"Product: {_perrs}")
+        except Exception as e: errors.append(f"Product: {e}")
 
     if new_variant_title:
+        _var_mut = """mutation productVariantsBulkUpdate($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+          productVariantsBulkUpdate(productId: $productId, variants: $variants) {
+            productVariants { id }
+            userErrors { field message }
+          }
+        }"""
         try:
-            r = requests.put(
-                f"https://{shop_url}/admin/api/{version}/variants/{numeric_variant_id}.json",
-                json={"variant": {"id": int(numeric_variant_id), "option1": new_variant_title}},
-                headers=rest_headers
-            )
-            if r.status_code != 200: errors.append(f"Variant: {r.text[:100]}")
-        except Exception as e:
-            errors.append(f"Variant: {e}")
+            r = requests.post(gql_endpoint, json={"query": _var_mut, "variables": {
+                "productId": product_gid,
+                "variants": [{"id": variant_gid, "optionValues": [{"name": new_variant_title, "optionName": "Title"}]}]
+            }}, headers=gql_headers)
+            _verrs = r.json().get("data", {}).get("productVariantsBulkUpdate", {}).get("userErrors", [])
+            if _verrs: errors.append(f"Variant: {_verrs}")
+        except Exception as e: errors.append(f"Variant: {e}")
 
-    # Update ABV metafield only if it already exists on this product
+    # Update metafields: ABV (only if it already exists) + ut_description
+    _mf_updates = []
     if new_abv is not None and str(new_abv).strip() and str(new_abv).strip().lower() != 'nan' and product_gid:
         abv_clean = str(new_abv).replace("%", "").strip()
-        check_query = """
-        query($id: ID!) {
-          product(id: $id) {
-            metafield(namespace: "custom", key: "abv") { id }
-          }
-        }
-        """
+        # Only update ABV if the metafield already exists (avoid creating it on wrong products)
+        _abv_check = """query($id: ID!) { product(id: $id) { metafield(namespace: "custom", key: "abv") { id } } }"""
         try:
-            r = requests.post(gql_endpoint, json={"query": check_query, "variables": {"id": product_gid}}, headers=gql_headers)
-            existing = r.json().get("data", {}).get("product", {}).get("metafield")
-            if existing:
-                mutation = """
-                mutation MetafieldsSet($metafields: [MetafieldsSetInput!]!) {
-                  metafieldsSet(metafields: $metafields) {
-                    metafields { key namespace value }
-                    userErrors { field message code }
-                  }
-                }
-                """
-                variables = {"metafields": [{
-                    "ownerId": product_gid,
-                    "namespace": "custom",
-                    "key": "abv",
-                    "value": abv_clean,
-                    "type": "number_decimal"
-                }]}
-                r2 = requests.post(gql_endpoint, json={"query": mutation, "variables": variables}, headers=gql_headers)
-                gql_errors = r2.json().get("data", {}).get("metafieldsSet", {}).get("userErrors", [])
-                if gql_errors: errors.append(f"ABV metafield: {gql_errors}")
+            r = requests.post(gql_endpoint, json={"query": _abv_check, "variables": {"id": product_gid}}, headers=gql_headers)
+            if r.json().get("data", {}).get("product", {}).get("metafield"):
+                _mf_updates.append({"ownerId": product_gid, "namespace": "custom", "key": "abv", "value": abv_clean, "type": "number_decimal"})
         except Exception as e:
-            errors.append(f"ABV metafield: {e}")
+            errors.append(f"ABV check: {e}")
+    if _has_new_desc and product_gid:
+        _mf_updates.append({"ownerId": product_gid, "namespace": "custom", "key": "ut_description",
+                            "value": str(new_description).strip(), "type": "multi_line_text_field"})
+    if _mf_updates:
+        _mf_mut = """mutation MetafieldsSet($metafields: [MetafieldsSetInput!]!) {
+          metafieldsSet(metafields: $metafields) { userErrors { field message code } }
+        }"""
+        try:
+            r = requests.post(gql_endpoint, json={"query": _mf_mut, "variables": {"metafields": _mf_updates}}, headers=gql_headers)
+            _mferrs = r.json().get("data", {}).get("metafieldsSet", {}).get("userErrors", [])
+            if _mferrs: errors.append(f"Metafields: {_mferrs}")
+        except Exception as e:
+            errors.append(f"Metafields: {e}")
 
     if errors: return False, " | ".join(errors)
     title_msg = f"title: '{current_title}' → '{updated_title}'" if updated_title != current_title else f"no title change (current: '{current_title}')"
@@ -728,7 +721,6 @@ def push_shopify_product_update(old_sku, new_sku, new_product_title, new_variant
     if "shopify" not in st.secrets: return False, "No Shopify secrets"
     creds = st.secrets["shopify"]
     shop_url = creds.get("shop_url"); token = creds.get("access_token"); version = creds.get("api_version", "2024-04")
-    rest_h = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
     gql_ep = f"https://{shop_url}/admin/api/{version}/graphql.json"
     gql_h  = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
     # Resolve IDs from old SKU
@@ -770,20 +762,27 @@ def push_shopify_product_update(old_sku, new_sku, new_product_title, new_variant
                 if "descriptionHtml" in _prod_input: updated.append("description")
         except Exception as e: errors.append(f"product mutation: {e}")
 
-    # ── Variant level: option1 (displayed title) + SKU via REST ──────────────
-    var_p = {"id": int(num_var)}
-    if new_variant_title:              var_p["option1"] = new_variant_title
-    if new_sku and new_sku != old_sku: var_p["sku"]     = new_sku
-    if len(var_p) > 1:
+    # ── Variant level: option (displayed title) + SKU via GraphQL ────────────
+    _var_input = {"id": variant_gid}
+    if new_variant_title: _var_input["optionValues"] = [{"name": new_variant_title, "optionName": "Title"}]
+    if new_sku and new_sku != old_sku: _var_input["sku"] = new_sku
+    if len(_var_input) > 1:
+        _var_mut = """mutation productVariantsBulkUpdate($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+          productVariantsBulkUpdate(productId: $productId, variants: $variants) {
+            productVariants { id }
+            userErrors { field message }
+          }
+        }"""
         try:
-            r = requests.put(f"https://{shop_url}/admin/api/{version}/variants/{num_var}.json",
-                             json={"variant": var_p}, headers=rest_h)
-            if r.status_code == 200:
-                if "option1" in var_p: updated.append("variant title")
-                if "sku"     in var_p: updated.append("SKU")
+            r = requests.post(gql_ep, json={"query": _var_mut, "variables": {
+                "productId": product_gid, "variants": [_var_input]
+            }}, headers=gql_h)
+            _verrs = r.json().get("data", {}).get("productVariantsBulkUpdate", {}).get("userErrors", [])
+            if _verrs: errors.append(f"variant: {_verrs}")
             else:
-                errors.append(f"variant [{r.status_code}]: {r.text[:80]}")
-        except Exception as e: errors.append(f"variant PUT: {e}")
+                if "optionValues" in _var_input: updated.append("variant title")
+                if "sku" in _var_input: updated.append("SKU")
+        except Exception as e: errors.append(f"variant mutation: {e}")
 
     # ── Price ─────────────────────────────────────────────────────────────────
     if new_price is not None:
@@ -1040,19 +1039,19 @@ def fetch_shopify_products_by_vendor(vendor):
 def check_shopify_title(title):
     if "shopify" not in st.secrets: return None, None
     creds = st.secrets["shopify"]
-    shop_url = creds.get("shop_url")
-    token = creds.get("access_token")
-    version = creds.get("api_version", "2024-04")
-    url = f"https://{shop_url}/admin/api/{version}/products.json"
-    headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
+    shop_url = creds.get("shop_url"); token = creds.get("access_token"); version = creds.get("api_version", "2024-04")
+    ep = f"https://{shop_url}/admin/api/{version}/graphql.json"
+    h  = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
+    q  = """query($q:String!){products(first:5,query:$q){edges{node{id title variants(first:1){edges{node{id}}}}}}}"""
     try:
-        response = requests.get(url, headers=headers, params={"title": title})
-        if response.status_code == 200:
-            products = response.json().get("products", [])
-            for p in products:
-                if p["title"] == title:
-                    v_id = p["variants"][0]["id"] if p["variants"] else None
-                    return p["id"], v_id
+        r = requests.post(ep, json={"query": q, "variables": {"q": f'title:"{title}"'}}, headers=h)
+        for e in r.json().get("data", {}).get("products", {}).get("edges", []):
+            node = e["node"]
+            if node["title"] == title:
+                numeric_id = int(node["id"].split("/")[-1])
+                v_edges = node["variants"]["edges"]
+                v_id = int(v_edges[0]["node"]["id"].split("/")[-1]) if v_edges else None
+                return numeric_id, v_id
     except Exception: pass
     return None, None
 
@@ -1219,41 +1218,62 @@ def create_shopify_product_payload(row, location_prefix, variants_list):
 def fetch_shopify_location_ids():
     if "shopify" not in st.secrets: return None
     creds = st.secrets["shopify"]
-    shop_url = creds.get("shop_url")
-    token = creds.get("access_token")
-    version = creds.get("api_version", "2024-04")
-    url = f"https://{shop_url}/admin/api/{version}/locations.json"
-    headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
+    shop_url = creds.get("shop_url"); token = creds.get("access_token"); version = creds.get("api_version", "2024-04")
+    ep = f"https://{shop_url}/admin/api/{version}/graphql.json"
+    h  = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
     loc_map = {'london': creds.get('location_id_london'), 'gloucester': creds.get('location_id_gloucester'), 'all_ids': []}
+    q = """{locations(first:25){edges{node{id name}}}}"""
     try:
-        r = requests.get(url, headers=headers)
-        if r.status_code == 200:
-            locations = r.json().get('locations', [])
-            for loc in locations:
-                lid = loc['id']
-                lname = loc['name'].lower()
-                loc_map['all_ids'].append(lid)
-                if not loc_map['london'] and "london" in lname: loc_map['london'] = lid
-                if not loc_map['gloucester'] and "gloucester" in lname: loc_map['gloucester'] = lid
-        else: st.error(f"⚠️ Shopify Location API Error [{r.status_code}]: {r.text}")
+        r = requests.post(ep, json={"query": q}, headers=h)
+        for e in r.json().get("data", {}).get("locations", {}).get("edges", []):
+            node = e["node"]
+            numeric_id = int(node["id"].split("/")[-1])
+            lname = node["name"].lower()
+            loc_map['all_ids'].append(numeric_id)
+            if not loc_map['london'] and "london" in lname: loc_map['london'] = numeric_id
+            if not loc_map['gloucester'] and "gloucester" in lname: loc_map['gloucester'] = numeric_id
     except Exception as e: st.error(f"⚠️ Location Fetch Exception: {e}")
     return loc_map
 
 def set_variant_location(inventory_item_id, target_location_id, all_location_ids):
     if not inventory_item_id or not target_location_id: return False
     creds = st.secrets["shopify"]
-    shop_url = creds.get("shop_url")
-    token = creds.get("access_token")
-    version = creds.get("api_version", "2024-04")
-    headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
-    base_url = f"https://{shop_url}/admin/api/{version}/inventory_levels"
-    payload = {"location_id": target_location_id, "inventory_item_id": inventory_item_id, "available": 0}
-    try: requests.post(f"{base_url}/set.json", json=payload, headers=headers)
+    shop_url = creds.get("shop_url"); token = creds.get("access_token"); version = creds.get("api_version", "2024-04")
+    ep = f"https://{shop_url}/admin/api/{version}/graphql.json"
+    h  = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
+    item_gid   = f"gid://shopify/InventoryItem/{inventory_item_id}"
+    target_gid = f"gid://shopify/Location/{target_location_id}"
+
+    # Activate at target location (creates the inventory level if it doesn't exist)
+    _activate_mut = """mutation inventoryActivate($inventoryItemId: ID!, $locationId: ID!) {
+      inventoryActivate(inventoryItemId: $inventoryItemId, locationId: $locationId) {
+        inventoryLevel { id location { id } }
+        userErrors { field message }
+      }
+    }"""
+    try:
+        requests.post(ep, json={"query": _activate_mut, "variables": {
+            "inventoryItemId": item_gid, "locationId": target_gid
+        }}, headers=h)
     except: pass
-    for loc_id in all_location_ids:
-        if loc_id != target_location_id:
-            try: requests.delete(f"{base_url}.json", headers=headers, params={"inventory_item_id": inventory_item_id, "location_id": loc_id})
-            except: pass
+
+    # Deactivate at all other locations
+    _levels_q = """query($id: ID!) {
+      inventoryItem(id: $id) {
+        inventoryLevels(first: 20) { edges { node { id location { id } } } }
+      }
+    }"""
+    try:
+        r = requests.post(ep, json={"query": _levels_q, "variables": {"id": item_gid}}, headers=h)
+        levels = r.json().get("data", {}).get("inventoryItem", {}).get("inventoryLevels", {}).get("edges", [])
+        _deactivate_mut = """mutation inventoryDeactivate($inventoryLevelId: ID!) {
+          inventoryDeactivate(inventoryLevelId: $inventoryLevelId) { userErrors { field message } }
+        }"""
+        for lv in levels:
+            if lv["node"]["location"]["id"] != target_gid:
+                try: requests.post(ep, json={"query": _deactivate_mut, "variables": {"inventoryLevelId": lv["node"]["id"]}}, headers=h)
+                except: pass
+    except: pass
     return True
 
 def create_or_extend_shopify_product(row_data, location_prefix, sales_price, logs_out):
