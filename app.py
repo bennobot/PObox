@@ -2087,11 +2087,20 @@ def _render_product_clone_ui():
 
         _raw_base = re.sub(r'^[LG]-', '', lu['source_sku'])
         _sku_segs = _raw_base.rsplit('-', 1)
+        _family_part = _sku_segs[0] if len(_sku_segs) > 1 else _raw_base
         if same_format:
-            family_base_sku = _sku_segs[0] if len(_sku_segs) > 1 else _raw_base
+            family_base_sku = _family_part
         else:
-            _base_no_fmt = _sku_segs[0].rsplit('-', 1)[0] if len(_sku_segs) > 1 else _raw_base
-            family_base_sku = f"{_base_no_fmt}-{_f_code_new}"
+            # Strip everything from the first known format-code segment onwards,
+            # then append the new format code. This avoids inheriting e.g. "SK"
+            # from a Steel Keg source when cloning to a different format.
+            _known_fmt_codes = {"CAN", "BTL", "SK", "KK", "PK", "CSK", "BIB"}
+            _pre_fmt = []
+            for _seg in _family_part.split('-'):
+                if _seg in _known_fmt_codes:
+                    break
+                _pre_fmt.append(_seg)
+            family_base_sku = '-'.join(_pre_fmt) + f"-{_f_code_new}"
 
         _lk = (pc_format.lower(), pc_vol.lower())
         size_code_pc   = _smap.get(_lk, pc_vol.upper().replace(' ', ''))
