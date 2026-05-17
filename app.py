@@ -558,11 +558,8 @@ def update_shopify_product_details(sku, new_product_title, new_variant_title, ol
                         if "title" in _pc_prod_input:
                             if _ret.get("title") != updated_title:
                                 errors.append(f"Product title: no-op (Shopify has {_ret.get('title')!r})")
-                        if "descriptionHtml" in _pc_prod_input:
-                            _ret_desc  = (_ret.get("descriptionHtml") or "").strip()
-                            _sent_desc = str(new_description).strip()
-                            if _ret_desc != _sent_desc:
-                                errors.append(f"Description html: no-op (returned {_ret_desc[:80]!r})")
+                        # Don't compare descriptionHtml — Shopify normalises HTML on return so it
+                        # never matches plain-text input. No errors = description accepted.
         except Exception as e: errors.append(f"Product: {e}")
 
     if new_variant_title:
@@ -790,12 +787,9 @@ def push_shopify_product_update(old_sku, new_sku, new_product_title, new_variant
                             if _ret.get("title") == new_product_title: updated.append("title")
                             else: errors.append(f"product title: no-op (Shopify has {_ret.get('title')!r})")
                         if "descriptionHtml" in _prod_input:
-                            _ret_desc = (_ret.get("descriptionHtml") or "").strip()
-                            _sent_desc = str(new_desc).strip()
-                            if _ret_desc == _sent_desc:
-                                updated.append("description (html)")
-                            else:
-                                errors.append(f"description html: no-op (Shopify returned {_ret_desc[:80]!r}, sent {_sent_desc[:80]!r})")
+                            # Don't compare returned HTML — Shopify normalises it (adds <p> tags etc)
+                            # so plain-text input never matches. No errors = success.
+                            updated.append("description (html)")
         except Exception as e: errors.append(f"product mutation: {e}")
 
     # ── Variant level: option (displayed title) + SKU via GraphQL ────────────
