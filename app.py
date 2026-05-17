@@ -2467,46 +2467,95 @@ def _render_product_updater_ui():
                 key=f"pu_desc_{_row['Depot']}",
             )
 
-    # ── Save ─────────────────────────────────────────────────────────────────
-    if st.button("💾 Save & Push", type="primary", key="pu_save_btn"):
-        _logs = []
+    # ── Build the staged change set from current editor state ────────────────
+    def _build_staged():
+        _staged = []
         for _i, _orig in enumerate(rows):
-            _pfx   = _orig["Depot"]
-            _edited_row = _edited.iloc[_i]
-            _old_sku    = _orig["_original_sku"]                  # e.g. "L-BREW-..."
-            _new_base   = str(_edited_row["SKU"]).strip()
-            _new_sku    = f"{_pfx}-{_new_base}"
-            _new_name   = f"{_pfx}-{str(_edited_row['Name']).strip()}"
-            _new_abv    = str(_edited_row["ABV"]).strip()
-            _new_fmt    = str(_edited_row["Format"]).strip()
-            _new_cpl    = str(_edited_row["Coupler"]).strip()
-            _new_price  = float(_edited_row["Price"])
-            _new_desc   = _desc_vals.get(_pfx, _orig["Description"])
-            # Variant title = last " / " segment of name (for Shopify)
-            _name_parts     = [p.strip() for p in str(_edited_row["Name"]).split(" / ")]
-            _sh_prod_title  = f"{_pfx}-{' / '.join(_name_parts[:-1])}" if len(_name_parts) > 1 else _new_name
-            _sh_var_title   = _name_parts[-1] if _name_parts else ""
+            _pfx        = _orig["Depot"]
+            _er         = _edited.iloc[_i]
+            _new_base   = str(_er["SKU"]).strip()
+            _name_parts = [p.strip() for p in str(_er["Name"]).split(" / ")]
+            _staged.append({
+                "depot":         _pfx,
+                "old_sku":       _orig["_original_sku"],
+                "new_sku":       f"{_pfx}-{_new_base}",
+                "new_name":      f"{_pfx}-{str(_er['Name']).strip()}",
+                "new_abv":       str(_er["ABV"]).strip(),
+                "new_fmt":       str(_er["Format"]).strip(),
+                "new_cpl":       str(_er["Coupler"]).strip(),
+                "new_price":     float(_er["Price"]),
+                "new_desc":      _desc_vals.get(_pfx, _orig["Description"]),
+                "sh_prod_title": f"{_pfx}-{' / '.join(_name_parts[:-1])}" if len(_name_parts) > 1 else f"{_pfx}-{str(_er['Name']).strip()}",
+                "sh_var_title":  _name_parts[-1] if _name_parts else "",
+                "_cin7_dict":    _orig["_cin7_dict"],
+            })
+        return _staged
 
-            _logs.append(f"\n── {_pfx} ({'London' if _pfx == 'L' else 'Gloucester'}) ──")
-            # Cin7
-            _ok, _msg = push_cin7_product_update(
-                _orig["_cin7_dict"], _new_sku, _new_name,
-                _new_abv, _new_fmt, _new_cpl, _new_price, _new_desc,
-            )
-            _logs.append(f"Cin7: {_msg}")
-            # Shopify
-            _ok2, _msg2 = push_shopify_product_update(
-                _old_sku, _new_sku, _sh_prod_title, _sh_var_title,
-                _new_abv, _new_price, _new_desc,
-            )
-            _logs.append(f"Shopify: {_msg2}")
-        st.session_state.pu_log = _logs
-        st.rerun()
+    _btn_col1, _btn_col2 = st.columns([1, 1])
 
-    if st.session_state.get("pu_log"):
-        st.divider()
-        st.markdown("**Update Log**")
-        st.code("\n".join(st.session_state.pu_log), language="text")
+    # ── Button 1: Save (stage changes) ───────────────────────────────────────
+    with _btn_col1:
+        if st.button("💾 Save Changes", key="pu_save_btn", use_container_width=True):
+            st.session_state.pu_staged = _build_staged()
+            st.session_state.pu_log    = []
+
+    # ── Staged summary ────────────────────────────────────────────────────────
+    if st.session_state.get("pu_staged"):
+        _staged = st.session_state.pu_staged
+        with st.container(border=True):
+            st.caption("**Staged Changes — review before pushing**")
+            for _s in _staged:
+                _loc = "🏙️ London" if _s["depot"] == "L" else "🌳 Gloucester"
+                st.markdown(f"**{_loc}** `{_s['old_sku']}` → `{_s['new_sku']}`  "
+                            f"| Name: _{_s['new_name']}_ | ABV: {_s['new_abv']} "
+                            f"| £{_s['new_price']:.2f}")
+
+        # ── Button 2: Push changes ────────────────────────────────────────────
+        with _btn_col2:
+            _do_push = st.button("🚀 Push Changes", type="primary", key="pu_push_btn", use_container_width=True)
+
+        if _do_push:
+            _total = len(_staged) * 2          # Cin7 + Shopify per depot
+            _progress = st.progress(0, text="Starting...")
+            _log_box  = st.empty()
+            _live     = []
+            _step     = 0
+
+            for _s in _staged:
+                _loc = "London" if _s["depot"] == "L" else "Gloucester"
+
+                # Cin7 ────────────────────────────────────────────────────────
+                _live.append(f"\n── {_s['depot']} ({_loc}) ──")
+                _live.append(f"Cin7: updating...")
+                _step += 1
+                _progress.progress(_step / _total, text=f"{_loc} — Cin7")
+                _log_box.code("\n".join(_live), language="text")
+
+                _ok, _msg = push_cin7_product_update(
+                    _s["_cin7_dict"], _s["new_sku"], _s["new_name"],
+                    _s["new_abv"], _s["new_fmt"], _s["new_cpl"],
+                    _s["new_price"], _s["new_desc"],
+                )
+                _live[-1] = f"Cin7: {_msg}"
+                _log_box.code("\n".join(_live), language="text")
+
+                # Shopify ─────────────────────────────────────────────────────
+                _live.append(f"Shopify: updating...")
+                _step += 1
+                _progress.progress(_step / _total, text=f"{_loc} — Shopify")
+                _log_box.code("\n".join(_live), language="text")
+
+                _ok2, _msg2 = push_shopify_product_update(
+                    _s["old_sku"], _s["new_sku"],
+                    _s["sh_prod_title"], _s["sh_var_title"],
+                    _s["new_abv"], _s["new_price"], _s["new_desc"],
+                )
+                _live[-1] = f"Shopify: {_msg2}"
+                _log_box.code("\n".join(_live), language="text")
+
+            _progress.progress(1.0, text="✅ Done")
+            st.session_state.pu_log    = _live
+            st.session_state.pu_staged = None
 
 
 # Keys that need counters (not in DEFAULT_STATE)
@@ -2519,8 +2568,9 @@ if 'tb_lookup' not in st.session_state: st.session_state.tb_lookup = None
 if 'tb_create_log' not in st.session_state: st.session_state.tb_create_log = []
 if 'tb_existence_check' not in st.session_state: st.session_state.tb_existence_check = []
 if 'app_mode' not in st.session_state: st.session_state.app_mode = "📄 PO Bot"
-if 'pu_rows' not in st.session_state: st.session_state.pu_rows = None
-if 'pu_log'  not in st.session_state: st.session_state.pu_log  = []
+if 'pu_rows'   not in st.session_state: st.session_state.pu_rows   = None
+if 'pu_staged' not in st.session_state: st.session_state.pu_staged = None
+if 'pu_log'    not in st.session_state: st.session_state.pu_log    = []
 
 with st.sidebar:
     # ── Mode selector ────────────────────────────────────
