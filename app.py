@@ -744,22 +744,33 @@ def push_shopify_product_update(old_sku, new_sku, new_product_title, new_variant
         return False, f"Lookup failed: {e}"
     errors = []
     updated = []   # tracks what was actually sent successfully
-    # Product level: title + description
-    prod_p = {"id": int(num_prod)}
-    if new_product_title: prod_p["title"] = new_product_title
-    if new_desc is not None and str(new_desc).strip(): prod_p["body_html"] = str(new_desc).strip()
-    if len(prod_p) > 1:
+    _has_desc = new_desc is not None and str(new_desc).strip()
+
+    # ── Product title + description via GraphQL productUpdate ─────────────────
+    # (REST PUT body_html is unreliable in newer API versions)
+    _prod_input = {"id": product_gid}
+    if new_product_title: _prod_input["title"] = new_product_title
+    if _has_desc:         _prod_input["descriptionHtml"] = str(new_desc).strip()
+    if len(_prod_input) > 1:
+        _prod_mut = """
+        mutation productUpdate($input: ProductInput!) {
+          productUpdate(input: $input) {
+            product { id title descriptionHtml }
+            userErrors { field message }
+          }
+        }"""
         try:
-            r = requests.put(f"https://{shop_url}/admin/api/{version}/products/{num_prod}.json",
-                             json={"product": prod_p}, headers=rest_h)
-            if r.status_code == 200:
-                if "title"     in prod_p: updated.append("title")
-                if "body_html" in prod_p: updated.append("description")
+            r = requests.post(gql_ep, json={"query": _prod_mut, "variables": {"input": _prod_input}}, headers=gql_h)
+            _pdata = r.json().get("data", {}).get("productUpdate", {})
+            _perrs = _pdata.get("userErrors", [])
+            if _perrs:
+                errors.append(f"product: {_perrs}")
             else:
-                if "title"     in prod_p: errors.append(f"title [{r.status_code}]: {r.text[:80]}")
-                if "body_html" in prod_p: errors.append(f"description [{r.status_code}]: {r.text[:80]}")
-        except Exception as e: errors.append(f"product PUT: {e}")
-    # Variant level: option1 (displayed title) + SKU
+                if "title"           in _prod_input: updated.append("title")
+                if "descriptionHtml" in _prod_input: updated.append("description")
+        except Exception as e: errors.append(f"product mutation: {e}")
+
+    # ── Variant level: option1 (displayed title) + SKU via REST ──────────────
     var_p = {"id": int(num_var)}
     if new_variant_title:              var_p["option1"] = new_variant_title
     if new_sku and new_sku != old_sku: var_p["sku"]     = new_sku
@@ -773,23 +784,31 @@ def push_shopify_product_update(old_sku, new_sku, new_product_title, new_variant
             else:
                 errors.append(f"variant [{r.status_code}]: {r.text[:80]}")
         except Exception as e: errors.append(f"variant PUT: {e}")
-    # Price
+
+    # ── Price ─────────────────────────────────────────────────────────────────
     if new_price is not None:
         ok, msg = update_shopify_price(variant_gid, new_price)
         if ok: updated.append("price")
         else: errors.append(f"price: {msg}")
-    # ABV metafield
+
+    # ── Metafields: ABV + ut_description (single batched mutation) ────────────
+    _mf = []
     if new_abv and str(new_abv).strip():
+        _mf.append({"ownerId": product_gid, "namespace": "custom", "key": "abv",
+                    "value": str(new_abv).replace("%","").strip(), "type": "number_decimal"})
+    if _has_desc:
+        _mf.append({"ownerId": product_gid, "namespace": "custom", "key": "ut_description",
+                    "value": str(new_desc).strip(), "type": "multi_line_text_field"})
+    if _mf:
         mut = """mutation MetafieldsSet($m:[MetafieldsSetInput!]!){metafieldsSet(metafields:$m){userErrors{field message}}}"""
         try:
-            r = requests.post(gql_ep, json={"query": mut, "variables": {"m": [{
-                "ownerId": product_gid, "namespace": "custom", "key": "abv",
-                "value": str(new_abv).replace("%","").strip(), "type": "number_decimal"
-            }]}}, headers=gql_h)
-            errs = r.json().get("data", {}).get("metafieldsSet", {}).get("userErrors", [])
-            if errs: errors.append(f"ABV metafield: {errs}")
-            else: updated.append("ABV")
-        except Exception as e: errors.append(f"ABV: {e}")
+            r = requests.post(gql_ep, json={"query": mut, "variables": {"m": _mf}}, headers=gql_h)
+            _mferrs = r.json().get("data", {}).get("metafieldsSet", {}).get("userErrors", [])
+            if _mferrs: errors.append(f"metafields: {_mferrs}")
+            else:
+                if new_abv and str(new_abv).strip(): updated.append("ABV")
+                if _has_desc: updated.append("description (metafield)")
+        except Exception as e: errors.append(f"metafields: {e}")
     updated_str = ", ".join(updated) if updated else "nothing sent"
     if errors: return False, f"❌ Errors: {' | '.join(errors)} (sent: {updated_str})"
     return True, f"✅ Updated ({updated_str})"
