@@ -561,7 +561,6 @@ def update_shopify_product_details(sku, new_product_title, new_variant_title, ol
           productSet(synchronous: $synchronous, input: $input) {
             product { id }
             userErrors { field message }
-            userWarnings { field message }
           }
         }"""
         try:
@@ -812,7 +811,6 @@ def push_shopify_product_update(old_sku, new_sku, new_product_title, new_variant
           productSet(synchronous: $synchronous, input: $input) {
             product { id }
             userErrors { field message }
-            userWarnings { field message }
           }
         }"""
         try:
