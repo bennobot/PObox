@@ -682,6 +682,107 @@ def update_shopify_price(variant_gid, new_price):
     except Exception as e:
         return False, str(e)
 
+# ── Product Updater helpers ───────────────────────────────────────────────────
+
+def fetch_cin7_full_product_by_sku(sku):
+    """Return the full Cin7 product dict for a SKU (exact match)."""
+    headers = get_cin7_headers()
+    if not headers: return None
+    try:
+        r = make_cin7_request("GET", f"{get_cin7_base_url()}/product?Sku={quote(sku)}", headers=headers)
+        if r.status_code == 200:
+            for p in r.json().get("Products", []):
+                if p.get("SKU", "").lower() == sku.lower():
+                    return p
+    except Exception:
+        pass
+    return None
+
+def push_cin7_product_update(product_dict, new_sku, new_name, new_abv, new_format, new_coupler, new_price, new_desc):
+    """Apply field changes to a fetched Cin7 product dict and PUT it back."""
+    headers = get_cin7_headers()
+    if not headers: return False, "No Cin7 headers"
+    payload = {k: v for k, v in product_dict.items() if k not in ("CreatedDate", "ModifiedDate", "BrandID")}
+    if new_sku:     payload["SKU"]  = new_sku
+    if new_name:    payload["Name"] = new_name
+    if new_abv:     payload["AdditionalAttribute10"] = str(new_abv).replace("%", "").strip()
+    if new_format:  payload["AdditionalAttribute3"]  = new_format
+    if new_coupler: payload["AdditionalAttribute8"]  = new_coupler
+    if new_price is not None:
+        payload["PriceTier1"] = new_price
+        payload["PriceTiers"] = {"Tier 1": new_price}
+    if new_desc is not None and str(new_desc).strip():
+        payload["Description"] = str(new_desc).strip()
+    try:
+        r = make_cin7_request("PUT", f"{get_cin7_base_url()}/product", headers=headers, json=payload)
+        if r.status_code == 200:
+            errs = r.json().get("Errors", []) if r.text.strip() else []
+            if errs: return False, f"Cin7 errors: {errs}"
+            return True, "✅ Updated"
+        return False, f"HTTP {r.status_code}: {r.text[:150]}"
+    except Exception as e:
+        return False, str(e)
+
+def push_shopify_product_update(old_sku, new_sku, new_product_title, new_variant_title, new_abv, new_price, new_desc):
+    """Update Shopify product title, variant title/SKU, price, ABV metafield and description."""
+    if "shopify" not in st.secrets: return False, "No Shopify secrets"
+    creds = st.secrets["shopify"]
+    shop_url = creds.get("shop_url"); token = creds.get("access_token"); version = creds.get("api_version", "2024-04")
+    rest_h = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
+    gql_ep = f"https://{shop_url}/admin/api/{version}/graphql.json"
+    gql_h  = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
+    # Resolve IDs from old SKU
+    q = """query($q:String!){productVariants(first:1,query:$q){edges{node{id sku product{id}}}}}"""
+    try:
+        r = requests.post(gql_ep, json={"query": q, "variables": {"q": f"sku:{old_sku}"}}, headers=gql_h)
+        edges = r.json().get("data", {}).get("productVariants", {}).get("edges", [])
+        if not edges: return False, f"SKU {old_sku} not found in Shopify"
+        node = edges[0]["node"]
+        variant_gid = node["id"]; product_gid = node["product"]["id"]
+        num_var = variant_gid.split("/")[-1]; num_prod = product_gid.split("/")[-1]
+    except Exception as e:
+        return False, f"Lookup failed: {e}"
+    errors = []
+    # Product level: title + description
+    prod_p = {"id": int(num_prod)}
+    if new_product_title: prod_p["title"] = new_product_title
+    if new_desc and str(new_desc).strip(): prod_p["body_html"] = str(new_desc).strip()
+    if len(prod_p) > 1:
+        try:
+            r = requests.put(f"https://{shop_url}/admin/api/{version}/products/{num_prod}.json",
+                             json={"product": prod_p}, headers=rest_h)
+            if r.status_code != 200: errors.append(f"Title: {r.text[:100]}")
+        except Exception as e: errors.append(f"Title: {e}")
+    # Variant level: option1 (displayed title) + SKU
+    var_p = {"id": int(num_var)}
+    if new_variant_title:              var_p["option1"] = new_variant_title
+    if new_sku and new_sku != old_sku: var_p["sku"]     = new_sku
+    if len(var_p) > 1:
+        try:
+            r = requests.put(f"https://{shop_url}/admin/api/{version}/variants/{num_var}.json",
+                             json={"variant": var_p}, headers=rest_h)
+            if r.status_code != 200: errors.append(f"Variant: {r.text[:100]}")
+        except Exception as e: errors.append(f"Variant: {e}")
+    # Price
+    if new_price is not None:
+        ok, msg = update_shopify_price(variant_gid, new_price)
+        if not ok: errors.append(f"Price: {msg}")
+    # ABV metafield
+    if new_abv and str(new_abv).strip():
+        mut = """mutation MetafieldsSet($m:[MetafieldsSetInput!]!){metafieldsSet(metafields:$m){userErrors{field message}}}"""
+        try:
+            r = requests.post(gql_ep, json={"query": mut, "variables": {"m": [{
+                "ownerId": product_gid, "namespace": "custom", "key": "abv",
+                "value": str(new_abv).replace("%","").strip(), "type": "number_decimal"
+            }]}}, headers=gql_h)
+            errs = r.json().get("data", {}).get("metafieldsSet", {}).get("userErrors", [])
+            if errs: errors.append(f"ABV: {errs}")
+        except Exception as e: errors.append(f"ABV: {e}")
+    if errors: return False, " | ".join(errors)
+    return True, "✅ Updated"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
 @st.cache_data(ttl=3600)
 def fetch_cin7_brands():
     if "cin7" not in st.secrets: return []
@@ -2262,6 +2363,132 @@ def _render_product_clone_ui():
         st.markdown("**Creation Log**")
         st.code("\n".join(st.session_state.tb_create_log), language="text")
 
+def _render_product_updater_ui():
+    st.subheader("🔧 Product Updater")
+    st.caption("Look up any L- or G- SKU to load both depot variants, edit any field independently, then save.")
+
+    _col_sku, _col_btn = st.columns([4, 1])
+    with _col_sku:
+        pu_sku_in = st.text_input("SKU", placeholder="L-BREW... or G-BREW...", key="pu_source_sku", label_visibility="collapsed")
+    with _col_btn:
+        pu_lookup = st.button("🔍 Lookup", key="pu_lookup_btn", use_container_width=True)
+
+    if pu_lookup:
+        if pu_sku_in.strip():
+            raw = pu_sku_in.strip()
+            base = raw[2:] if raw[:2] in ("L-", "G-") else raw
+            with st.spinner("Looking up both depots in Cin7..."):
+                _l = fetch_cin7_full_product_by_sku(f"L-{base}")
+                _g = fetch_cin7_full_product_by_sku(f"G-{base}")
+            if not _l and not _g:
+                st.error("Neither L- nor G- variant found in Cin7.")
+                st.session_state.pu_rows = None
+            else:
+                rows = []
+                for _pfx, _prod in [("L", _l), ("G", _g)]:
+                    if not _prod:
+                        st.warning(f"⚠️ {_pfx}- variant not found — row will be skipped on save.")
+                        continue
+                    _full_name = _prod.get("Name", "")
+                    _name_no_pfx = _full_name[2:] if _full_name[:2] in ("L-", "G-") else _full_name
+                    rows.append({
+                        "Depot":       _pfx,
+                        "SKU":         _prod.get("SKU", f"{_pfx}-{base}")[2:],  # strip L-/G-
+                        "Name":        _name_no_pfx,
+                        "ABV":         str(_prod.get("AdditionalAttribute10", "") or ""),
+                        "Format":      str(_prod.get("AdditionalAttribute3",  "") or ""),
+                        "Coupler":     str(_prod.get("AdditionalAttribute8",  "") or ""),
+                        "Price":       float(_prod.get("PriceTier1", 0) or 0),
+                        "Description": str(_prod.get("Description", "") or ""),
+                        "_original_sku": _prod.get("SKU", f"{_pfx}-{base}"),
+                        "_cin7_dict":    _prod,
+                    })
+                st.session_state.pu_rows = rows
+                st.session_state.pu_log  = []
+        else:
+            st.warning("Enter a SKU first.")
+
+    if not st.session_state.get("pu_rows"):
+        st.info("Enter a SKU above and click Lookup.")
+        return
+
+    rows = st.session_state.pu_rows
+
+    # ── Editable table (compact fields) ──────────────────────────────────────
+    _display_cols = ["Depot", "SKU", "Name", "ABV", "Format", "Coupler", "Price"]
+    _df = pd.DataFrame([{c: r[c] for c in _display_cols} for r in rows])
+    _edited = st.data_editor(
+        _df,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Depot":   st.column_config.TextColumn("Depot", disabled=True, width="small"),
+            "SKU":     st.column_config.TextColumn("Base SKU (no L-/G-)", width="large"),
+            "Name":    st.column_config.TextColumn("Name (no L-/G-)", width="large"),
+            "ABV":     st.column_config.TextColumn("ABV", width="small"),
+            "Format":  st.column_config.SelectboxColumn("Format", width="medium",
+                           options=["Cans","Bottles","Steel Keg","KeyKeg","PolyKeg","Cask","Bag in Box",""]),
+            "Coupler": st.column_config.TextColumn("Coupler", width="medium"),
+            "Price":   st.column_config.NumberColumn("Price £", format="£%.2f", width="small"),
+        },
+        key="pu_editor",
+    )
+
+    # ── Per-depot description text areas ─────────────────────────────────────
+    st.markdown("**Descriptions**")
+    _desc_vals = {}
+    _dcols = st.columns(len(rows))
+    for _i, (_row, _dc) in enumerate(zip(rows, _dcols)):
+        with _dc:
+            _desc_vals[_row["Depot"]] = st.text_area(
+                f"{_row['Depot']} Description",
+                value=_row["Description"],
+                height=120,
+                key=f"pu_desc_{_row['Depot']}",
+            )
+
+    # ── Save ─────────────────────────────────────────────────────────────────
+    if st.button("💾 Save & Push", type="primary", key="pu_save_btn"):
+        _logs = []
+        for _i, _orig in enumerate(rows):
+            _pfx   = _orig["Depot"]
+            _edited_row = _edited.iloc[_i]
+            _old_sku    = _orig["_original_sku"]                  # e.g. "L-BREW-..."
+            _new_base   = str(_edited_row["SKU"]).strip()
+            _new_sku    = f"{_pfx}-{_new_base}"
+            _new_name   = f"{_pfx}-{str(_edited_row['Name']).strip()}"
+            _new_abv    = str(_edited_row["ABV"]).strip()
+            _new_fmt    = str(_edited_row["Format"]).strip()
+            _new_cpl    = str(_edited_row["Coupler"]).strip()
+            _new_price  = float(_edited_row["Price"])
+            _new_desc   = _desc_vals.get(_pfx, _orig["Description"])
+            # Variant title = last " / " segment of name (for Shopify)
+            _name_parts     = [p.strip() for p in str(_edited_row["Name"]).split(" / ")]
+            _sh_prod_title  = f"{_pfx}-{' / '.join(_name_parts[:-1])}" if len(_name_parts) > 1 else _new_name
+            _sh_var_title   = _name_parts[-1] if _name_parts else ""
+
+            _logs.append(f"\n── {_pfx} ({'London' if _pfx == 'L' else 'Gloucester'}) ──")
+            # Cin7
+            _ok, _msg = push_cin7_product_update(
+                _orig["_cin7_dict"], _new_sku, _new_name,
+                _new_abv, _new_fmt, _new_cpl, _new_price, _new_desc,
+            )
+            _logs.append(f"Cin7: {_msg}")
+            # Shopify
+            _ok2, _msg2 = push_shopify_product_update(
+                _old_sku, _new_sku, _sh_prod_title, _sh_var_title,
+                _new_abv, _new_price, _new_desc,
+            )
+            _logs.append(f"Shopify: {_msg2}")
+        st.session_state.pu_log = _logs
+        st.rerun()
+
+    if st.session_state.get("pu_log"):
+        st.divider()
+        st.markdown("**Update Log**")
+        st.code("\n".join(st.session_state.pu_log), language="text")
+
+
 # Keys that need counters (not in DEFAULT_STATE)
 if 'master_suppliers' not in st.session_state: st.session_state.master_suppliers = fetch_cin7_brands()
 if 'drive_files' not in st.session_state: st.session_state.drive_files = []
@@ -2272,12 +2499,14 @@ if 'tb_lookup' not in st.session_state: st.session_state.tb_lookup = None
 if 'tb_create_log' not in st.session_state: st.session_state.tb_create_log = []
 if 'tb_existence_check' not in st.session_state: st.session_state.tb_existence_check = []
 if 'app_mode' not in st.session_state: st.session_state.app_mode = "📄 PO Bot"
+if 'pu_rows' not in st.session_state: st.session_state.pu_rows = None
+if 'pu_log'  not in st.session_state: st.session_state.pu_log  = []
 
 with st.sidebar:
     # ── Mode selector ────────────────────────────────────
     app_mode = st.radio(
         "App Mode",
-        options=["📄 PO Bot", "🛠️ Product Clone"],
+        options=["📄 PO Bot", "🛠️ Product Clone", "🔧 Product Updater"],
         key="app_mode",
         horizontal=False,
         label_visibility="collapsed",
@@ -2333,6 +2562,10 @@ with st.sidebar:
 
 if st.session_state.app_mode == "🛠️ Product Clone":
     _render_product_clone_ui()
+    st.stop()
+
+if st.session_state.app_mode == "🔧 Product Updater":
+    _render_product_updater_ui()
     st.stop()
 
 st.subheader("1. Select Invoice Source")
