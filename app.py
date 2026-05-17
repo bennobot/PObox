@@ -536,12 +536,25 @@ def update_shopify_product_details(sku, new_product_title, new_variant_title, ol
     if _has_new_desc: _prod_input["descriptionHtml"] = str(new_description).strip()
     if len(_prod_input) > 1:
         _prod_mut = """mutation productUpdate($input: ProductInput!) {
-          productUpdate(input: $input) { product { id } userErrors { field message } }
+          productUpdate(input: $input) { product { id title } userErrors { field message } }
         }"""
         try:
             r = requests.post(gql_endpoint, json={"query": _prod_mut, "variables": {"input": _prod_input}}, headers=gql_headers)
-            _perrs = r.json().get("data", {}).get("productUpdate", {}).get("userErrors", [])
-            if _perrs: errors.append(f"Product: {_perrs}")
+            if r.status_code != 200:
+                errors.append(f"Product: HTTP {r.status_code}")
+            else:
+                _resp = r.json()
+                _top_errs = _resp.get("errors")
+                if _top_errs:
+                    errors.append(f"Product: {_top_errs[0].get('message', str(_top_errs))}")
+                else:
+                    _pmut  = (_resp.get("data") or {}).get("productUpdate") or {}
+                    _perrs = _pmut.get("userErrors", [])
+                    if _perrs: errors.append(f"Product: {_perrs[0].get('message', str(_perrs))}")
+                    elif "title" in _prod_input:
+                        _ret = (_pmut.get("product") or {}).get("title", "")
+                        if _ret != _prod_input["title"]:
+                            errors.append(f"Product title: no-op (Shopify returned {_ret!r})")
         except Exception as e: errors.append(f"Product: {e}")
 
     if new_variant_title:
@@ -738,28 +751,39 @@ def push_shopify_product_update(old_sku, new_sku, new_product_title, new_variant
     updated = []   # tracks what was actually sent successfully
     _has_desc = new_desc is not None and str(new_desc).strip()
 
-    # ── Product title + description via GraphQL productUpdate ─────────────────
-    # (REST PUT body_html is unreliable in newer API versions)
+    # ── Product title + description via GraphQL productUpdate ────────────────
     _prod_input = {"id": product_gid}
     if new_product_title: _prod_input["title"] = new_product_title
     if _has_desc:         _prod_input["descriptionHtml"] = str(new_desc).strip()
     if len(_prod_input) > 1:
-        _prod_mut = """
-        mutation productUpdate($input: ProductInput!) {
+        _prod_mut = """mutation productUpdate($input: ProductInput!) {
           productUpdate(input: $input) {
-            product { id title descriptionHtml }
+            product { id title }
             userErrors { field message }
           }
         }"""
         try:
             r = requests.post(gql_ep, json={"query": _prod_mut, "variables": {"input": _prod_input}}, headers=gql_h)
-            _pdata = r.json().get("data", {}).get("productUpdate", {})
-            _perrs = _pdata.get("userErrors", [])
-            if _perrs:
-                errors.append(f"product: {_perrs}")
+            if r.status_code != 200:
+                errors.append(f"product: HTTP {r.status_code}")
             else:
-                if "title"           in _prod_input: updated.append("title")
-                if "descriptionHtml" in _prod_input: updated.append("description")
+                _resp = r.json()
+                _top_errs = _resp.get("errors")
+                if _top_errs:
+                    errors.append(f"product: {_top_errs[0].get('message', str(_top_errs))}")
+                else:
+                    _pmut  = (_resp.get("data") or {}).get("productUpdate") or {}
+                    _perrs = _pmut.get("userErrors", [])
+                    if _perrs:
+                        errors.append(f"product: {_perrs[0].get('message', str(_perrs))}")
+                    else:
+                        _ret_title = (_pmut.get("product") or {}).get("title", "")
+                        if "title" in _prod_input and _ret_title != _prod_input["title"]:
+                            # Mutation ran but title unchanged — log exact Shopify value for diagnosis
+                            errors.append(f"product title: no-op (Shopify returned {_ret_title!r})")
+                        else:
+                            if "title"           in _prod_input: updated.append("title")
+                            if "descriptionHtml" in _prod_input: updated.append("description")
         except Exception as e: errors.append(f"product mutation: {e}")
 
     # ── Variant level: option (displayed title) + SKU via GraphQL ────────────
