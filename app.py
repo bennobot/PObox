@@ -2471,17 +2471,24 @@ def _render_product_updater_ui():
                     if not _prod:
                         st.warning(f"⚠️ {_pfx}- variant not found — row will be skipped on save.")
                         continue
-                    _full_name = _prod.get("Name", "")
+                    _full_name   = _prod.get("Name", "")
                     _name_no_pfx = _full_name[2:] if _full_name[:2] in ("L-", "G-") else _full_name
+                    # Parse name into components: Brand / Product / ABV% / Format / Variant
+                    _np = [p.strip() for p in _name_no_pfx.split(" / ")]
+                    _brand   = _np[0] if len(_np) >= 1 else _name_no_pfx
+                    _product = _np[1] if len(_np) >= 2 else ""
+                    _variant = _np[-1] if len(_np) >= 2 else ""
                     rows.append({
                         "Depot":       _pfx,
                         "SKU":         _prod.get("SKU", f"{_pfx}-{base}")[2:],  # strip L-/G-
-                        "Name":        _name_no_pfx,
+                        "Product":     _product,   # beer name only — ABV/format/variant reconstructed on push
                         "ABV":         str(_prod.get("AdditionalAttribute10", "") or ""),
                         "Format":      str(_prod.get("AdditionalAttribute3",  "") or ""),
                         "Coupler":     str(_prod.get("AdditionalAttribute8",  "") or ""),
                         "Price":       float(_prod.get("PriceTier1", 0) or 0),
                         "Description": str(_prod.get("Description", "") or ""),
+                        "_brand":        _brand,   # brewery — internal, not editable
+                        "_variant":      _variant, # keg size/type — internal
                         "_attr5":        str(_prod.get("AdditionalAttribute5", "Rotational Product") or "Rotational Product"),
                         "_original_sku": _prod.get("SKU", f"{_pfx}-{base}"),
                         "_cin7_dict":    _prod,
@@ -2504,8 +2511,9 @@ def _render_product_updater_ui():
     )
     _show_suggested = pu_cost > 0
 
-    # ── Editable table (compact fields) ──────────────────────────────────────
-    _display_cols = ["Depot", "SKU", "Name", "ABV", "Format", "Coupler", "Price"]
+    # ── Editable table ────────────────────────────────────────────────────────
+    # Product = beer name only; ABV feeds directly into reconstructed name on push
+    _display_cols = ["Depot", "SKU", "Product", "ABV", "Format", "Coupler", "Price"]
     _table_rows = []
     for _r in rows:
         _tr = {c: _r[c] for c in _display_cols}
@@ -2516,7 +2524,7 @@ def _render_product_updater_ui():
     _col_cfg = {
         "Depot":   st.column_config.TextColumn("Depot", disabled=True, width="small"),
         "SKU":     st.column_config.TextColumn("Base SKU (no L-/G-)", width="large"),
-        "Name":    st.column_config.TextColumn("Name (no L-/G-)", width="large"),
+        "Product": st.column_config.TextColumn("Product name", width="large"),
         "ABV":     st.column_config.TextColumn("ABV", width="small"),
         "Format":  st.column_config.SelectboxColumn("Format", width="medium",
                        options=["Cans","Bottles","Steel Keg","KeyKeg","PolyKeg","Cask","Bag in Box",""]),
@@ -2553,22 +2561,35 @@ def _render_product_updater_ui():
     def _build_staged():
         _staged = []
         for _i, _orig in enumerate(rows):
-            _pfx        = _orig["Depot"]
-            _er         = _edited.iloc[_i]
-            _new_base   = str(_er["SKU"]).strip()
-            _name_parts = [p.strip() for p in str(_er["Name"]).split(" / ")]
+            _pfx         = _orig["Depot"]
+            _er          = _edited.iloc[_i]
+            _new_base    = str(_er["SKU"]).strip()
+            _new_product = str(_er["Product"]).strip()
+            _new_abv     = str(_er["ABV"]).strip().replace("%", "")
+            _new_fmt     = str(_er["Format"]).strip()
+            _new_cpl     = str(_er["Coupler"]).strip()
+            _brand       = _orig["_brand"]
+            _variant     = _orig["_variant"]
+            # Reconstruct full Cin7 name: Brand / Product / ABV% / Format / Variant
+            _abv_pct     = f"{_new_abv}%" if _new_abv else ""
+            _name_segs   = [p for p in [_brand, _new_product, _abv_pct, _new_fmt, _variant] if p]
+            _new_name    = f"{_pfx}-{' / '.join(_name_segs)}"
+            # Shopify product title = all segments except last (variant)
+            _sh_segs     = [p for p in [_brand, _new_product, _abv_pct, _new_fmt] if p]
+            _sh_prod_title = f"{_pfx}-{' / '.join(_sh_segs)}" if _sh_segs else f"{_pfx}-{_brand}"
             _staged.append({
                 "depot":         _pfx,
                 "old_sku":       _orig["_original_sku"],
                 "new_sku":       f"{_pfx}-{_new_base}",
-                "new_name":      f"{_pfx}-{str(_er['Name']).strip()}",
-                "new_abv":       str(_er["ABV"]).strip(),
-                "new_fmt":       str(_er["Format"]).strip(),
-                "new_cpl":       str(_er["Coupler"]).strip(),
+                "new_name":      _new_name,
+                "new_product":   _new_product,   # for diff log
+                "new_abv":       _new_abv,
+                "new_fmt":       _new_fmt,
+                "new_cpl":       _new_cpl,
                 "new_price":     float(_er["Price"]),
                 "new_desc":      _desc_vals.get(_pfx, _orig["Description"]),
-                "sh_prod_title": f"{_pfx}-{' / '.join(_name_parts[:-1])}" if len(_name_parts) > 1 else f"{_pfx}-{str(_er['Name']).strip()}",
-                "sh_var_title":  _name_parts[-1] if _name_parts else "",
+                "sh_prod_title": _sh_prod_title,
+                "sh_var_title":  _variant,
                 "_cin7_dict":    _orig["_cin7_dict"],
             })
         return _staged
@@ -2589,8 +2610,9 @@ def _render_product_updater_ui():
             for _s in _staged:
                 _loc = "🏙️ London" if _s["depot"] == "L" else "🌳 Gloucester"
                 st.markdown(f"**{_loc}** `{_s['old_sku']}` → `{_s['new_sku']}`  "
-                            f"| Name: _{_s['new_name']}_ | ABV: {_s['new_abv']} "
-                            f"| £{_s['new_price']:.2f}")
+                            f"| Product: _{_s['new_product']}_ | ABV: {_s['new_abv']}% "
+                            f"| £{_s['new_price']:.2f}  \n"
+                            f"↳ Name: _{_s['new_name']}_")
 
         # ── Button 2: Push changes ────────────────────────────────────────────
         with _btn_col2:
@@ -2607,22 +2629,24 @@ def _render_product_updater_ui():
                 _loc = "London" if _s["depot"] == "L" else "Gloucester"
                 _old = _s["_cin7_dict"]
 
-                # ── Field-level diff (same style as price checker) ────────────
+                # ── Field-level diff ─────────────────────────────────────────
                 _changes = []
-                _old_sku_val  = _old.get("SKU", "")
-                _old_name_val = _old.get("Name", "")
-                _old_abv_val  = str(_old.get("AdditionalAttribute10", "") or "")
-                _old_fmt_val  = str(_old.get("AdditionalAttribute3",  "") or "")
-                _old_cpl_val  = str(_old.get("AdditionalAttribute8",  "") or "")
-                _old_price_val= float(_old.get("PriceTier1", 0) or 0)
-                _old_desc_val = str(_old.get("Description", "") or "")
+                _old_full_name = _old.get("Name", "")
+                _old_np        = [p.strip() for p in _old_full_name.split(" / ")]
+                _old_sku_val   = _old.get("SKU", "")
+                _old_product   = _old_np[1] if len(_old_np) >= 2 else _old_full_name
+                _old_abv_val   = str(_old.get("AdditionalAttribute10", "") or "")
+                _old_fmt_val   = str(_old.get("AdditionalAttribute3",  "") or "")
+                _old_cpl_val   = str(_old.get("AdditionalAttribute8",  "") or "")
+                _old_price_val = float(_old.get("PriceTier1", 0) or 0)
+                _old_desc_val  = str(_old.get("Description", "") or "")
 
-                if _old_sku_val   != _s["new_sku"]:   _changes.append(f"SKU:    {_old_sku_val} → {_s['new_sku']}")
-                if _old_name_val  != _s["new_name"]:  _changes.append(f"Name:   {_old_name_val} → {_s['new_name']}")
-                if _old_abv_val   != _s["new_abv"]:   _changes.append(f"ABV:    {_old_abv_val} → {_s['new_abv']}")
-                if _old_fmt_val   != _s["new_fmt"]:   _changes.append(f"Format: {_old_fmt_val} → {_s['new_fmt']}")
-                if _old_cpl_val   != _s["new_cpl"]:   _changes.append(f"Coupler:{_old_cpl_val} → {_s['new_cpl']}")
-                if abs(_old_price_val - _s["new_price"]) > 0.001: _changes.append(f"Price:  £{_old_price_val:.2f} → £{_s['new_price']:.2f}")
+                if _old_sku_val  != _s["new_sku"]:      _changes.append(f"SKU:     {_old_sku_val} → {_s['new_sku']}")
+                if _old_product  != _s["new_product"]:  _changes.append(f"Name:    {_old_product} → {_s['new_product']}")
+                if _old_abv_val  != _s["new_abv"]:      _changes.append(f"ABV:     {_old_abv_val} → {_s['new_abv']}")
+                if _old_fmt_val  != _s["new_fmt"]:      _changes.append(f"Format:  {_old_fmt_val} → {_s['new_fmt']}")
+                if _old_cpl_val  != _s["new_cpl"]:      _changes.append(f"Coupler: {_old_cpl_val} → {_s['new_cpl']}")
+                if abs(_old_price_val - _s["new_price"]) > 0.001: _changes.append(f"Price:   £{_old_price_val:.2f} → £{_s['new_price']:.2f}")
                 if _old_desc_val.strip() != str(_s["new_desc"]).strip(): _changes.append("Description: updated")
 
                 _live.append(f"\n── {_s['depot']} ({_loc}) ──")
