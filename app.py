@@ -2400,6 +2400,7 @@ def _render_product_updater_ui():
                         "Coupler":     str(_prod.get("AdditionalAttribute8",  "") or ""),
                         "Price":       float(_prod.get("PriceTier1", 0) or 0),
                         "Description": str(_prod.get("Description", "") or ""),
+                        "_attr5":        str(_prod.get("AdditionalAttribute5", "Rotational Product") or "Rotational Product"),
                         "_original_sku": _prod.get("SKU", f"{_pfx}-{base}"),
                         "_cin7_dict":    _prod,
                     })
@@ -2414,23 +2415,42 @@ def _render_product_updater_ui():
 
     rows = st.session_state.pu_rows
 
+    # ── Optional cost price → suggested sell price ───────────────────────────
+    pu_cost = st.number_input(
+        "Cost Price £ (optional — fills Suggested Price column)",
+        min_value=0.0, value=0.0, format="%.2f", step=0.01, key="pu_cost",
+    )
+    _show_suggested = pu_cost > 0
+
     # ── Editable table (compact fields) ──────────────────────────────────────
     _display_cols = ["Depot", "SKU", "Name", "ABV", "Format", "Coupler", "Price"]
-    _df = pd.DataFrame([{c: r[c] for c in _display_cols} for r in rows])
+    _table_rows = []
+    for _r in rows:
+        _tr = {c: _r[c] for c in _display_cols}
+        if _show_suggested:
+            _tr["Suggested £"] = calculate_sell_price(pu_cost, _r["_attr5"], _r["Format"])
+        _table_rows.append(_tr)
+    _df = pd.DataFrame(_table_rows)
+    _col_cfg = {
+        "Depot":   st.column_config.TextColumn("Depot", disabled=True, width="small"),
+        "SKU":     st.column_config.TextColumn("Base SKU (no L-/G-)", width="large"),
+        "Name":    st.column_config.TextColumn("Name (no L-/G-)", width="large"),
+        "ABV":     st.column_config.TextColumn("ABV", width="small"),
+        "Format":  st.column_config.SelectboxColumn("Format", width="medium",
+                       options=["Cans","Bottles","Steel Keg","KeyKeg","PolyKeg","Cask","Bag in Box",""]),
+        "Coupler": st.column_config.TextColumn("Coupler", width="medium"),
+        "Price":   st.column_config.NumberColumn("Price £", format="£%.2f", width="small"),
+    }
+    if _show_suggested:
+        _col_cfg["Suggested £"] = st.column_config.NumberColumn(
+            "Suggested £", format="£%.2f", width="small", disabled=True,
+            help="Calculated from the cost price using standard markup rules",
+        )
     _edited = st.data_editor(
         _df,
         use_container_width=True,
         hide_index=True,
-        column_config={
-            "Depot":   st.column_config.TextColumn("Depot", disabled=True, width="small"),
-            "SKU":     st.column_config.TextColumn("Base SKU (no L-/G-)", width="large"),
-            "Name":    st.column_config.TextColumn("Name (no L-/G-)", width="large"),
-            "ABV":     st.column_config.TextColumn("ABV", width="small"),
-            "Format":  st.column_config.SelectboxColumn("Format", width="medium",
-                           options=["Cans","Bottles","Steel Keg","KeyKeg","PolyKeg","Cask","Bag in Box",""]),
-            "Coupler": st.column_config.TextColumn("Coupler", width="medium"),
-            "Price":   st.column_config.NumberColumn("Price £", format="£%.2f", width="small"),
-        },
+        column_config=_col_cfg,
         key="pu_editor",
     )
 
