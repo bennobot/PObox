@@ -2503,6 +2503,11 @@ def _render_product_updater_ui():
         return
 
     rows = st.session_state.pu_rows
+    # Schema migration: if rows were cached before the Product column was added, clear and re-lookup
+    if rows and "Product" not in rows[0]:
+        st.session_state.pu_rows = None
+        st.info("Table format updated — please look up the SKU again.")
+        return
 
     # ── Optional cost price → suggested sell price ───────────────────────────
     pu_cost = st.number_input(
