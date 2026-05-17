@@ -2514,8 +2514,9 @@ def _render_product_updater_ui():
                         "_original_sku": _prod.get("SKU", f"{_pfx}-{base}"),
                         "_cin7_dict":    _prod,
                     })
-                st.session_state.pu_rows = rows
-                st.session_state.pu_log  = []
+                st.session_state.pu_rows   = rows
+                st.session_state.pu_staged = None   # clear any stale staged changes from previous lookup
+                st.session_state.pu_log    = []
         else:
             st.warning("Enter a SKU first.")
 
