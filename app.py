@@ -2088,6 +2088,9 @@ def _render_product_clone_ui():
         _raw_base = re.sub(r'^[LG]-', '', lu['source_sku'])
         _sku_segs = _raw_base.rsplit('-', 1)
         _family_part = _sku_segs[0] if len(_sku_segs) > 1 else _raw_base
+        # Stamp today's date into the SKU (replaces the original 8-digit MMDDYYYY code)
+        _today_code = __import__('datetime').date.today().strftime("%m%d%Y")
+        _family_part = re.sub(r'\b\d{8}\b', _today_code, _family_part)
         if same_format:
             family_base_sku = _family_part
         else:
