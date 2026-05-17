@@ -533,7 +533,7 @@ def update_shopify_product_details(sku, new_product_title, new_variant_title, ol
     _has_new_desc = new_description is not None and str(new_description).strip()
     _prod_input = {"id": product_gid}
     if updated_title and updated_title != current_title: _prod_input["title"] = updated_title
-    if _has_new_desc: _prod_input["descriptionHtml"] = str(new_description).strip()
+    if _has_new_desc: _prod_input["bodyHtml"] = str(new_description).strip()   # input field is bodyHtml; output is descriptionHtml
     if len(_prod_input) > 1:
         _prod_mut = """mutation productUpdate($input: ProductInput!) {
           productUpdate(input: $input) { product { id title } userErrors { field message } }
@@ -754,7 +754,7 @@ def push_shopify_product_update(old_sku, new_sku, new_product_title, new_variant
     # ── Product title + description via GraphQL productUpdate ────────────────
     _prod_input = {"id": product_gid}
     if new_product_title: _prod_input["title"] = new_product_title
-    if _has_desc:         _prod_input["descriptionHtml"] = str(new_desc).strip()
+    if _has_desc:         _prod_input["bodyHtml"] = str(new_desc).strip()   # input field is bodyHtml; output field is descriptionHtml
     if len(_prod_input) > 1:
         _prod_mut = """mutation productUpdate($input: ProductInput!) {
           productUpdate(input: $input) {
@@ -782,8 +782,8 @@ def push_shopify_product_update(old_sku, new_sku, new_product_title, new_variant
                             # Mutation ran but title unchanged — log exact Shopify value for diagnosis
                             errors.append(f"product title: no-op (Shopify returned {_ret_title!r})")
                         else:
-                            if "title"           in _prod_input: updated.append("title")
-                            if "descriptionHtml" in _prod_input: updated.append("description")
+                            if "title"    in _prod_input: updated.append("title")
+                            if "bodyHtml" in _prod_input: updated.append("description")
         except Exception as e: errors.append(f"product mutation: {e}")
 
     # ── Variant level: option (displayed title) + SKU via GraphQL ────────────
