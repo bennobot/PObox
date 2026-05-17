@@ -2523,16 +2523,41 @@ def _render_product_updater_ui():
 
             for _s in _staged:
                 _loc = "London" if _s["depot"] == "L" else "Gloucester"
+                _old = _s["_cin7_dict"]
+
+                # ── Field-level diff (same style as price checker) ────────────
+                _changes = []
+                _old_sku_val  = _old.get("SKU", "")
+                _old_name_val = _old.get("Name", "")
+                _old_abv_val  = str(_old.get("AdditionalAttribute10", "") or "")
+                _old_fmt_val  = str(_old.get("AdditionalAttribute3",  "") or "")
+                _old_cpl_val  = str(_old.get("AdditionalAttribute8",  "") or "")
+                _old_price_val= float(_old.get("PriceTier1", 0) or 0)
+                _old_desc_val = str(_old.get("Description", "") or "")
+
+                if _old_sku_val   != _s["new_sku"]:   _changes.append(f"SKU:    {_old_sku_val} → {_s['new_sku']}")
+                if _old_name_val  != _s["new_name"]:  _changes.append(f"Name:   {_old_name_val} → {_s['new_name']}")
+                if _old_abv_val   != _s["new_abv"]:   _changes.append(f"ABV:    {_old_abv_val} → {_s['new_abv']}")
+                if _old_fmt_val   != _s["new_fmt"]:   _changes.append(f"Format: {_old_fmt_val} → {_s['new_fmt']}")
+                if _old_cpl_val   != _s["new_cpl"]:   _changes.append(f"Coupler:{_old_cpl_val} → {_s['new_cpl']}")
+                if abs(_old_price_val - _s["new_price"]) > 0.001: _changes.append(f"Price:  £{_old_price_val:.2f} → £{_s['new_price']:.2f}")
+                if _old_desc_val.strip() != str(_s["new_desc"]).strip(): _changes.append("Description: updated")
+
+                _live.append(f"\n── {_s['depot']} ({_loc}) ──")
+                if _changes:
+                    for _c in _changes: _live.append(f"  {_c}")
+                else:
+                    _live.append("  (no changes detected)")
+                _log_box.code("\n".join(_live), language="text")
 
                 # Cin7 ────────────────────────────────────────────────────────
-                _live.append(f"\n── {_s['depot']} ({_loc}) ──")
                 _live.append(f"Cin7: updating...")
                 _step += 1
                 _progress.progress(_step / _total, text=f"{_loc} — Cin7")
                 _log_box.code("\n".join(_live), language="text")
 
                 _ok, _msg = push_cin7_product_update(
-                    _s["_cin7_dict"], _s["new_sku"], _s["new_name"],
+                    _old, _s["new_sku"], _s["new_name"],
                     _s["new_abv"], _s["new_fmt"], _s["new_cpl"],
                     _s["new_price"], _s["new_desc"],
                 )
