@@ -695,6 +695,21 @@ def update_shopify_price(variant_gid, new_price):
 
 # ── Product Updater helpers ───────────────────────────────────────────────────
 
+def fetch_shopify_description_by_sku(sku):
+    """Return the product descriptionHtml from Shopify for a given variant SKU."""
+    if "shopify" not in st.secrets: return ""
+    creds = st.secrets["shopify"]
+    shop_url = creds.get("shop_url"); token = creds.get("access_token"); version = creds.get("api_version", "2024-04")
+    ep = f"https://{shop_url}/admin/api/{version}/graphql.json"
+    h  = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
+    q  = """query($q:String!){productVariants(first:1,query:$q){edges{node{product{descriptionHtml}}}}}"""
+    try:
+        r = requests.post(ep, json={"query": q, "variables": {"q": f"sku:{sku}"}}, headers=h)
+        edges = r.json().get("data", {}).get("productVariants", {}).get("edges", [])
+        if edges: return edges[0]["node"]["product"].get("descriptionHtml", "") or ""
+    except Exception: pass
+    return ""
+
 def fetch_cin7_full_product_by_sku(sku):
     """Return the full Cin7 product dict for a SKU (exact match)."""
     headers = get_cin7_headers()
@@ -2466,6 +2481,12 @@ def _render_product_updater_ui():
                 st.error("Neither L- nor G- variant found in Cin7.")
                 st.session_state.pu_rows = None
             else:
+                # Fetch Shopify descriptions (source of truth for descriptions)
+                with st.spinner("Fetching Shopify descriptions..."):
+                    _sh_desc = {
+                        "L": fetch_shopify_description_by_sku(f"L-{base}"),
+                        "G": fetch_shopify_description_by_sku(f"G-{base}"),
+                    }
                 rows = []
                 for _pfx, _prod in [("L", _l), ("G", _g)]:
                     if not _prod:
@@ -2486,7 +2507,7 @@ def _render_product_updater_ui():
                         "Format":      str(_prod.get("AdditionalAttribute3",  "") or ""),
                         "Coupler":     str(_prod.get("AdditionalAttribute8",  "") or ""),
                         "Price":       float(_prod.get("PriceTier1", 0) or 0),
-                        "Description": str(_prod.get("Description", "") or ""),
+                        "Description": _sh_desc.get(_pfx, "") or str(_prod.get("Description", "") or ""),
                         "_brand":        _brand,   # brewery — internal, not editable
                         "_variant":      _variant, # keg size/type — internal
                         "_attr5":        str(_prod.get("AdditionalAttribute5", "Rotational Product") or "Rotational Product"),
