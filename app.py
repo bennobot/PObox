@@ -236,8 +236,30 @@ def search_untappd_item(supplier, product, manual_id=None):
             "query_used": q_used
         }
 
-    # 1. Try manual ID directly
+    # 1. Try manual ID — direct fetch by ID endpoint, then ID text-search, then string search
     if clean_manual_id:
+        # 1a. Direct item fetch by ID (most reliable)
+        try:
+            url_direct = f"{base_url}/items/{clean_manual_id}"
+            resp_direct = requests.get(url_direct, headers=headers)
+            if resp_direct.status_code == 200:
+                data_direct = resp_direct.json()
+                # API may return the item directly or wrapped in a key
+                item_direct = None
+                if isinstance(data_direct, dict):
+                    if data_direct.get("untappd_id") == clean_manual_id:
+                        item_direct = data_direct
+                    else:
+                        for wrap_key in ("item", "beer", "data", "result"):
+                            candidate = data_direct.get(wrap_key)
+                            if isinstance(candidate, dict) and candidate.get("untappd_id") == clean_manual_id:
+                                item_direct = candidate
+                                break
+                if item_direct:
+                    return parse_item(item_direct, str(clean_manual_id))
+        except: pass
+
+        # 1b. Text search for the ID number
         try:
             url_id = f"{base_url}/items/search?q={clean_manual_id}"
             response = requests.get(url_id, headers=headers)
@@ -260,6 +282,8 @@ def search_untappd_item(supplier, product, manual_id=None):
                     for item in items:
                         if item.get("untappd_id") == clean_manual_id:
                             return parse_item(item, query_str)
+                    # String search didn't find the manual ID — return bare minimum
+                    # (style/desc/label will be absent; user can retry or check ID)
                     return {
                         "untappd_id": clean_manual_id,
                         "name": clean_prod,
@@ -459,6 +483,9 @@ def update_cin7_product_details(product_id, cin7_full_name, old_product, new_pro
         payload = prods[0].copy()
         for ro in ("CreatedDate", "ModifiedDate", "BrandID"):
             payload.pop(ro, None)
+        # Carton dimensions are not used — always omit them to avoid Cin7 validation errors
+        for dim_key in ("CartonLength", "CartonWidth", "CartonHeight", "CartonWeight", "CartonVolume"):
+            payload.pop(dim_key, None)
     except Exception as e:
         return False, f"GET error: {e}"
     # Apply name changes via segment-safe replacement (includes " / " delimiters
@@ -494,7 +521,7 @@ def update_cin7_product_details(product_id, cin7_full_name, old_product, new_pro
     except Exception as e:
         return False, str(e)
 
-def update_shopify_product_details(sku, new_product_title, new_variant_title, old_abv, new_abv, old_product=None, new_description=None):
+def update_shopify_product_details(sku, new_product_title, new_variant_title, old_abv, new_abv, old_product=None, new_description=None, old_variant=None):
     if "shopify" not in st.secrets: return False, "No secrets."
     creds = st.secrets["shopify"]
     shop_url = creds.get("shop_url")
@@ -506,15 +533,23 @@ def update_shopify_product_details(sku, new_product_title, new_variant_title, ol
     variant_gid, _ = fetch_shopify_price_by_sku(sku)
     if not variant_gid: return False, "SKU not found in Shopify"
 
-    # Get numeric IDs and current product title in one query
+    # Get numeric IDs, current product title, and variant option info in one query
     numeric_variant_id = variant_gid.split("/")[-1]
-    query_prod = """query($id: ID!) { productVariant(id: $id) { product { id title } } }"""
+    query_prod = """query($id: ID!) { productVariant(id: $id) {
+        selectedOptions { name value }
+        product { id title }
+    } }"""
     try:
         r = requests.post(gql_endpoint, json={"query": query_prod, "variables": {"id": variant_gid}}, headers=gql_headers)
-        prod_data = r.json().get("data", {}).get("productVariant", {}).get("product", {})
+        _vdata = r.json().get("data", {}).get("productVariant", {})
+        prod_data = _vdata.get("product", {})
         product_gid = prod_data.get("id", "")
         current_title = prod_data.get("title", "")
         numeric_product_id = product_gid.split("/")[-1]
+        # Capture the real option name and current variant value to avoid "Option does not exist"
+        _sel_opts = _vdata.get("selectedOptions", [])
+        _option_name = _sel_opts[0]["name"] if _sel_opts else "Title"
+        _current_variant_value = _sel_opts[0]["value"] if _sel_opts else ""
     except Exception as e:
         return False, f"Could not resolve product GID: {e}"
 
@@ -562,7 +597,18 @@ def update_shopify_product_details(sku, new_product_title, new_variant_title, ol
                         # never matches plain-text input. No errors = description accepted.
         except Exception as e: errors.append(f"Product: {e}")
 
-    if new_variant_title:
+    # Only update variant title when it has actually changed.
+    # Compare against old_variant (the known-before value) when provided; fall back
+    # to Shopify's live value.  This prevents the mutation firing on every ABV-only
+    # update when the variant hasn't changed, which caused "Option does not exist".
+    _variant_changed = (
+        new_variant_title
+        and (
+            (old_variant is not None and new_variant_title != old_variant)
+            or (old_variant is None and new_variant_title != _current_variant_value)
+        )
+    )
+    if _variant_changed:
         _var_mut = """mutation productVariantsBulkUpdate($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
           productVariantsBulkUpdate(productId: $productId, variants: $variants) {
             productVariants { id }
@@ -572,7 +618,7 @@ def update_shopify_product_details(sku, new_product_title, new_variant_title, ol
         try:
             r = requests.post(gql_endpoint, json={"query": _var_mut, "variables": {
                 "productId": product_gid,
-                "variants": [{"id": variant_gid, "optionValues": [{"name": new_variant_title, "optionName": "Title"}]}]
+                "variants": [{"id": variant_gid, "optionValues": [{"name": new_variant_title, "optionName": _option_name}]}]
             }}, headers=gql_headers)
             _verrs = r.json().get("data", {}).get("productVariantsBulkUpdate", {}).get("userErrors", [])
             if _verrs: errors.append(f"Variant: {_verrs}")
@@ -756,8 +802,8 @@ def push_shopify_product_update(old_sku, new_sku, new_product_title, new_variant
     shop_url = creds.get("shop_url"); token = creds.get("access_token"); version = creds.get("api_version", "2024-04")
     gql_ep = f"https://{shop_url}/admin/api/{version}/graphql.json"
     gql_h  = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
-    # Resolve IDs from old SKU
-    q = """query($q:String!){productVariants(first:1,query:$q){edges{node{id sku product{id}}}}}"""
+    # Resolve IDs from old SKU — also fetch selectedOptions so we know the real option name
+    q = """query($q:String!){productVariants(first:1,query:$q){edges{node{id sku selectedOptions{name value} product{id}}}}}"""
     try:
         r = requests.post(gql_ep, json={"query": q, "variables": {"q": f"sku:{old_sku}"}}, headers=gql_h)
         edges = r.json().get("data", {}).get("productVariants", {}).get("edges", [])
@@ -765,6 +811,9 @@ def push_shopify_product_update(old_sku, new_sku, new_product_title, new_variant
         node = edges[0]["node"]
         variant_gid = node["id"]; product_gid = node["product"]["id"]
         num_var = variant_gid.split("/")[-1]; num_prod = product_gid.split("/")[-1]
+        _sel_opts = node.get("selectedOptions", [])
+        _opt_name  = _sel_opts[0]["name"]  if _sel_opts else "Title"
+        _opt_value = _sel_opts[0]["value"] if _sel_opts else ""
     except Exception as e:
         return False, f"Lookup failed: {e}"
     errors = []
@@ -808,8 +857,11 @@ def push_shopify_product_update(old_sku, new_sku, new_product_title, new_variant
         except Exception as e: errors.append(f"product mutation: {e}")
 
     # ── Variant level: option (displayed title) + SKU via GraphQL ────────────
+    # Only update the option value when it actually changed; use the real option
+    # name from the variant (not hardcoded "Title") to avoid "Option does not exist".
     _var_input = {"id": variant_gid}
-    if new_variant_title: _var_input["optionValues"] = [{"name": new_variant_title, "optionName": "Title"}]
+    if new_variant_title and new_variant_title != _opt_value:
+        _var_input["optionValues"] = [{"name": new_variant_title, "optionName": _opt_name}]
     if new_sku and new_sku != old_sku: _var_input["sku"] = new_sku
     if len(_var_input) > 1:
         _var_mut = """mutation productVariantsBulkUpdate($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
@@ -3743,7 +3795,7 @@ if st.session_state.header_data is not None:
                         if prod_id:
                             cin7_ok, msg = update_cin7_product_details(prod_id, cin7_name, old_product, new_product, old_variant, new_variant, old_abv, new_abv, new_description=send_desc)
                             detail_log.append(f"  {'✅' if cin7_ok else '❌'} Cin7:    {msg}")
-                        ok, msg = update_shopify_product_details(sku, new_product, new_variant, old_abv, new_abv, old_product=old_product, new_description=send_desc)
+                        ok, msg = update_shopify_product_details(sku, new_product, new_variant, old_abv, new_abv, old_product=old_product, new_description=send_desc, old_variant=old_variant)
                         detail_log.append(f"  {'✅' if ok else '❌'} Shopify: {msg}")
                         # Refresh Cin7_Name and related columns in session state so the next
                         # edit in this session sees the new state as the "old" baseline.
