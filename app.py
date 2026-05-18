@@ -483,8 +483,9 @@ def update_cin7_product_details(product_id, cin7_full_name, old_product, new_pro
         payload = prods[0].copy()
         for ro in ("CreatedDate", "ModifiedDate", "BrandID"):
             payload.pop(ro, None)
-        # Carton dimensions are not used — always omit them to avoid Cin7 validation errors
-        for dim_key in ("CartonLength", "CartonWidth", "CartonHeight", "CartonWeight", "CartonVolume"):
+        # Carton fields are not used — always omit them to avoid Cin7 validation errors
+        for dim_key in ("CartonLength", "CartonWidth", "CartonHeight", "CartonWeight", "CartonVolume",
+                        "CartonQuantity", "CartonInnerQuantity"):
             payload.pop(dim_key, None)
     except Exception as e:
         return False, f"GET error: {e}"
