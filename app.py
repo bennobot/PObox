@@ -2998,7 +2998,21 @@ if st.button("🚀 Process Invoice", type="primary"):
                         "Collaborator", "Product_Name", "ABV", "Format", "Pack_Size", "Volume",
                         "Item_Price", "Line_Total", "Quantity"]
                 existing = [c for c in cols if c in df_lines.columns]
-                st.session_state.line_items = df_lines[existing]
+                df_lines = df_lines[existing].copy()
+                # Normalise Item_Price to the discounted unit price immediately on intake.
+                # Line_Total is the authoritative post-discount total; Item_Price from the
+                # AI may be the pre-discount price. Recalculate so every downstream flow
+                # (price check, product matrix, product upload) uses the correct cost.
+                if 'Line_Total' in df_lines.columns and 'Quantity' in df_lines.columns:
+                    for idx, row in df_lines.iterrows():
+                        try:
+                            qty = float(row['Quantity'])
+                            lt  = float(row['Line_Total'])
+                            if qty > 0 and pd.notna(lt) and lt > 0:
+                                df_lines.at[idx, 'Item_Price'] = round(lt / qty, 2)
+                        except Exception:
+                            pass
+                st.session_state.line_items = df_lines
 
                 st.session_state.shopify_logs = []
                 st.session_state.untappd_logs = []
