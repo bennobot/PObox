@@ -1735,6 +1735,7 @@ def run_reconciliation_check(lines_df, recheck_only=False):
     df = lines_df.copy()
     if 'Split_Type' not in df.columns: df['Split_Type'] = ""
     if 'Strict_Search' not in df.columns: df['Strict_Search'] = False
+    if 'Ignore_Match' not in df.columns: df['Ignore_Match'] = False
     if 'Recheck' not in df.columns: df['Recheck'] = True
 
     if recheck_only:
@@ -1770,6 +1771,24 @@ def run_reconciliation_check(lines_df, recheck_only=False):
     for _, row in df.iterrows():
         # In recheck_only mode, pass through rows not marked for recheck
         if recheck_only and not bool(row.get('Recheck', True)):
+            results.append(row)
+            continue
+        # Ignore_Match: user has flagged this line as a false match — skip search,
+        # clear match fields, and mark as Ignored so it flows to the product upload
+        # matrix rather than the PO.
+        if bool(row.get('Ignore_Match', False)):
+            row = row.copy()
+            row['Shopify_Status']  = "⚠️ Ignored"
+            row['Match_Score']     = ""
+            row['Matched_Product'] = ""
+            row['Matched_Variant'] = ""
+            row['Image']           = ""
+            row['London_SKU']      = ""
+            row['Gloucester_SKU']  = ""
+            row['Cin7_London_ID']  = ""
+            row['Cin7_Glou_ID']    = ""
+            row['Recheck']         = False
+            logs.append(f"⏭️ Ignored: {row.get('Product_Name', '')} — skipping Shopify match")
             results.append(row)
             continue
         status = "❓ Vendor Not Found"
@@ -2991,10 +3010,11 @@ if st.button("🚀 Process Invoice", type="primary"):
                 df_lines['Shopify_Status'] = "Pending"
                 df_lines['Split_Type'] = ""
                 df_lines['Strict_Search'] = False
+                df_lines['Ignore_Match'] = False
                 df_lines['Manual_Shopify_SKU'] = ""
                 df_lines['Recheck'] = True
 
-                cols = ["Recheck", "Manual_Shopify_SKU", "Split_Type", "Strict_Search", "Supplier_Name",
+                cols = ["Recheck", "Ignore_Match", "Manual_Shopify_SKU", "Split_Type", "Strict_Search", "Supplier_Name",
                         "Collaborator", "Product_Name", "ABV", "Format", "Pack_Size", "Volume",
                         "Item_Price", "Line_Total", "Quantity"]
                 existing = [c for c in cols if c in df_lines.columns]
@@ -3057,7 +3077,7 @@ if st.session_state.header_data is not None:
         display_df = st.session_state.line_items.copy()
 
         ideal_order = [
-            'Recheck', 'Manual_Shopify_SKU',
+            'Recheck', 'Ignore_Match', 'Manual_Shopify_SKU',
             'Split_Type', 'Strict_Search', 'Shopify_Status', 'Match_Score',
             'Matched_Product', 'Matched_Variant', 'Image',
             'Supplier_Name', 'Collaborator', 'Product_Name', 'ABV', 'Format',
@@ -3077,6 +3097,8 @@ if st.session_state.header_data is not None:
             "Matched_Variant": st.column_config.TextColumn("Variant Match", disabled=True),
             "Recheck": st.column_config.CheckboxColumn("Recheck?", width="small",
                 help="Tick to include this line in Recheck Selected. Auto-ticked for unmatched rows."),
+            "Ignore_Match": st.column_config.CheckboxColumn("Ignore?", width="small",
+                help="Tick to ignore any Shopify match and treat this as a new product for upload. Then hit Recheck Selected."),
             "Manual_Shopify_SKU": st.column_config.TextColumn("Manual SKU Override", width="medium",
                 help="Paste any L- or G- SKU from Shopify to force-match this line and skip fuzzy search"),
             "Split_Type": st.column_config.SelectboxColumn("Split Type", options=["", "Half Case", "Single Unit"], width="small", help="Half Case: order half pack size. Single Unit: order individual units."),
