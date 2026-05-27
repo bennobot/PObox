@@ -3731,7 +3731,12 @@ if st.session_state.header_data is not None:
                 key="price_check_editor"
             )
             if st.button("💾 Save Changes", type="primary"):
-                st.session_state.price_check_data = edited_pc
+                saved = edited_pc.copy()
+                # Restore hidden columns dropped by the data editor (e.g. _orig_description, Cin7_Name)
+                for hidden_col in ('_orig_description', 'Cin7_Name'):
+                    if hidden_col not in saved.columns and hidden_col in pc_df.columns:
+                        saved[hidden_col] = pc_df[hidden_col].values
+                st.session_state.price_check_data = saved
                 st.success("✅ Changes saved.")
 
             st.divider()
@@ -3792,8 +3797,13 @@ if st.session_state.header_data is not None:
                         old_product     = cin7_parts[1] if len(cin7_parts) >= 2 else new_product
                         old_variant     = cin7_parts[-1] if len(cin7_parts) >= 2 else new_variant
                         old_abv         = cin7_parts[2].replace('%', '').strip() if len(cin7_parts) >= 3 else str(new_abv)
-                        # _orig_description stored at build time; fall back to current value if absent
-                        old_description = str(row.get('_orig_description', row.get('Description', '')) or '')
+                        # _orig_description is hidden in the data editor and gets dropped from
+                        # edited_pc by Streamlit, so look it up from price_check_original instead.
+                        _orig_df = st.session_state.get('price_check_original', pd.DataFrame())
+                        if not _orig_df.empty and idx in _orig_df.index:
+                            old_description = str(_orig_df.at[idx, '_orig_description'] or _orig_df.at[idx, 'Description'] or '')
+                        else:
+                            old_description = str(row.get('_orig_description', row.get('Description', '')) or '')
                         desc_changed = str(old_description).strip() != str(new_description).strip()
                         # Build readable header showing what's changing
                         label = cin7_name if cin7_name else sku
