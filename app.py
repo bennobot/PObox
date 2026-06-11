@@ -2404,7 +2404,7 @@ def _render_product_clone_ui():
                 _vsku  = f"{_pack_int}X{size_code_pc}"
             elif _kc:
                 _vname = f"{pc_vol} - {_kc}"
-                _vsku  = f"{size_code_pc}{_ks}"
+                _vsku  = f"{size_code_pc}-{_ks}"
             else:
                 _vname = pc_vol
                 _vsku  = size_code_pc
