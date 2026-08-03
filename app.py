@@ -3032,6 +3032,30 @@ if st.button("🚀 Process Invoice", type="primary"):
                                 df_lines.at[idx, 'Item_Price'] = round(lt / qty, 2)
                         except Exception:
                             pass
+                # Distribute Shipping_Charge equally: shipping / total_unit_qty added per unit.
+                _shipping = 0.0
+                try:
+                    _shipping = float(data['header'].get('Shipping_Charge', 0) or 0)
+                except Exception:
+                    pass
+                if _shipping > 0 and 'Quantity' in df_lines.columns:
+                    try:
+                        _total_qty = sum(
+                            float(q) for q in df_lines['Quantity']
+                            if pd.notna(q) and str(q).strip()
+                        )
+                        if _total_qty > 0:
+                            _spu = _shipping / _total_qty
+                            for idx, row in df_lines.iterrows():
+                                try:
+                                    if float(row['Quantity']) > 0:
+                                        df_lines.at[idx, 'Item_Price'] = round(
+                                            float(df_lines.at[idx, 'Item_Price']) + _spu, 4
+                                        )
+                                except Exception:
+                                    pass
+                    except Exception:
+                        pass
                 st.session_state.line_items = df_lines
 
                 st.session_state.shopify_logs = []
