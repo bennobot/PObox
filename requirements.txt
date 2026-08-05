@@ -1,4 +1,5 @@
-streamlit<1.61.0
+streamlit
+starlette<1.4.0
 pandas
 pdf2image
 pytesseract
