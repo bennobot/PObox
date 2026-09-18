@@ -90,13 +90,14 @@ GLOBAL_RULES_TEXT = f"""
    - **Title Case**: Convert Product Name to Title Case.
 
 2. **FORMAT MAPPING (The Dictionary)**:
-   - "LSS" -> Steel Keg.
-   - "Kegstar" (41L) -> Cask 9 Gallon.
-   - "Kegstar" (Other) -> Steel Keg.
-   - "E-Keg" / "eKeg" / "Keg" -> Steel Keg.
-   - "Firkin" -> Cask 9 Gallon.
-   - "Pin" -> Cask 4.5 Gallon.
-   - "Poly" -> PolyKeg.
+   - "LSS" -> Format: Steel Keg.
+   - "Kegstar" (41L) -> Format: Cask, Volume: 9 Gallon.
+   - "Kegstar" (Other) -> Format: Steel Keg.
+   - "E-Keg" / "eKeg" / "Keg" -> Format: Steel Keg.
+   - "Firkin" -> Format: Cask, Volume: 9 Gallon.
+   - "Pin" -> Format: Cask, Volume: 4.5 Gallon.
+   - "Poly" -> Format: PolyKeg.
+   - **IMPORTANT**: The Format field must ONLY contain the format name (e.g. "Cask", "Steel Keg", "KeyKeg"). Volume goes in the Volume field. Never put "Cask 9 Gallon" or "Cask 4.5 Gallon" in the Format field.
    - **Conversions**: ml->cl, L->Litre.
 
 3. **VALID LIST HANDLING**:
