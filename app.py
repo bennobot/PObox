@@ -3410,6 +3410,7 @@ if st.session_state.header_data is not None:
                     st.warning("⚠️ Keg connector map is empty — check the SKU worksheet in the reference spreadsheet.")
                 today_str = datetime.now().strftime('%d%m%Y')
                 processed_rows = []
+                weight_warnings = []
 
                 for idx, row in st.session_state.upload_data.iterrows():
                     supp_name = str(row.get('untappd_brewery', '')).strip()
@@ -3424,6 +3425,8 @@ if st.session_state.header_data is not None:
                     lookup_key = (fmt_name.lower(), vol_name.lower())
                     unit_weight = weight_map.get(lookup_key, 0.0)
                     size_code = size_code_map.get(lookup_key, "00")
+                    if lookup_key not in weight_map:
+                        weight_warnings.append(f"**{prod_name}** — no weight for `{fmt_name} / {vol_name}`")
 
                     s_code = supplier_map.get(supp_name, "XXXX")
                     p_code = generate_sku_parts(prod_name)
@@ -3505,7 +3508,12 @@ if st.session_state.header_data is not None:
 
                 st.session_state.upload_data = pd.DataFrame(processed_rows)
                 st.session_state.upload_generated = True
-                st.success("✅ Upload data generated!")
+                if weight_warnings:
+                    st.error(f"⚠️ **Weight lookup failed for {len(weight_warnings)} product(s)** — check the Format and Volume values, then update the Weight reference sheet before uploading:")
+                    for w in weight_warnings:
+                        st.markdown(f"- {w}")
+                else:
+                    st.success("✅ Upload data generated!")
 
             if st.session_state.upload_generated and st.session_state.upload_data is not None:
                 st.dataframe(st.session_state.upload_data, use_container_width=True)
