@@ -2544,6 +2544,7 @@ def _render_product_clone_ui():
                             for _sl in _sh_logs[1:]:
                                 _logs.append(f"   {_sl.strip()}")
                 st.session_state.tb_create_log = _logs
+                fetch_shopify_products_by_vendor.clear()
                 st.rerun()
 
     if st.session_state.get('tb_create_log'):
@@ -3639,6 +3640,7 @@ if st.session_state.header_data is not None:
                                         shopify_update_log(f"   💥 Exception: {str(e)}")
                             st.session_state.shopify_log_text = "\n".join(shopify_log)
                             st.session_state.shopify_links = shopify_links
+                            fetch_shopify_products_by_vendor.clear()
                             st.rerun()
 
                 if st.session_state.cin7_log_text:
