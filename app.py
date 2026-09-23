@@ -1120,6 +1120,7 @@ def fetch_shopify_source_data(sku):
     except Exception:
         return {}
 
+@st.cache_data(ttl=300)
 def fetch_shopify_products_by_vendor(vendor):
     if "shopify" not in st.secrets: return []
     if not vendor or not isinstance(vendor, str): return []
