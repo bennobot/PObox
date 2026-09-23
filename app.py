@@ -1763,8 +1763,18 @@ def run_reconciliation_check(lines_df, recheck_only=False):
                     'Image', 'London_SKU', 'Cin7_London_ID', 'Gloucester_SKU', 'Cin7_Glou_ID'):
             if col not in df.columns: df[col] = ""
         recheck_mask = df['Recheck'].fillna(True).astype(bool)
-        suppliers = [s for s in df.loc[recheck_mask, 'Supplier_Name'].unique()
-                     if isinstance(s, str) and s.strip()]
+        manual_sku_col = df.get('Manual_Shopify_SKU', None)
+        suppliers = []
+        for s in df.loc[recheck_mask, 'Supplier_Name'].unique():
+            if not (isinstance(s, str) and s.strip()):
+                continue
+            supplier_mask = recheck_mask & (df['Supplier_Name'] == s)
+            if manual_sku_col is not None:
+                all_manual = df.loc[supplier_mask, 'Manual_Shopify_SKU'].fillna('').astype(str).str.strip().ne('').all()
+            else:
+                all_manual = False
+            if not all_manual:
+                suppliers.append(s)
         logs.append(f"🔄 Rechecking {recheck_mask.sum()} selected row(s) across {len(suppliers)} supplier(s).")
     else:
         df['Shopify_Status'] = "Pending"
