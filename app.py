@@ -428,7 +428,7 @@ def get_cin7_base_url():
 # the API rate limit (Cin7 allows ~300 req/min = ~5/sec).
 _cin7_rl_lock = threading.Lock()
 _cin7_rl_last = 0.0
-_CIN7_MIN_INTERVAL = 0.25  # 250 ms between requests → max ~4/sec
+_CIN7_MIN_INTERVAL = 1.1   # ~54 req/min across all sessions, within Cin7's 60/min limit
 
 def make_cin7_request(method, url, headers=None, status_placeholder=None, **kwargs):
     """
