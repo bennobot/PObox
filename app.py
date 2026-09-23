@@ -3607,7 +3607,32 @@ if st.session_state.header_data is not None:
                                             else:
                                                 shopify_update_log(f"   ❌ Add variant failed [{r.status_code}]: {r.text[:200]}")
                                         else:
-                                            # Normal path: create new product
+                                            # Check if a product with this title already exists in Shopify
+                                            existing_id, _ = check_shopify_title(product_key)
+                                            if existing_id:
+                                                created_shopify_products[product_key] = existing_id
+                                                shopify_update_log(f"   📦 Existing Shopify product found (ID: {existing_id}) — adding variant")
+                                                r = requests.post(
+                                                    f"https://{shop_url}/admin/api/{version}/products/{existing_id}/variants.json",
+                                                    json={"variant": variant_payload}, headers=s_headers)
+                                                if r.status_code == 201:
+                                                    new_var = r.json().get('variant', {})
+                                                    variant_id = new_var.get('id')
+                                                    variant_title = new_var.get('title', '')
+                                                    shopify_update_log(f"   ✅ Variant added: {variant_title} (ID: {variant_id})")
+                                                    if variant_id:
+                                                        shopify_links.append({"label": f"{fam_name} — {variant_title} ({loc_prefix})", "url": f"https://{shop_url}/admin/products/{existing_id}/variants/{variant_id}"})
+                                                    if loc_ids:
+                                                        inv_item_id = new_var.get('inventory_item_id')
+                                                        target_loc = loc_ids['london'] if is_london else loc_ids['gloucester']
+                                                        loc_ok = set_variant_location(inv_item_id, target_loc, loc_ids['all_ids'])
+                                                        shopify_update_log(f"   {'✅' if loc_ok else '❌'} Inventory location set to {'London' if is_london else 'Gloucester'}")
+                                                elif r.status_code == 422 and "already exists" in r.text.lower():
+                                                    shopify_update_log(f"   ⚠️ Variant already exists — skipping")
+                                                else:
+                                                    shopify_update_log(f"   ❌ Add variant failed [{r.status_code}]: {r.text[:200]}")
+                                                continue
+                                            # No existing product — create new
                                             product_payload = create_shopify_product_payload(row, loc_prefix, [variant_payload])
                                             r = requests.post(f"https://{shop_url}/admin/api/{version}/products.json", json=product_payload, headers=s_headers)
                                             if r.status_code == 201:
