@@ -9,6 +9,7 @@ import re
 import io
 import requests
 import time
+import threading
 import warnings
 from datetime import datetime
 from urllib.parse import quote
@@ -421,15 +422,30 @@ def get_cin7_base_url():
     if "cin7" not in st.secrets: return None
     return st.secrets["cin7"].get("base_url", "https://inventory.dearsystems.com/ExternalApi/v2")
 
+# --- GLOBAL CIN7 RATE LIMITER ---
+# All Streamlit sessions share one process, so this lock serialises Cin7
+# requests across concurrent users and prevents them collectively hitting
+# the API rate limit (Cin7 allows ~300 req/min = ~5/sec).
+_cin7_rl_lock = threading.Lock()
+_cin7_rl_last = 0.0
+_CIN7_MIN_INTERVAL = 0.25  # 250 ms between requests → max ~4/sec
+
 def make_cin7_request(method, url, headers=None, status_placeholder=None, **kwargs):
     """
-    Exponential backoff up to 60s, honouring Retry-After header.
-    Surfaces retry progress if status_placeholder provided.
+    Global rate limiter (shared across all sessions) + exponential backoff
+    up to 60s on 429, honouring Retry-After header.
     """
+    global _cin7_rl_last
     if not headers: headers = get_cin7_headers()
     max_retries = 8
     backoff = 1.0
     for attempt in range(max_retries):
+        # Throttle: acquire lock, sleep if needed, then release before the HTTP call
+        with _cin7_rl_lock:
+            gap = _CIN7_MIN_INTERVAL - (time.time() - _cin7_rl_last)
+            if gap > 0:
+                time.sleep(gap)
+            _cin7_rl_last = time.time()
         try:
             response = requests.request(method, url, headers=headers, **kwargs)
             if response.status_code == 429:
