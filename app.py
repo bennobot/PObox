@@ -423,26 +423,28 @@ def get_cin7_base_url():
 
 def make_cin7_request(method, url, headers=None, status_placeholder=None, **kwargs):
     """
-    Capped backoff (max 8s). Surfaces retry progress if status_placeholder provided.
+    Exponential backoff up to 60s, honouring Retry-After header.
+    Surfaces retry progress if status_placeholder provided.
     """
     if not headers: headers = get_cin7_headers()
-    max_retries = 6
+    max_retries = 8
     backoff = 1.0
     for attempt in range(max_retries):
         try:
             response = requests.request(method, url, headers=headers, **kwargs)
             if response.status_code == 429:
-                wait = min(backoff, 8.0)   # cap at 8 seconds
+                retry_after = response.headers.get("Retry-After")
+                wait = float(retry_after) if retry_after else min(backoff, 60.0)
                 if status_placeholder:
                     status_placeholder.warning(f"⏳ Rate limited — retrying in {wait:.0f}s (attempt {attempt+1}/{max_retries})")
                 time.sleep(wait)
-                backoff = min(backoff * 2, 8.0)
+                backoff = min(backoff * 2, 60.0)
                 continue
             return response
         except Exception as e:
             if attempt == max_retries - 1: raise e
-            time.sleep(min(backoff, 8.0))
-            backoff = min(backoff * 2, 8.0)
+            time.sleep(min(backoff, 60.0))
+            backoff = min(backoff * 2, 60.0)
     return response
 
 # --- PRICE CHECKING & UPDATING HELPERS ---
@@ -1641,7 +1643,7 @@ def sync_product_to_cin7(upload_df, status_box=None):
     update_log("\n✅ Sync Process Complete.")
     return log, links
 
-def create_cin7_purchase_order(header_df, lines_df, location_choice):
+def create_cin7_purchase_order(header_df, lines_df, location_choice, status_placeholder=None):
     headers = get_cin7_headers()
     if not headers: return False, "Cin7 Secrets missing.", [], None
     logs = []
@@ -1678,7 +1680,7 @@ def create_cin7_purchase_order(header_df, lines_df, location_choice):
     }
     task_id = None
     try:
-        r1 = make_cin7_request("POST", url_create, headers=headers, json=payload_header)
+        r1 = make_cin7_request("POST", url_create, headers=headers, json=payload_header, status_placeholder=status_placeholder)
         if r1.status_code == 200: task_id = r1.json().get('ID')
         else: return False, f"Header Error: {r1.text}", logs, None
     except Exception as e: return False, f"Header Ex: {e}", logs, None
@@ -1689,7 +1691,7 @@ def create_cin7_purchase_order(header_df, lines_df, location_choice):
             "Memo": "Streamlit Import", "Status": "DRAFT", "Lines": order_lines, "AdditionalCharges": []
         }
         try:
-            r2 = make_cin7_request("POST", url_lines, headers=headers, json=payload_lines)
+            r2 = make_cin7_request("POST", url_lines, headers=headers, json=payload_lines, status_placeholder=status_placeholder)
             if r2.status_code == 200: return True, f"✅ PO Created!", logs, task_id
             else: return False, f"Line Error: {r2.text}", logs, None
         except Exception as e: return False, f"Lines Ex: {e}", logs, None
@@ -3708,9 +3710,11 @@ if st.session_state.header_data is not None:
                         new_g = swap_polykeg_sku_end(g_sku, new_end)
                         final_po_lines.at[row_idx, 'Cin7_London_ID'] = get_cin7_product_id(new_l)
                         final_po_lines.at[row_idx, 'Cin7_Glou_ID'] = get_cin7_product_id(new_g)
+                    _po_status = st.empty()
                     with st.spinner("Creating PO..."):
                         success, message, logs, task_id = create_cin7_purchase_order(
-                            st.session_state.header_data, final_po_lines, location_choice
+                            st.session_state.header_data, final_po_lines, location_choice,
+                            status_placeholder=_po_status
                         )
                         if success:
                             st.session_state.po_success = True
