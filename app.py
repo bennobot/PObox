@@ -1239,7 +1239,7 @@ def get_abv_category(abv_str):
 
 def split_untappd_style(full_style):
     if not full_style: return "", ""
-    parts = str(full_style).split("-", 1)
+    parts = str(full_style).split(" - ", 1)
     primary = parts[0].strip()
     secondary = parts[1].strip() if len(parts) > 1 else ""
     return primary, secondary
