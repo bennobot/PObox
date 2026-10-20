@@ -21,7 +21,14 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 
 # Import the Brain
-from knowledge_base import GLOBAL_RULES_TEXT, SUPPLIER_RULEBOOK
+from knowledge_base import GLOBAL_RULES_TEXT, SUPPLIER_RULEBOOK, VALID_FORMATS
+
+# Parse unique valid format names from the VALID_FORMATS definition
+VALID_FORMAT_NAMES = sorted({
+    line.split("|")[0].strip()
+    for line in VALID_FORMATS.strip().splitlines()
+    if "|" in line
+})
 
 # --- SUPPRESS GOOGLE WARNING ---
 warnings.filterwarnings("ignore", category=FutureWarning, module="google.generativeai")
@@ -2214,6 +2221,9 @@ def stage_products_for_upload(matrix_df):
         for i in range(1, 4):
             fmt_val = str(row.get(f'Format{i}', '')).strip()
             if fmt_val and fmt_val.lower() not in ['nan', 'none']:
+                if fmt_val not in VALID_FORMAT_NAMES:
+                    errors.append(f"Row {idx+1} ({prod_name}) Format{i}: '{fmt_val}' is not a valid format.")
+                    continue
                 new_rows.append({
                     'untappd_brewery': brand_name, 'collaborator': row.get('Collaborator', ''),
                     'untappd_product': prod_name, 'untappd_abv': clean_abv_val,
