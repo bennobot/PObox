@@ -3531,7 +3531,7 @@ if st.session_state.header_data is not None:
                                 variant_name = f"{vol_name} - {keg_connector}"
                             else:
                                 variant_name = vol_name
-                            sku_size = f"{cur_pack}X{size_code}" if cur_pack > 1 else f"{size_code}{keg_sku_end}"
+                            sku_size = f"{cur_pack}X{size_code}" if cur_pack > 1 else (f"{size_code}-{keg_sku_end}" if keg_sku_end else size_code)
                             variant_sku_base = f"{family_sku}-{sku_size}"
                             processed_rows.append({
                                 **row.to_dict(),
