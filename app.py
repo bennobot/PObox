@@ -23,6 +23,30 @@ from googleapiclient.http import MediaIoBaseDownload
 # Import the Brain
 from knowledge_base import GLOBAL_RULES_TEXT, SUPPLIER_RULEBOOK, VALID_FORMATS
 
+# Sale variants carry a SKU ending "-SALE" plus a date-style string, e.g.
+# "L-ABYSSUPA-30LST-SALE34567". They must NEVER be matched to an invoice line or
+# resolved to a Cin7 product ID — a sale variant is a different (clearance) stock
+# line, and putting its ID on a PO books the order against the wrong product.
+SALE_SKU_RE = re.compile(r'-SALE[A-Za-z0-9]*$', re.IGNORECASE)
+
+def is_sale_sku(sku):
+    return bool(SALE_SKU_RE.search(str(sku or '').strip()))
+
+def pick_exact_cin7_sku(products, sku):
+    """Return the one Cin7 product whose SKU is exactly `sku` (case-insensitive), else None.
+
+    Cin7's GET /product?Sku= is a CONTAINS search, not an exact match, so asking
+    for "L-FOO-30L" can also return "L-FOO-30L-SALE34567" — taking the first result
+    used to let a sale variant's ID through. The product's SKU is in the "SKU" field.
+    Returns None (rather than guessing) if nothing matches exactly, if two products
+    share the exact SKU, or if the SKU asked for is itself a sale SKU.
+    """
+    wanted = str(sku or '').strip().lower()
+    if not wanted or is_sale_sku(wanted):
+        return None
+    hits = [p for p in (products or []) if str(p.get("SKU", "")).strip().lower() == wanted]
+    return hits[0] if len(hits) == 1 else None
+
 # Parse unique valid format names from the VALID_FORMATS definition
 VALID_FORMAT_NAMES = sorted({
     line.split("|")[0].strip()
@@ -479,9 +503,9 @@ def fetch_cin7_product_details_by_sku(sku):
     try:
         r = make_cin7_request("GET", url, headers=headers)
         if r.status_code == 200:
-            prods = r.json().get("Products", [])
-            if prods:
-                p = prods[0]
+            # Exact SKU only (Cin7's Sku filter is a contains-search) — see pick_exact_cin7_sku.
+            p = pick_exact_cin7_sku(r.json().get("Products", []), sku)
+            if p:
                 return (
                     p.get("ID"),
                     float(p.get("PriceTier1", 0.0)),
@@ -998,14 +1022,20 @@ def fetch_all_cin7_suppliers_cached():
 def get_cin7_product_id(sku):
     headers = get_cin7_headers()
     if not headers: return None
+    # Never resolve a sale SKU, even if one is asked for directly (e.g. a manual
+    # override typed in by hand) — see is_sale_sku.
+    if is_sale_sku(sku): return None
     url = f"{get_cin7_base_url()}/product"
     params = {"Sku": sku}
     try:
         response = make_cin7_request("GET", url, headers=headers, params=params)
         if response.status_code == 200:
             data = response.json()
-            if "Products" in data and len(data["Products"]) > 0:
-                return data["Products"][0]["ID"]
+            # Exact SKU only — Cin7's Sku filter is a contains-search, so the first
+            # result can be a different product (e.g. the -SALE variant).
+            product = pick_exact_cin7_sku(data.get("Products", []), sku)
+            if product:
+                return product["ID"]
     except: pass
     return None
 
@@ -1876,6 +1906,8 @@ def run_reconciliation_check(lines_df, recheck_only=False):
             status = "✅ Match (Manual)"
             match_score_val = "Manual"
             logs.append(f"   📌 Manual override: `{london_sku}`")
+            if is_sale_sku(manual_sku):
+                logs.append(f"   ⛔ `{manual_sku}` is a SALE SKU — it will not be resolved to a Cin7 ID. Enter the regular (non-sale) SKU instead.")
             if "shopify" in st.secrets:
                 try:
                     creds = st.secrets["shopify"]
@@ -1962,6 +1994,9 @@ def run_reconciliation_check(lines_df, recheck_only=False):
                     variant = v_edge['node']
                     v_title = variant['title'].lower()
                     v_sku = str(variant.get('sku', '')).strip()
+                    # Sale variants are never a valid match for an invoice line.
+                    # (Skipped silently: a brand can have many of them.)
+                    if is_sale_sku(v_sku): continue
                     v_tokens = re.findall(r'\d+|[a-z]+', v_title)
 
                     pack_match = False
